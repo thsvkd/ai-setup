@@ -112,7 +112,7 @@ irm https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1 
 | --- | --- |
 | `--hooks` / `-Hooks` | 가드 훅 + 권한만 설치 (전역, `~/.claude`) |
 | `--agentsmd` / `-AgentsMd` | 현재 폴더에 `AGENTS.md`만 설치 |
-| `--uninstall` / `-Uninstall` | 가드 훅 제거 + `settings.json` 등록 해제 (권한은 보존, 덮어쓰기 전 백업) |
+| `--uninstall` / `-Uninstall` | **설치가 건드린 것만 정밀 복원** — 훅 제거 + 우리가 추가한 allow/deny·defaultMode 원복 (사용자가 원래 갖고 있던 설정은 보존, 백업 후) |
 | `--dry-run` / `-DryRun` | 아무것도 바꾸지 않고 변경 계획만 출력 |
 | `--help` / `-Help` | 도움말 |
 | (없음) | 위 설치를 모두 수행 |
@@ -185,8 +185,11 @@ Invoke-Pester tests/Setup.Tests.ps1 -Output Detailed   # 셋업 스크립트 (Po
 
 ## 되돌리기
 
-`setup.sh --uninstall` / `setup.ps1 -Uninstall`로 가드 훅을 제거하고 `settings.json`의 등록을 해제한다
-(권한은 보존, 변경 전 백업). 원격에서 바로 실행하려면:
+`setup.sh --uninstall` / `setup.ps1 -Uninstall`은 **설치가 건드린 부분만 정밀하게 되돌린다**.
+설치 시 기록해둔 영수증(`~/.claude/.claude-code-setup.json`)을 근거로, 우리가 추가한 훅·allow/deny 항목만
+제거하고 `defaultMode`를 이전 값으로 원복하며(설치 이후 사용자가 또 바꿨다면 건드리지 않음), 훅 파일·guard.log·매니페스트를
+지운다. 설치가 `settings.json`을 처음 만든 경우 되돌린 뒤 비면 그 파일도 제거한다. 사용자가 원래 갖고 있던 설정과
+그 외 모든 키는 그대로 보존되고, 변경 전 `.bak`을 남긴다. 원격에서 바로 실행하려면:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --uninstall

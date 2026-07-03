@@ -55,7 +55,7 @@ if ($Uninstall) {
     if ($DryRun) {
         Write-Host "🧪 DRY RUN 완료 — 실제로 제거하려면 -DryRun 없이 다시 실행하세요." -ForegroundColor Magenta
     } else {
-        Write-Host "✅ 제거 완료. (permissions 는 보존되었습니다 — 필요하면 $RealSettingsPath 에서 직접 정리하세요.)" -ForegroundColor Green
+        Write-Host "✅ 제거 완료 — 설치가 건드린 부분만 정밀하게 되돌렸습니다 (사용자가 원래 갖고 있던 설정은 보존)." -ForegroundColor Green
     }
     exit 0
 }
@@ -128,7 +128,9 @@ $mergeExit = Invoke-SettingsMerge `
     -PyInvoke $pyInvoke `
     -RealHooksDir $RealHooksDir `
     -MergeScriptPath (Join-Path $ResDir "hooks\merge_and_diff.py") `
-    -PyExe $py.Exe -PyArgs $py.Args
+    -PyExe $py.Exe -PyArgs $py.Args `
+    -ManifestPath (Join-Path $WorkHome ".claude\$MANIFEST_NAME") `
+    -HookFilesCsv "danger_guard.py,secrets_guard.py,send_to_trash.py"
 if ($mergeExit -ne 0) {
     throw "병합 검증 실패 — 예상치 못한 최상위 키 변경이 감지되었습니다. 수동 확인이 필요합니다."
 }
@@ -155,13 +157,7 @@ Write-SetupReport -DryRun:$DryRun -InstalledFiles @(
     (Join-Path $RealHooksDir "secrets_guard.py"),
     (Join-Path $RealHooksDir "send_to_trash.py")
 ) -SettingsPath $RealSettingsPath -GuardLogPath (Join-Path $RealHooksDir "guard.log") -DependencyWarning $depWarning
-
-# --- 7. 설치 매니페스트 기록 (uninstall 이 참조) ---
-if (-not $DryRun) {
-    Write-HookManifest -ManifestPath (Join-Path $RealClaudeDir $MANIFEST_NAME) `
-        -HooksDir $RealHooksDir -SettingsPath $RealSettingsPath `
-        -HookFiles @("danger_guard.py", "secrets_guard.py", "send_to_trash.py")
-}
+# 설치 영수증(매니페스트)은 위 Invoke-SettingsMerge 안에서 merge 가 기록한다.
 
 $script:ExitCode = 0
 

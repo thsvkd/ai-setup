@@ -80,12 +80,14 @@ function Invoke-SettingsMerge {
         [Parameter(Mandatory)][string]$RealHooksDir,   # {{HOOKS_DIR}} 치환값 (항상 실제 설치 위치)
         [Parameter(Mandatory)][string]$MergeScriptPath,
         [Parameter(Mandatory)][string]$PyExe,
-        [string[]]$PyArgs = @()
+        [string[]]$PyArgs = @(),
+        [string]$ManifestPath = "",     # 주면 (비 dry-run) merge 가 설치 영수증을 기록
+        [string]$HookFilesCsv = ""
     )
     $dry = if ($DryRun) { "1" } else { "0" }
     # 출력을 변수로 캡처해서 다시 Write-Host 로 찍는다 — 그냥 & 로 호출하면 stdout 줄들이
     # 이 함수의 파이프라인 출력에 섞여 들어가서 호출부가 $exitCode 로 받는 값이 오염된다.
-    $output = & $PyExe @($PyArgs) -X utf8 $MergeScriptPath $FragmentPath $SettingsPath $dry $PyInvoke $RealHooksDir
+    $output = & $PyExe @($PyArgs) -X utf8 $MergeScriptPath $FragmentPath $SettingsPath $dry $PyInvoke $RealHooksDir $ManifestPath $HookFilesCsv
     $exitCode = $LASTEXITCODE
     $output | ForEach-Object { Write-Host $_ }
     return $exitCode
@@ -139,22 +141,6 @@ function Write-SetupReport {
     Write-Host "  감사 로그: $GuardLogPath"
 }
 
-function Write-HookManifest {
-    param(
-        [Parameter(Mandatory)][string]$ManifestPath,
-        [Parameter(Mandatory)][string]$HooksDir,
-        [Parameter(Mandatory)][string]$SettingsPath,
-        [Parameter(Mandatory)][string[]]$HookFiles
-    )
-    $manifest = [ordered]@{
-        version       = 1
-        hooks_dir     = $HooksDir
-        settings_path = $SettingsPath
-        hook_files    = $HookFiles
-    }
-    ($manifest | ConvertTo-Json -Depth 5) | Set-Content -Path $ManifestPath -Encoding utf8
-}
-
 function Uninstall-Hooks {
     param(
         [Parameter(Mandatory)][string]$ClaudeDir,
@@ -177,25 +163,25 @@ function Uninstall-Hooks {
         $files = @("danger_guard.py", "secrets_guard.py", "send_to_trash.py")
     }
 
-    Write-Host "[1/2] settings.json 에서 훅 등록 해제..."
+    Write-Host "[1/2] settings.json 정밀 복원 (설치가 건드린 것만)..."
     $dry = if ($DryRun) { "1" } else { "0" }
-    $output = & $PyExe @($PyArgs) -X utf8 $MergeScriptPath --remove $SettingsPath $dry "danger_guard.py,secrets_guard.py"
+    $output = & $PyExe @($PyArgs) -X utf8 $MergeScriptPath --uninstall $SettingsPath $dry $manifestPath
     $output | ForEach-Object { Write-Host $_ }
 
     Write-Host ""
-    Write-Host "[2/2] 훅 파일 제거..."
-    foreach ($f in $files) {
-        $target = Join-Path $HooksDir $f
+    Write-Host "[2/2] 훅 파일 + guard.log + 매니페스트 제거..."
+    $targets = @()
+    foreach ($f in $files) { $targets += (Join-Path $HooksDir $f) }
+    $targets += (Join-Path $HooksDir "guard.log")   # 설치 셀프테스트가 생성
+    $targets += $manifestPath
+    foreach ($target in $targets) {
         if (Test-Path $target) {
             if ($DryRun) {
                 Write-Host "  🧪 (dry-run) 제거 예정: $target"
             } else {
-                Remove-Item -Force $target
+                Remove-Item -Force $target -ErrorAction SilentlyContinue
                 Write-Host "  🗑️  제거: $target"
             }
         }
-    }
-    if (-not $DryRun -and (Test-Path $manifestPath)) {
-        Remove-Item -Force $manifestPath -ErrorAction SilentlyContinue
     }
 }

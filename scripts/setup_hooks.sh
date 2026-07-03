@@ -62,7 +62,7 @@ if [[ "$UNINSTALL" -eq 1 ]]; then
     if [[ "$DRY_RUN" -eq 1 ]]; then
         echo "🧪 DRY RUN 완료 — 실제로 제거하려면 --dry-run 없이 다시 실행하세요."
     else
-        echo "✅ 제거 완료. (permissions 는 보존되었습니다 — 필요하면 $REAL_SETTINGS_PATH 에서 직접 정리하세요.)"
+        echo "✅ 제거 완료 — 설치가 건드린 부분만 정밀하게 되돌렸습니다 (사용자가 원래 갖고 있던 설정은 보존)."
     fi
     exit 0
 fi
@@ -138,7 +138,8 @@ echo "  ✅ Hook 파일 준비 완료: danger_guard.py, secrets_guard.py"
 echo ""
 echo "[3/4] settings.json 병합 계획 수립 및 실행..."
 
-if ! invoke_settings_merge "$PY" "$RES_DIR/hooks/merge_and_diff.py" "$RES_DIR/settings.json" "$SETTINGS_PATH" "$DRY_RUN" "$PY" "$REAL_HOOKS_DIR"; then
+MANIFEST_PATH="$WORK_HOME/.claude/$MANIFEST_NAME"
+if ! invoke_settings_merge "$PY" "$RES_DIR/hooks/merge_and_diff.py" "$RES_DIR/settings.json" "$SETTINGS_PATH" "$DRY_RUN" "$PY" "$REAL_HOOKS_DIR" "$MANIFEST_PATH" "danger_guard.py,secrets_guard.py"; then
     echo "  ❌ 병합 검증 실패 — 예상치 못한 최상위 키 변경이 감지되었습니다. 수동 확인이 필요합니다." >&2
     exit 1
 fi
@@ -161,9 +162,4 @@ if [[ "$HAS_TRASH_PUT" -eq 0 ]]; then
 fi
 print_setup_report "$DRY_RUN" "$REAL_SETTINGS_PATH" "$REAL_HOOKS_DIR/guard.log" "$DEP_WARNING" \
     "$REAL_HOOKS_DIR/danger_guard.py" "$REAL_HOOKS_DIR/secrets_guard.py"
-
-# --- 7. 설치 매니페스트 기록 (uninstall 이 참조) ---
-if [[ "$DRY_RUN" -ne 1 ]]; then
-    write_hook_manifest "$PY" "$REAL_CLAUDE_DIR/$MANIFEST_NAME" "$REAL_HOOKS_DIR" "$REAL_SETTINGS_PATH" \
-        "danger_guard.py" "secrets_guard.py"
-fi
+# 설치 영수증(매니페스트)은 위 invoke_settings_merge 안에서 merge 가 기록한다.

@@ -14,10 +14,12 @@ allow/deny 는 합집합(중복 없이 뒤에 추가), defaultMode 는 덮어쓰
 (matcher, 훅 스크립트 파일명 집합) 시그니처로 중복 판정해 없는 것만 추가한다 → 재실행 멱등.
 
 병합 시 기존 settings.json 이 있고 변경이 있으면 <path>.bak.<timestamp> 로 백업한다.
-uninstall 을 위해 --remove 모드도 지원한다 (지정한 훅 스크립트의 PreToolUse 등록만 해제).
+설치 시 manifest_path 를 주면 "우리가 실제로 추가한 allow/deny 항목 + 이전 defaultMode" 를
+설치 영수증(매니페스트)으로 기록한다. --uninstall 모드는 그 영수증을 읽어, 설치가 건드린
+부분만 정밀하게 되돌린다 (훅 등록 해제 + 우리가 추가한 권한 항목만 제거 + defaultMode 원복).
 
-usage: merge_and_diff.py <fragment.json> <settings_path> <dry_run:0|1> <py_invoke> <hooks_dir>
-       merge_and_diff.py --remove <settings_path> <dry_run:0|1> <scripts_csv>
+usage: merge_and_diff.py <fragment.json> <settings_path> <dry_run:0|1> <py_invoke> <hooks_dir> [manifest_path] [hook_files_csv]
+       merge_and_diff.py --uninstall <settings_path> <dry_run:0|1> <manifest_path>
 """
 import copy
 import datetime
@@ -72,8 +74,9 @@ def hook_sig(entry):
 
 
 def merge_list(perms, key, incoming, changes):
+    """incoming 을 perms[key] 에 합집합으로 추가하고, 실제로 새로 추가된 항목 목록을 반환."""
     if not incoming:
-        return
+        return []
     before = list(perms.get(key, []))
     merged = list(before)
     for item in incoming:
@@ -83,22 +86,34 @@ def merge_list(perms, key, incoming, changes):
     added = [x for x in merged if x not in before]
     if added:
         changes.append(f"permissions.{key}: +{added}")
+    return added
 
 
-def merge(existing: dict, fragment: dict) -> list:
+def merge(existing: dict, fragment: dict):
+    """(changes, receipt) 를 반환. receipt 는 uninstall 이 정밀 복원에 쓰는 '설치 영수증'."""
     changes = []
+    receipt = {
+        "added_allow": [],
+        "added_deny": [],
+        "default_mode_before": None,
+        "default_mode_after": None,
+        "default_mode_changed": False,
+    }
 
     frag_perms = fragment.get("permissions", {})
     if frag_perms:
         perms = existing.setdefault("permissions", {})
-        merge_list(perms, "allow", frag_perms.get("allow", []), changes)
-        merge_list(perms, "deny", frag_perms.get("deny", []), changes)
+        receipt["added_allow"] = merge_list(perms, "allow", frag_perms.get("allow", []), changes)
+        receipt["added_deny"] = merge_list(perms, "deny", frag_perms.get("deny", []), changes)
         if "defaultMode" in frag_perms:
             old_mode = perms.get("defaultMode")
             new_mode = frag_perms["defaultMode"]
+            receipt["default_mode_before"] = old_mode
+            receipt["default_mode_after"] = new_mode
             if old_mode != new_mode:
                 changes.append(f"permissions.defaultMode: {old_mode!r} -> {new_mode!r}")
                 perms["defaultMode"] = new_mode
+                receipt["default_mode_changed"] = True
         if "mode" in perms:
             changes.append(f"permissions.mode (잘못된 legacy 키) 제거: {perms['mode']!r}")
             del perms["mode"]
@@ -117,6 +132,43 @@ def merge(existing: dict, fragment: dict) -> list:
                     names = ", ".join(sig[1]) or "(?)"
                     changes.append(f"hooks.{event}: + matcher={entry.get('matcher')!r} ({names})")
 
+    return changes, receipt
+
+
+def revert_permissions(existing: dict, receipt: dict) -> list:
+    """설치 영수증에 기록된, '우리가 추가한' allow/deny 항목만 제거하고 defaultMode 를 원복한다.
+    사용자가 원래 갖고 있던 항목은 영수증에 없으므로 건드리지 않는다."""
+    changes = []
+    perms = existing.get("permissions")
+    if not perms:
+        return changes
+
+    for key in ("allow", "deny"):
+        added = receipt.get("added_" + key) or []
+        if not added or key not in perms:
+            continue
+        removed = [x for x in perms[key] if x in added]
+        if removed:
+            perms[key] = [x for x in perms[key] if x not in added]
+            changes.append(f"permissions.{key}: -{removed}")
+        if not perms[key]:
+            del perms[key]
+
+    if receipt.get("default_mode_changed"):
+        after = receipt.get("default_mode_after")
+        before = receipt.get("default_mode_before")
+        # 설치 이후 사용자가 defaultMode 를 또 바꿨다면 건드리지 않는다 (여전히 우리 값일 때만 원복).
+        if perms.get("defaultMode") == after:
+            if before is None:
+                if "defaultMode" in perms:
+                    del perms["defaultMode"]
+                    changes.append("permissions.defaultMode 제거 (설치 전 값 없음)")
+            else:
+                perms["defaultMode"] = before
+                changes.append(f"permissions.defaultMode: {after!r} -> {before!r}")
+
+    if not perms:
+        del existing["permissions"]
     return changes
 
 
@@ -151,28 +203,41 @@ def top_level_diff(before: dict, after: dict):
     return preserved, violated
 
 
-def main_remove(argv) -> int:
+def main_uninstall(argv) -> int:
     if len(argv) != 3:
-        print("usage: merge_and_diff.py --remove <settings_path> <dry_run> <scripts_csv>", file=sys.stderr)
+        print("usage: merge_and_diff.py --uninstall <settings_path> <dry_run> <manifest_path>", file=sys.stderr)
         return 1
-    settings_path, dry_run_s, scripts_csv = argv
+    settings_path, dry_run_s, manifest_path = argv
     dry_run = dry_run_s == "1"
-    targets = [s for s in scripts_csv.split(",") if s]
 
     if not os.path.exists(settings_path):
-        print("(settings.json 이 없어 제거할 훅이 없습니다.)")
+        print("(settings.json 이 없어 되돌릴 것이 없습니다.)")
         return 0
+
+    # 설치 영수증(매니페스트). 없으면(구버전 설치) 훅 등록 해제만 하고 권한은 건드리지 못한다.
+    receipt = {}
+    hook_files = ["danger_guard.py", "secrets_guard.py"]
+    if os.path.exists(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                receipt = json.load(f)
+            if receipt.get("hook_files"):
+                hook_files = receipt["hook_files"]
+        except (OSError, ValueError):
+            pass
 
     with open(settings_path, "r", encoding="utf-8") as f:
         after = json.load(f)
-    changes = remove_hooks(after, targets)
 
-    print("── 제거 계획 ──────────────────────────")
+    changes = remove_hooks(after, hook_files)
+    changes += revert_permissions(after, receipt)
+
+    print("── 되돌리기 계획 ──────────────────────")
     if changes:
         for c in changes:
             print(f"  • {c}")
     else:
-        print("  (제거할 훅 없음 — 이미 정리됨)")
+        print("  (되돌릴 것 없음 — 이미 정리됨)")
     print("──────────────────────────────────────")
 
     if dry_run:
@@ -181,22 +246,29 @@ def main_remove(argv) -> int:
         backup = backup_file(settings_path)
         if backup:
             print(f"  💾 백업: {backup}")
-        write_json(settings_path, after)
-        print(f"✅ 훅 등록 해제 완료: {settings_path}")
+        # 설치가 settings.json 을 처음 만든 경우, 되돌린 뒤 빈 {} 만 남으면 그 파일도 제거한다.
+        if not after and not receipt.get("settings_existed_before", True):
+            os.remove(settings_path)
+            print(f"✅ 설치 전 없던 settings.json 을 제거했습니다: {settings_path}")
+        else:
+            write_json(settings_path, after)
+            print(f"✅ 설치가 건드린 부분을 되돌렸습니다: {settings_path}")
     return 0
 
 
 def main() -> int:
     argv = sys.argv[1:]
-    if argv and argv[0] == "--remove":
-        return main_remove(argv[1:])
+    if argv and argv[0] == "--uninstall":
+        return main_uninstall(argv[1:])
 
-    if len(argv) != 5:
-        print("usage: merge_and_diff.py <fragment.json> <settings_path> <dry_run> <py_invoke> <hooks_dir>",
+    if len(argv) < 5:
+        print("usage: merge_and_diff.py <fragment.json> <settings_path> <dry_run> <py_invoke> <hooks_dir> [manifest_path] [hook_files_csv]",
               file=sys.stderr)
         return 1
 
-    fragment_path, settings_path, dry_run_s, py_invoke, hooks_dir = argv
+    fragment_path, settings_path, dry_run_s, py_invoke, hooks_dir = argv[:5]
+    manifest_path = argv[5] if len(argv) > 5 else ""
+    hook_files_csv = argv[6] if len(argv) > 6 else ""
     dry_run = dry_run_s == "1"
 
     # 훅 command 경로 구분자를 정슬래시로 통일한다. Windows Python 도 정슬래시 경로를
@@ -209,14 +281,15 @@ def main() -> int:
     fragment.pop("_comment", None)
     fragment = substitute(fragment, {"{{PY}}": py_invoke, "{{HOOKS_DIR}}": hooks_dir})
 
-    if os.path.exists(settings_path):
+    settings_existed = os.path.exists(settings_path)
+    if settings_existed:
         with open(settings_path, "r", encoding="utf-8") as f:
             before = json.load(f)
     else:
         before = {}
 
     after = copy.deepcopy(before)
-    changes = merge(after, fragment)
+    changes, receipt = merge(after, fragment)
     preserved, violated = top_level_diff(before, after)
 
     print("── 변경 계획 ──────────────────────────")
@@ -236,12 +309,24 @@ def main() -> int:
         print("── 병합 결과 미리보기 (AFTER) ──")
         print(json.dumps(after, ensure_ascii=False, indent=2))
     else:
-        if changes and os.path.exists(settings_path):
+        if changes and settings_existed:
             backup = backup_file(settings_path)
             if backup:
                 print(f"  💾 백업: {backup}")
         write_json(settings_path, after)
         print(f"✅ 병합 완료: {settings_path}")
+
+        # 설치 영수증(매니페스트) 기록 — uninstall 이 '건드린 것만' 정밀 복원하는 근거.
+        if manifest_path:
+            manifest = {
+                "version": 1,
+                "hooks_dir": hooks_dir,
+                "settings_path": settings_path,
+                "settings_existed_before": settings_existed,
+                "hook_files": [f for f in hook_files_csv.split(",") if f],
+            }
+            manifest.update(receipt)
+            write_json(manifest_path, manifest)
 
     return 1 if violated else 0
 

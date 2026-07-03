@@ -60,42 +60,23 @@ install_hook_files() {
 }
 
 invoke_settings_merge() {
-    # args: py_exe merge_script fragment settings_path dry_run(0/1) py_invoke hooks_dir
-    # res/settings.json 조각(SSoT)의 자리표시자를 치환하고 대상 settings.json에 외과적으로 병합.
+    # args: py_exe merge_script fragment settings_path dry_run(0/1) py_invoke hooks_dir [manifest_path] [hook_files_csv]
+    # res/settings.json 조각(SSoT)의 자리표시자를 치환하고 대상 settings.json에 외과적으로 병합한다.
+    # manifest_path 를 주면 (비 dry-run) merge 가 설치 영수증까지 기록한다.
     local py_exe="$1" merge_script="$2" fragment="$3" settings_path="$4"
-    local dry_run="$5" py_invoke="$6" hooks_dir="$7"
-    "$py_exe" -X utf8 "$merge_script" "$fragment" "$settings_path" "$dry_run" "$py_invoke" "$hooks_dir"
-}
-
-write_hook_manifest() {
-    # args: py_exe manifest_path hooks_dir settings_path  file1 [file2 ...]
-    # 설치된 훅 파일 목록을 JSON 매니페스트로 기록한다 (uninstall 이 참조).
-    local py_exe="$1" manifest_path="$2" hooks_dir="$3" settings_path="$4"
-    shift 4
-    "$py_exe" - "$manifest_path" "$hooks_dir" "$settings_path" "$@" <<'PYEOF'
-import json
-import sys
-manifest_path, hooks_dir, settings_path, *files = sys.argv[1:]
-with open(manifest_path, "w", encoding="utf-8") as f:
-    json.dump({
-        "version": 1,
-        "hooks_dir": hooks_dir,
-        "settings_path": settings_path,
-        "hook_files": files,
-    }, f, ensure_ascii=False, indent=2)
-    f.write("\n")
-PYEOF
+    local dry_run="$5" py_invoke="$6" hooks_dir="$7" manifest_path="${8:-}" hook_files_csv="${9:-}"
+    "$py_exe" -X utf8 "$merge_script" "$fragment" "$settings_path" "$dry_run" "$py_invoke" "$hooks_dir" "$manifest_path" "$hook_files_csv"
 }
 
 uninstall_hooks() {
     # args: py_exe merge_script claude_dir hooks_dir settings_path dry_run(0/1)
-    # settings.json 에서 우리 훅 등록을 해제하고(백업 후), 설치했던 훅 파일을 제거한다.
-    # 권한(allow/deny/defaultMode)은 건드리지 않는다 — 예측 가능한 최소 되돌리기.
+    # 설치 영수증(매니페스트)을 근거로 '설치가 건드린 부분만' 정밀 복원한다:
+    #   settings.json 훅 등록 해제 + 우리가 추가한 권한 항목만 제거 + defaultMode 원복(merge --uninstall),
+    #   그리고 설치했던 훅 파일 + guard.log + 매니페스트 제거.
     local py_exe="$1" merge_script="$2" claude_dir="$3" hooks_dir="$4" settings_path="$5" dry_run="$6"
     local manifest="$claude_dir/$MANIFEST_NAME"
 
-    # tr -d '\r': Windows python 의 print 는 \n 을 \r\n 으로 변환하므로 CR 을 제거해야
-    # 파일명에 캐리지리턴이 붙어 rm 대상이 어긋나는 것을 막는다.
+    # tr -d '\r': Windows python 의 print 는 \n 을 \r\n 으로 변환하므로 CR 을 제거한다.
     local files=""
     if [[ -f "$manifest" ]]; then
         files="$("$py_exe" -c "import json,sys; print('\n'.join(json.load(open(sys.argv[1],encoding='utf-8')).get('hook_files',[])))" "$manifest" 2>/dev/null | tr -d '\r' || true)"
@@ -104,11 +85,11 @@ uninstall_hooks() {
         files=$'danger_guard.py\nsecrets_guard.py\nsend_to_trash.py'
     fi
 
-    echo "[1/2] settings.json 에서 훅 등록 해제..."
-    "$py_exe" -X utf8 "$merge_script" --remove "$settings_path" "$dry_run" "danger_guard.py,secrets_guard.py"
+    echo "[1/2] settings.json 정밀 복원 (설치가 건드린 것만)..."
+    "$py_exe" -X utf8 "$merge_script" --uninstall "$settings_path" "$dry_run" "$manifest"
 
     echo ""
-    echo "[2/2] 훅 파일 제거..."
+    echo "[2/2] 훅 파일 + guard.log + 매니페스트 제거..."
     local f target
     while IFS= read -r f; do
         [[ -z "$f" ]] && continue
@@ -122,9 +103,16 @@ uninstall_hooks() {
         fi
     done <<< "$files"
 
-    if [[ "$dry_run" -ne 1 && -f "$manifest" ]]; then
-        rm -f "$manifest"
-    fi
+    # guard.log(설치 셀프테스트가 생성) + 매니페스트 제거.
+    for target in "$hooks_dir/guard.log" "$manifest"; do
+        [[ -f "$target" ]] || continue
+        if [[ "$dry_run" -eq 1 ]]; then
+            echo "  🧪 (dry-run) 제거 예정: $target"
+        else
+            rm -f "$target"
+            echo "  🗑️  제거: $target"
+        fi
+    done
 }
 
 run_hook_self_test() {
