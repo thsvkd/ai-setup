@@ -13,15 +13,38 @@ merge_and_diff.py — 실제 settings.json 조각을 기존 settings.json에 외
 allow/deny 는 합집합(중복 없이 뒤에 추가), defaultMode 는 덮어쓰기, hooks.* 는
 (matcher, 훅 스크립트 파일명 집합) 시그니처로 중복 판정해 없는 것만 추가한다 → 재실행 멱등.
 
+병합 시 기존 settings.json 이 있고 변경이 있으면 <path>.bak.<timestamp> 로 백업한다.
+uninstall 을 위해 --remove 모드도 지원한다 (지정한 훅 스크립트의 PreToolUse 등록만 해제).
+
 usage: merge_and_diff.py <fragment.json> <settings_path> <dry_run:0|1> <py_invoke> <hooks_dir>
+       merge_and_diff.py --remove <settings_path> <dry_run:0|1> <scripts_csv>
 """
 import copy
+import datetime
 import json
 import os
 import re
+import shutil
 import sys
 
 PY_RE = re.compile(r'[A-Za-z0-9_.\-]+\.py')
+
+
+def backup_file(path):
+    """덮어쓰기 전 타임스탬프 백업을 만든다. 생성한 백업 경로(없으면 None)를 반환."""
+    if not os.path.exists(path):
+        return None
+    ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    backup = f"{path}.bak.{ts}"
+    shutil.copy2(path, backup)
+    return backup
+
+
+def write_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write("\n")
 
 
 def substitute(obj, mapping):
@@ -97,6 +120,28 @@ def merge(existing: dict, fragment: dict) -> list:
     return changes
 
 
+def remove_hooks(existing: dict, targets: list) -> list:
+    """PreToolUse 등 hooks.* 에서, 지정한 스크립트 파일명을 참조하는 항목을 제거한다."""
+    changes = []
+    hooks = existing.get("hooks", {})
+    target_set = set(targets)
+    for event in list(hooks.keys()):
+        kept = []
+        for entry in hooks[event]:
+            hit = set(script_names(entry)) & target_set
+            if hit:
+                changes.append(f"hooks.{event}: - matcher={entry.get('matcher')!r} ({', '.join(sorted(hit))})")
+            else:
+                kept.append(entry)
+        if kept:
+            hooks[event] = kept
+        else:
+            del hooks[event]
+    if "hooks" in existing and not existing["hooks"]:
+        del existing["hooks"]
+    return changes
+
+
 def top_level_diff(before: dict, after: dict):
     preserved, violated = [], []
     for k in before:
@@ -106,13 +151,52 @@ def top_level_diff(before: dict, after: dict):
     return preserved, violated
 
 
+def main_remove(argv) -> int:
+    if len(argv) != 3:
+        print("usage: merge_and_diff.py --remove <settings_path> <dry_run> <scripts_csv>", file=sys.stderr)
+        return 1
+    settings_path, dry_run_s, scripts_csv = argv
+    dry_run = dry_run_s == "1"
+    targets = [s for s in scripts_csv.split(",") if s]
+
+    if not os.path.exists(settings_path):
+        print("(settings.json 이 없어 제거할 훅이 없습니다.)")
+        return 0
+
+    with open(settings_path, "r", encoding="utf-8") as f:
+        after = json.load(f)
+    changes = remove_hooks(after, targets)
+
+    print("── 제거 계획 ──────────────────────────")
+    if changes:
+        for c in changes:
+            print(f"  • {c}")
+    else:
+        print("  (제거할 훅 없음 — 이미 정리됨)")
+    print("──────────────────────────────────────")
+
+    if dry_run:
+        print(f"🧪 DRY RUN — {settings_path} 에 실제로 쓰지 않았습니다.")
+    elif changes:
+        backup = backup_file(settings_path)
+        if backup:
+            print(f"  💾 백업: {backup}")
+        write_json(settings_path, after)
+        print(f"✅ 훅 등록 해제 완료: {settings_path}")
+    return 0
+
+
 def main() -> int:
-    if len(sys.argv) != 6:
+    argv = sys.argv[1:]
+    if argv and argv[0] == "--remove":
+        return main_remove(argv[1:])
+
+    if len(argv) != 5:
         print("usage: merge_and_diff.py <fragment.json> <settings_path> <dry_run> <py_invoke> <hooks_dir>",
               file=sys.stderr)
         return 1
 
-    fragment_path, settings_path, dry_run_s, py_invoke, hooks_dir = sys.argv[1:6]
+    fragment_path, settings_path, dry_run_s, py_invoke, hooks_dir = argv
     dry_run = dry_run_s == "1"
 
     # 훅 command 경로 구분자를 정슬래시로 통일한다. Windows Python 도 정슬래시 경로를
@@ -152,10 +236,11 @@ def main() -> int:
         print("── 병합 결과 미리보기 (AFTER) ──")
         print(json.dumps(after, ensure_ascii=False, indent=2))
     else:
-        os.makedirs(os.path.dirname(settings_path), exist_ok=True)
-        with open(settings_path, "w", encoding="utf-8") as f:
-            json.dump(after, f, ensure_ascii=False, indent=2)
-            f.write("\n")
+        if changes and os.path.exists(settings_path):
+            backup = backup_file(settings_path)
+            if backup:
+                print(f"  💾 백업: {backup}")
+        write_json(settings_path, after)
         print(f"✅ 병합 완료: {settings_path}")
 
     return 1 if violated else 0

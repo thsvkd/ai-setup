@@ -14,8 +14,9 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# 루트 기준으로만 무시한다 — 우리 소스인 scripts/lib/ 까지 삼키지 않도록.
+/lib/
+/lib64/
 parts/
 sdist/
 var/

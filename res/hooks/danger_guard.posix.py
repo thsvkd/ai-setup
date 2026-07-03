@@ -8,11 +8,13 @@ danger_guard.py — PreToolUse hook (Claude Code, Bash 툴 대상, 유저 레벨
      단, 루트 경로(/, ~, $HOME, 와일드카드 포함) 삭제 시도는 즉시 deny.
      trash-put 이 없으면 치환할 수 없으므로 fail-closed 로 deny.
      멀티라인 스크립트 안에 섞여 있으면(아래 참고) 자동 치환 대신 deny.
-  2) git push / git push --force / git reset --hard / git clean -f* → deny (수동 실행 요구)
-     git checkout -- <path> / git restore → ask (되돌릴 수 없는 변경 손실 가능성)
-  3) dd of=... / mkfs* / diskutil eraseDisk|eraseVolume / fdisk / parted → deny
+  2) git push / git push --force / git reset --hard / git clean -f* / git stash drop|clear → deny
+     git branch -D / git checkout -- <path> / git restore → ask (되돌릴 수 없는 변경 손실 가능성)
+  3) dd of=... / mkfs* / wipefs / diskutil eraseDisk|eraseVolume / fdisk / parted → deny
+     /dev/sd* 등 블록 디바이스로의 리다이렉트, 포크밤 패턴 → deny
   4) curl|bash, wget -O- | sh 같은 "원격 스크립트를 바로 셸로 파이프 실행" 패턴 → deny
-  5) shutdown / reboot / halt / poweroff → ask
+  5) shutdown / reboot / halt / poweroff → ask ; chmod 777 / shred → ask
+  6) sudo 접두어는 벗겨서 실제 명령을 위 규칙으로 검사한다.
 
 Bash 툴은 여러 줄짜리 스크립트를 통째로 하나의 command 문자열로 보낸다. shlex.split을
 전체 문자열에 한 번만 적용하면 (a) 파이프 뒤 검사가 전혀 무관한 다음 줄까지 새어 들어가
@@ -39,7 +41,11 @@ LOG_PATH = os.path.join(HOOKS_DIR, "guard.log")
 ROOT_RE = re.compile(r'^(/(\*)?|~(/\*?)?|\$HOME(/\*?)?)$')
 
 REMOTE_EXEC_TOKENS = {"bash", "sh", "zsh", "dash"}
-DISK_COMMANDS = {"mkfs", "mkfs.ext4", "mkfs.xfs", "mkfs.vfat", "fdisk", "parted"}
+DISK_COMMANDS = {"mkfs", "mkfs.ext4", "mkfs.xfs", "mkfs.vfat", "fdisk", "parted", "wipefs"}
+
+# shlex 로 파싱되지 않는(또는 파싱 전에 잡아야 하는) 원시 문자열 패턴.
+FORK_BOMB_RE = re.compile(r'\(\s*\)\s*\{[^}]*\|[^}]*&')  # :(){ :|:& };:
+DEVICE_REDIRECT_RE = re.compile(r'>\s*/dev/(sd|nvme|hd|disk|mmcblk|vd)[a-z0-9]*', re.IGNORECASE)
 
 
 def log(entry: dict) -> None:
@@ -84,6 +90,15 @@ def main() -> None:
     is_multiline = len(lines) > 1
 
     for line in lines:
+        stripped = line.strip()
+        # shlex 파싱 전에 원시 문자열로 잡아야 하는 패턴들.
+        if FORK_BOMB_RE.search(stripped):
+            log({"command": command, "decision": "deny-fork-bomb"})
+            emit("deny", "포크밤(fork bomb)으로 보이는 패턴이 감지되어 차단합니다.")
+        if DEVICE_REDIRECT_RE.search(stripped):
+            log({"command": command, "decision": "deny-device-redirect"})
+            emit("deny", "블록 디바이스(/dev/sd* 등)로의 출력 리다이렉트는 디스크를 파괴할 수 있어 차단합니다.")
+
         try:
             parts = shlex.split(line)
         except ValueError:
@@ -95,6 +110,11 @@ def main() -> None:
 
         base = os.path.basename(parts[0])
         args = parts[1:]
+
+        # sudo 접두어는 벗겨서 실제 명령을 검사한다 (sudo rm -rf / 가 우회되지 않도록).
+        if base == "sudo" and args and not args[0].startswith("-"):
+            base = os.path.basename(args[0])
+            args = args[1:]
 
         if base == "rm":
             clean_args = [p for p in args if not p.startswith("-")]
@@ -127,6 +147,10 @@ def main() -> None:
                 emit("deny", "git reset --hard는 커밋되지 않은 변경사항을 되돌릴 수 없이 삭제합니다. (stash/soft 권장)")
             if "clean" in args and any(f in args for f in ("-f", "-fd", "-fx", "-fdx", "-xdf", "--force")):
                 emit("deny", "git clean -f 류는 추적되지 않는 파일을 되돌릴 수 없이 삭제합니다.")
+            if "stash" in args and any(a in args for a in ("drop", "clear")):
+                emit("deny", "git stash drop/clear 는 스태시를 되돌릴 수 없이 삭제합니다.")
+            if "branch" in args and "-D" in args:
+                emit("ask", "git branch -D 는 병합되지 않은 브랜치를 강제 삭제합니다 (reflog 로만 복구 가능). 계속할까요?")
             if ("checkout" in args and "--" in args) or "restore" in args:
                 emit("ask", "커밋되지 않은 로컬 변경사항을 버릴 수 있는 명령입니다. 계속할까요?")
 
@@ -136,6 +160,10 @@ def main() -> None:
             emit("deny", "dd of=... 는 대상 장치/파일을 덮어쓸 수 있어 차단합니다.")
         if base == "diskutil" and args and args[0] in ("eraseDisk", "eraseVolume", "reformat"):
             emit("deny", f"diskutil {args[0]} 은 되돌릴 수 없어 자동 실행을 차단합니다.")
+        if base == "chmod" and any(a in ("777", "0777", "a+rwx", "a=rwx") for a in args):
+            emit("ask", "chmod 777 류는 모든 사용자에게 전체 권한을 부여합니다 (보안 위험). 계속할까요?")
+        if base == "shred":
+            emit("ask", "shred 는 파일을 복구 불가능하게 덮어씁니다. 계속할까요?")
 
         if "|" in parts:
             idx = parts.index("|")

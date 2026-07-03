@@ -15,25 +15,47 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+print_usage() {
+    cat <<'EOF'
+claude-code-setup — Claude Code 사용자 레벨 설정
+
+사용법: bash setup.sh [옵션]
+  (옵션 없음)   가드/권한 + AGENTS.md 모두 설치
+  --hooks       전역 가드 훅 + 권한만 설치 (~/.claude)
+  --agentsmd    현재 폴더에 AGENTS.md 만 설치
+  --uninstall   가드 훅 제거 + settings.json 등록 해제 (권한은 보존)
+  --dry-run     아무것도 바꾸지 않고 변경 계획만 출력
+  --help, -h    이 도움말
+EOF
+}
+
 RUN_HOOKS=0
 RUN_AGENTSMD=0
 DRY_RUN=0
+UNINSTALL=0
 for arg in "$@"; do
     case "$arg" in
         --hooks) RUN_HOOKS=1 ;;
         --agentsmd) RUN_AGENTSMD=1 ;;
+        --uninstall) UNINSTALL=1 ;;
         --dry-run) DRY_RUN=1 ;;
-        *) echo "알 수 없는 옵션: $arg" >&2; exit 1 ;;
+        --help|-h) print_usage; exit 0 ;;
+        *) echo "알 수 없는 옵션: $arg" >&2; echo ""; print_usage >&2; exit 1 ;;
     esac
 done
+
+DRY_FLAG=()
+[[ "$DRY_RUN" -eq 1 ]] && DRY_FLAG=(--dry-run)
+
+# uninstall 은 훅 전용 (프로젝트 AGENTS.md 는 사용자 콘텐츠라 건드리지 않음).
+if [[ "$UNINSTALL" -eq 1 ]]; then
+    exec "$SCRIPT_DIR/setup_hooks.sh" --uninstall "${DRY_FLAG[@]}"
+fi
 
 if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 ]]; then
     RUN_HOOKS=1
     RUN_AGENTSMD=1
 fi
-
-DRY_FLAG=()
-[[ "$DRY_RUN" -eq 1 ]] && DRY_FLAG=(--dry-run)
 
 if [[ "$RUN_HOOKS" -eq 1 ]]; then
     "$SCRIPT_DIR/setup_hooks.sh" "${DRY_FLAG[@]}"

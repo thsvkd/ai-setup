@@ -25,9 +25,11 @@
 #>
 
 param(
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$Uninstall
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -35,15 +37,33 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $ResDir = Join-Path $RepoRoot "res"
 . (Join-Path $PSScriptRoot "lib\SetupCommon.ps1")
 
-Write-Host "🔧 Claude Code 사용자 레벨 훅/권한 설정 시작..." -ForegroundColor Cyan
-if ($DryRun) {
-    Write-Host "  🧪 DRY RUN 모드 — 실제 파일은 전혀 변경/설치되지 않습니다." -ForegroundColor Magenta
-}
-
 $RealUserHome = $env:USERPROFILE
 $RealClaudeDir = Join-Path $RealUserHome ".claude"
 $RealHooksDir = Join-Path $RealClaudeDir "hooks"
 $RealSettingsPath = Join-Path $RealClaudeDir "settings.json"
+
+# --- uninstall 은 설치 로직을 타지 않고 실제 ~/.claude 를 대상으로 즉시 처리한다 ---
+if ($Uninstall) {
+    Write-Host "🧹 Claude Code 가드 훅 제거..." -ForegroundColor Cyan
+    if ($DryRun) { Write-Host "  🧪 DRY RUN 모드 — 실제 파일은 전혀 제거되지 않습니다." -ForegroundColor Magenta }
+    $py = Resolve-PythonCommand
+    if (-not $py) { Write-Host "❌ Python을 찾을 수 없습니다." -ForegroundColor Red; exit 1 }
+    Write-Host ""
+    Uninstall-Hooks -ClaudeDir $RealClaudeDir -HooksDir $RealHooksDir -SettingsPath $RealSettingsPath `
+        -DryRun:$DryRun -MergeScriptPath (Join-Path $ResDir "hooks\merge_and_diff.py") -PyExe $py.Exe -PyArgs $py.Args
+    Write-Host ""
+    if ($DryRun) {
+        Write-Host "🧪 DRY RUN 완료 — 실제로 제거하려면 -DryRun 없이 다시 실행하세요." -ForegroundColor Magenta
+    } else {
+        Write-Host "✅ 제거 완료. (permissions 는 보존되었습니다 — 필요하면 $RealSettingsPath 에서 직접 정리하세요.)" -ForegroundColor Green
+    }
+    exit 0
+}
+
+Write-Host "🔧 Claude Code 사용자 레벨 훅/권한 설정 시작..." -ForegroundColor Cyan
+if ($DryRun) {
+    Write-Host "  🧪 DRY RUN 모드 — 실제 파일은 전혀 변경/설치되지 않습니다." -ForegroundColor Magenta
+}
 
 $installHome = Resolve-InstallHome -DryRun:$DryRun -RealHome $RealUserHome -SeedFiles @("settings.json")
 $WorkHome = $installHome.WorkHome
@@ -135,6 +155,13 @@ Write-SetupReport -DryRun:$DryRun -InstalledFiles @(
     (Join-Path $RealHooksDir "secrets_guard.py"),
     (Join-Path $RealHooksDir "send_to_trash.py")
 ) -SettingsPath $RealSettingsPath -GuardLogPath (Join-Path $RealHooksDir "guard.log") -DependencyWarning $depWarning
+
+# --- 7. 설치 매니페스트 기록 (uninstall 이 참조) ---
+if (-not $DryRun) {
+    Write-HookManifest -ManifestPath (Join-Path $RealClaudeDir $MANIFEST_NAME) `
+        -HooksDir $RealHooksDir -SettingsPath $RealSettingsPath `
+        -HookFiles @("danger_guard.py", "secrets_guard.py", "send_to_trash.py")
+}
 
 $script:ExitCode = 0
 

@@ -14,10 +14,34 @@
 param(
     [switch]$Hooks,
     [switch]$AgentsMd,
-    [switch]$DryRun
+    [switch]$Uninstall,
+    [switch]$DryRun,
+    [switch]$Help
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($Help) {
+    Write-Host @"
+claude-code-setup — Claude Code 사용자 레벨 설정
+
+사용법: .\setup.ps1 [옵션]
+  (옵션 없음)   가드/권한 + AGENTS.md 모두 설치
+  -Hooks        전역 가드 훅 + 권한만 설치 (~/.claude)
+  -AgentsMd     현재 폴더에 AGENTS.md 만 설치
+  -Uninstall    가드 훅 제거 + settings.json 등록 해제 (권한은 보존)
+  -DryRun       아무것도 바꾸지 않고 변경 계획만 출력
+  -Help         이 도움말
+"@
+    exit 0
+}
+
+# uninstall 은 훅 전용 (프로젝트 AGENTS.md 는 사용자 콘텐츠라 건드리지 않음).
+if ($Uninstall) {
+    & (Join-Path $PSScriptRoot "setup_hooks.ps1") -Uninstall -DryRun:$DryRun
+    exit $LASTEXITCODE
+}
 
 $runAll = -not ($Hooks -or $AgentsMd)
 

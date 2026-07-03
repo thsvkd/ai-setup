@@ -23,6 +23,7 @@
 # 사용법:
 #   bash setup_hooks.sh              # 실제 적용
 #   bash setup_hooks.sh --dry-run    # 아무것도 건드리지 않고 변경 계획만 출력
+#   bash setup_hooks.sh --uninstall  # 훅 제거 + settings.json 등록 해제 (권한은 보존)
 #
 set -euo pipefail
 
@@ -33,22 +34,43 @@ RES_DIR="$REPO_ROOT/res"
 source "$SCRIPT_DIR/lib/setup_common.sh"
 
 DRY_RUN=0
+UNINSTALL=0
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=1 ;;
+        --uninstall) UNINSTALL=1 ;;
         *) echo "알 수 없는 옵션: $arg" >&2; exit 1 ;;
     esac
 done
-
-echo "🔧 Claude Code 사용자 레벨 훅/권한 설정 시작..."
-if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "  🧪 DRY RUN 모드 — 실제 파일은 전혀 변경/설치되지 않습니다."
-fi
 
 REAL_HOME="$HOME"
 REAL_CLAUDE_DIR="$REAL_HOME/.claude"
 REAL_HOOKS_DIR="$REAL_CLAUDE_DIR/hooks"
 REAL_SETTINGS_PATH="$REAL_CLAUDE_DIR/settings.json"
+
+# --- uninstall 은 설치 로직을 타지 않고 실제 ~/.claude 를 대상으로 즉시 처리한다 ---
+if [[ "$UNINSTALL" -eq 1 ]]; then
+    echo "🧹 Claude Code 가드 훅 제거..."
+    [[ "$DRY_RUN" -eq 1 ]] && echo "  🧪 DRY RUN 모드 — 실제 파일은 전혀 제거되지 않습니다."
+    if ! PY="$(resolve_python_command)"; then
+        echo "❌ Python 3을 찾을 수 없습니다." >&2
+        exit 1
+    fi
+    echo ""
+    uninstall_hooks "$PY" "$RES_DIR/hooks/merge_and_diff.py" "$REAL_CLAUDE_DIR" "$REAL_HOOKS_DIR" "$REAL_SETTINGS_PATH" "$DRY_RUN"
+    echo ""
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        echo "🧪 DRY RUN 완료 — 실제로 제거하려면 --dry-run 없이 다시 실행하세요."
+    else
+        echo "✅ 제거 완료. (permissions 는 보존되었습니다 — 필요하면 $REAL_SETTINGS_PATH 에서 직접 정리하세요.)"
+    fi
+    exit 0
+fi
+
+echo "🔧 Claude Code 사용자 레벨 훅/권한 설정 시작..."
+if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "  🧪 DRY RUN 모드 — 실제 파일은 전혀 변경/설치되지 않습니다."
+fi
 
 WORK_HOME="$(resolve_install_home "$DRY_RUN" "$REAL_HOME" "settings.json")"
 CLEANUP_DIR=""
@@ -139,3 +161,9 @@ if [[ "$HAS_TRASH_PUT" -eq 0 ]]; then
 fi
 print_setup_report "$DRY_RUN" "$REAL_SETTINGS_PATH" "$REAL_HOOKS_DIR/guard.log" "$DEP_WARNING" \
     "$REAL_HOOKS_DIR/danger_guard.py" "$REAL_HOOKS_DIR/secrets_guard.py"
+
+# --- 7. 설치 매니페스트 기록 (uninstall 이 참조) ---
+if [[ "$DRY_RUN" -ne 1 ]]; then
+    write_hook_manifest "$PY" "$REAL_CLAUDE_DIR/$MANIFEST_NAME" "$REAL_HOOKS_DIR" "$REAL_SETTINGS_PATH" \
+        "danger_guard.py" "secrets_guard.py"
+fi

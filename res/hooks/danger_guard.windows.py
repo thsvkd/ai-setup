@@ -10,9 +10,10 @@ Bash 툴(Git Bash)과 PowerShell 툴(네이티브, Git for Windows 미설치 시
      단, 드라이브 루트(C 드라이브 전체, / 또는 ~) 삭제 시도는 치환하지 않고 즉시 deny.
      send2trash 가 설치되어 있지 않으면 치환할 수 없으므로 fail-closed 로 deny.
      멀티라인 스크립트 안에 섞여 있으면(아래 참고) 자동 치환 대신 deny.
-  2) git push / git push --force / git reset --hard / git clean -f* → deny (수동 실행 요구)
-     git checkout -- <path> / git restore → ask (되돌릴 수 없는 변경 손실 가능성)
-  3) format / diskpart / mkfs / fdisk / dd of=... → deny (디스크 레벨 파괴적 작업)
+  2) git push / git push --force / git reset --hard / git clean -f* / git stash drop|clear → deny
+     git branch -D / git checkout -- <path> / git restore → ask (되돌릴 수 없는 변경 손실 가능성)
+  3) format / diskpart / mkfs / fdisk / Clear-Disk / Format-Volume / dd of=... → deny (디스크 레벨 파괴적)
+     Clear-Content / reg delete / chmod 777 → ask
   4) curl|bash, irm ... | iex 같은 "원격 스크립트를 바로 실행 셸로 파이프" 패턴 → deny
   5) shutdown / Restart-Computer / Stop-Computer → ask
 
@@ -162,13 +163,23 @@ def main() -> None:
                 emit("deny", "git reset --hard는 커밋되지 않은 변경사항을 되돌릴 수 없이 삭제합니다. (stash/soft 권장)")
             if "clean" in lower_args and any(f in lower_args for f in ("-f", "-fd", "-fx", "-fdx", "-xdf", "--force")):
                 emit("deny", "git clean -f 류는 추적되지 않는 파일을 되돌릴 수 없이 삭제합니다.")
+            if "stash" in lower_args and any(a in lower_args for a in ("drop", "clear")):
+                emit("deny", "git stash drop/clear 는 스태시를 되돌릴 수 없이 삭제합니다.")
+            if "branch" in lower_args and "-D" in args:
+                emit("ask", "git branch -D 는 병합되지 않은 브랜치를 강제 삭제합니다 (reflog 로만 복구 가능). 계속할까요?")
             if ("checkout" in lower_args and "--" in args) or "restore" in lower_args:
                 emit("ask", "커밋되지 않은 로컬 변경사항을 버릴 수 있는 명령입니다. 계속할까요?")
 
-        if base in {"format", "diskpart", "mkfs", "fdisk"}:
+        if base in {"format", "diskpart", "mkfs", "fdisk", "clear-disk", "format-volume"}:
             emit("deny", f"디스크 레벨 명령({base})은 되돌릴 수 없어 자동 실행을 차단합니다.")
         if base == "dd" and any(a.startswith("of=") for a in args):
             emit("deny", "dd of=... 는 대상 장치/파일을 덮어쓸 수 있어 차단합니다.")
+        if base == "chmod" and any(a in ("777", "0777", "a+rwx", "a=rwx") for a in args):
+            emit("ask", "chmod 777 류는 모든 사용자에게 전체 권한을 부여합니다 (보안 위험). 계속할까요?")
+        if base == "clear-content":
+            emit("ask", "Clear-Content 는 파일 내용을 비웁니다 (데이터 손실 가능). 계속할까요?")
+        if base == "reg" and lower_args and lower_args[0] == "delete":
+            emit("ask", "reg delete 는 레지스트리 키/값을 삭제합니다. 계속할까요?")
 
         if "|" in parts:
             idx = parts.index("|")

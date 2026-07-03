@@ -86,18 +86,20 @@ irm https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1 
 | ↳ 드라이브·홈 루트 삭제 (`C:\`, `/`, `~`) | ⛔ **차단** |
 | ↳ 휴지통 도구 미설치 / 여러 줄 스크립트에 섞임 | ⛔ **차단** (fail-closed) |
 | `git push`, `git push --force` | ⛔ **차단** (수동 실행 요구) |
-| `git reset --hard`, `git clean -f*` | ⛔ **차단** |
-| `git checkout -- <경로>`, `git restore` | ❓ **확인** |
-| `format` / `diskpart` / `mkfs` / `fdisk` / `parted` / `diskutil eraseDisk` / `dd of=` | ⛔ **차단** |
+| `git reset --hard`, `git clean -f*`, `git stash drop`/`clear` | ⛔ **차단** |
+| `git branch -D`, `git checkout -- <경로>`, `git restore` | ❓ **확인** |
+| `format` / `diskpart` / `mkfs` / `fdisk` / `parted` / `wipefs` / `Clear-Disk` / `Format-Volume` / `diskutil eraseDisk` / `dd of=` | ⛔ **차단** |
+| `/dev/sd*` 등 블록 디바이스로의 리다이렉트, 포크밤 `:(){ :\|:& };:` | ⛔ **차단** |
 | `curl … \| bash`, `irm … \| iex` (원격 출력을 셸로 파이프) | ⛔ **차단** |
-| `shutdown` / `reboot` / `Restart-Computer` 등 | ❓ **확인** |
+| `shutdown` / `reboot` / `Restart-Computer`, `chmod 777`, `shred`, `Clear-Content`, `reg delete` | ❓ **확인** |
 | 그 외 | ✅ 통과 (판단 안 함) |
 
-모든 판정은 `~/.claude/hooks/guard.log`에 감사 기록으로 남는다.
+`sudo <명령>`은 접두어를 벗겨 실제 명령을 위 규칙으로 검사한다. 모든 판정은 `~/.claude/hooks/guard.log`에 감사 기록으로 남는다.
 
 ### secrets_guard — 시크릿 파일
 
-`.env`, `id_rsa`/`id_ed25519`, `*.pem`/`*.pfx`/`*.p12`, `credentials.json`, `secrets.y(a)ml`, `*_secret*`, `*.key` 등을
+`.env`, `id_rsa`/`id_dsa`/`id_ecdsa`/`id_ed25519`, `*.pem`/`*.pfx`/`*.p12`/`*.p8`/`*.ppk`/`*.jks`/`*.keystore`,
+`credentials.json`, `secrets.y(a)ml`, `.npmrc`/`.pypirc`/`.netrc`/`.git-credentials`, `~/.aws/credentials`, `*_secret*`, `*.key` 등을
 **Read / Write / Edit / MultiEdit**로 접근하면 ❓ 확인을 요청한다. (완전 차단이 아니라, 정당한 편집을 위해 확인 게이트)
 
 ---
@@ -110,8 +112,12 @@ irm https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1 
 | --- | --- |
 | `--hooks` / `-Hooks` | 가드 훅 + 권한만 설치 (전역, `~/.claude`) |
 | `--agentsmd` / `-AgentsMd` | 현재 폴더에 `AGENTS.md`만 설치 |
+| `--uninstall` / `-Uninstall` | 가드 훅 제거 + `settings.json` 등록 해제 (권한은 보존, 덮어쓰기 전 백업) |
 | `--dry-run` / `-DryRun` | 아무것도 바꾸지 않고 변경 계획만 출력 |
+| `--help` / `-Help` | 도움말 |
 | (없음) | 위 설치를 모두 수행 |
+
+> 설치는 **멱등**하다 — 여러 번 실행해도 훅이 중복 등록되지 않는다. `settings.json`을 바꿀 땐 항상 `settings.json.bak.<타임스탬프>`로 백업하고, 설치 내역은 `~/.claude/.claude-code-setup.json` 매니페스트에 기록되어 `--uninstall`이 참조한다.
 
 ### 레포를 clone 해서 직접 실행
 
@@ -154,16 +160,37 @@ res/
     merge_and_diff.py       # 자리표시자 치환 + 외과적 병합 엔진
 scripts/
   setup.{ps1,sh}            # CLI 디스패처 (엔트리포인트)
-  setup_hooks.{ps1,sh}      # 가드 훅 + 권한 설치 워커
+  setup_hooks.{ps1,sh}      # 가드 훅 + 권한 설치 / uninstall 워커
   setup_agentsmd.{ps1,sh}   # AGENTS.md 설치 워커
   lib/                      # 공용 오케스트레이션 함수
 install.{ps1,sh}            # 원격 설치 부트스트랩 (curl | sh / irm | iex)
+tests/                      # pytest(훅·병합) + bats(bash) + Pester(PowerShell)
+```
+
+---
+
+## 개발 · 테스트
+
+가드 훅과 병합 엔진은 블랙박스로 테스트한다 (JSON을 stdin으로 넣고 판정을 검증).
+
+```sh
+python -m pytest tests/                 # 훅 정책 + 병합 엔진 (Python)
+bats tests/setup.bats                    # 셋업 스크립트 (bash, bats-core 필요)
+```
+```powershell
+Invoke-Pester tests/Setup.Tests.ps1 -Output Detailed   # 셋업 스크립트 (PowerShell)
 ```
 
 ---
 
 ## 되돌리기
 
-가드 훅은 `~/.claude/settings.json`의 `hooks.PreToolUse`에서 `danger_guard` / `secrets_guard` 항목을 지우고,
-`~/.claude/hooks/`의 해당 `.py` 파일을 삭제하면 비활성화된다. 권한(`permissions.allow/deny/defaultMode`)도
-같은 파일에서 원하는 대로 수정할 수 있다. (이 설정 외 다른 키는 설치 시 건드리지 않았으므로 그대로다.)
+`setup.sh --uninstall` / `setup.ps1 -Uninstall`로 가드 훅을 제거하고 `settings.json`의 등록을 해제한다
+(권한은 보존, 변경 전 백업). 원격에서 바로 실행하려면:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --uninstall
+```
+
+수동으로 지우려면 `~/.claude/settings.json`의 `hooks.PreToolUse`에서 `danger_guard`/`secrets_guard` 항목과
+`~/.claude/hooks/`의 해당 `.py` 파일을 삭제하면 된다. (이 설정 외 다른 키는 설치 시 건드리지 않았으므로 그대로다.)
