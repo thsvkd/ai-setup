@@ -1,0 +1,169 @@
+# claude-code-setup
+
+Claude Code를 **더 안전하게** 쓰기 위한 사용자 레벨(user-level) 설정 번들.
+위험한 명령을 자동으로 막거나 휴지통 이동으로 치환하는 **가드 훅**, 합리적인 **권한(permissions)**,
+그리고 프로젝트용 **AGENTS.md**를 Windows / macOS / Linux에 한 번에 설치한다.
+
+- 🛡️ **가드 훅** — `rm`을 휴지통 이동으로 치환, `git push --force`·`git reset --hard`·디스크 포맷·`curl | bash` 등 되돌릴 수 없는 명령을 차단, 시크릿 파일 접근 시 확인 요청
+- 🧩 **외과적 병합** — 기존 `settings.json`의 다른 설정(model, env, statusLine 등)은 **100% 보존**하고 권한/훅만 추가
+- 🔁 **멱등성 · dry-run** — 몇 번을 실행해도 안전하고, `--dry-run`으로 실제 적용 전에 바뀔 내용을 미리 확인
+- 🖥️ **크로스 플랫폼** — Windows(PowerShell)와 POSIX(bash) 양쪽을 단일 소스로 관리
+
+> ⚠️ **범위 주의**: 훅과 권한은 `~/.claude`(유저 레벨)에 설치되어 **이 사용자가 여는 모든 프로젝트**에 적용된다. 특정 프로젝트에만 적용되는 게 아니다.
+
+---
+
+## 빠른 시작
+
+### 전역 가드/권한만 설치 (권장 시작점)
+
+어느 위치에서 실행해도 됩니다. `~/.claude`에만 설치됩니다.
+
+**macOS / Linux / Git Bash**
+```sh
+curl -fsSL https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --hooks
+```
+
+**Windows PowerShell**
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -Hooks
+```
+
+### 먼저 미리보기 (아무것도 바꾸지 않음)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --dry-run
+```
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -DryRun
+```
+
+### 전체 설치 (가드/권한 + 현재 폴더에 AGENTS.md)
+
+`AGENTS.md`는 **현재 작업 디렉터리**에 설치되므로, 프로젝트 루트에서 실행하세요.
+
+```sh
+cd my-project
+curl -fsSL https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh
+```
+```powershell
+cd my-project
+irm https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1 | iex
+```
+
+> 인자를 주지 않으면 **가드/권한 + AGENTS.md**가 모두 설치됩니다. PowerShell에서 `irm | iex`는 인자를 넘기기 어려우므로, 플래그가 필요할 땐 위의 `scriptblock` 형태를 쓰세요.
+
+---
+
+## 무엇이 설치되나
+
+| 위치 | 내용 |
+| --- | --- |
+| `~/.claude/hooks/danger_guard.py` | 위험 명령 가드 (Bash·PowerShell 툴) |
+| `~/.claude/hooks/secrets_guard.py` | 시크릿 파일 접근 가드 (Read·Write·Edit) |
+| `~/.claude/hooks/send_to_trash.py` | (Windows) 휴지통 이동 헬퍼 |
+| `~/.claude/settings.json` | 권한 + PreToolUse 훅 등록 (**기존 키는 보존**) |
+| `./AGENTS.md` | (`--agentsmd` 시) 현재 폴더에 프로젝트 워크플로 규칙 — 이미 있으면 건너뜀 |
+
+### settings.json에 병합되는 것
+
+- `permissions.defaultMode: "auto"`
+- `permissions.allow` — `Bash`, `PowerShell`, `Read(*)`, `Edit(*)`, `Write(*)`, `Agent(*)`, `WebFetch(*)` 등 핵심 툴
+- `permissions.deny` — `git push`, `git reset --hard` (Bash·PowerShell 모두)
+- `hooks.PreToolUse` — `danger_guard` / `secrets_guard` 등록
+
+그 외 최상위 키(`model`, `env`, `statusLine`, 다른 훅 등)는 **하나도 건드리지 않는다**. 단일 소스는 [`res/settings.json`](res/settings.json)이며, 설치 시 python 실행 명령과 훅 경로만 치환된다.
+
+---
+
+## 가드 정책
+
+### danger_guard — 위험 명령
+
+| 명령 | 조치 |
+| --- | --- |
+| `rm`, `del`, `Remove-Item`, `rd`, `rmdir` | 🗑️ 휴지통 이동으로 **치환** (send2trash / trash-put) |
+| ↳ 드라이브·홈 루트 삭제 (`C:\`, `/`, `~`) | ⛔ **차단** |
+| ↳ 휴지통 도구 미설치 / 여러 줄 스크립트에 섞임 | ⛔ **차단** (fail-closed) |
+| `git push`, `git push --force` | ⛔ **차단** (수동 실행 요구) |
+| `git reset --hard`, `git clean -f*` | ⛔ **차단** |
+| `git checkout -- <경로>`, `git restore` | ❓ **확인** |
+| `format` / `diskpart` / `mkfs` / `fdisk` / `parted` / `diskutil eraseDisk` / `dd of=` | ⛔ **차단** |
+| `curl … \| bash`, `irm … \| iex` (원격 출력을 셸로 파이프) | ⛔ **차단** |
+| `shutdown` / `reboot` / `Restart-Computer` 등 | ❓ **확인** |
+| 그 외 | ✅ 통과 (판단 안 함) |
+
+모든 판정은 `~/.claude/hooks/guard.log`에 감사 기록으로 남는다.
+
+### secrets_guard — 시크릿 파일
+
+`.env`, `id_rsa`/`id_ed25519`, `*.pem`/`*.pfx`/`*.p12`, `credentials.json`, `secrets.y(a)ml`, `*_secret*`, `*.key` 등을
+**Read / Write / Edit / MultiEdit**로 접근하면 ❓ 확인을 요청한다. (완전 차단이 아니라, 정당한 편집을 위해 확인 게이트)
+
+---
+
+## 사용법 (플래그)
+
+`setup`은 디스패처이고, 인자에 따라 하위 작업을 골라 실행한다. **인자가 없으면 전부 실행**한다.
+
+| 플래그 (POSIX / PowerShell) | 동작 |
+| --- | --- |
+| `--hooks` / `-Hooks` | 가드 훅 + 권한만 설치 (전역, `~/.claude`) |
+| `--agentsmd` / `-AgentsMd` | 현재 폴더에 `AGENTS.md`만 설치 |
+| `--dry-run` / `-DryRun` | 아무것도 바꾸지 않고 변경 계획만 출력 |
+| (없음) | 위 설치를 모두 수행 |
+
+### 레포를 clone 해서 직접 실행
+
+```sh
+git clone https://github.com/thsvkd/claude-code-setup.git
+cd claude-code-setup
+bash scripts/setup.sh --dry-run      # 미리보기
+bash scripts/setup.sh --hooks        # 전역 가드/권한
+```
+```powershell
+git clone https://github.com/thsvkd/claude-code-setup.git
+cd claude-code-setup
+.\scripts\setup.ps1 -DryRun
+.\scripts\setup.ps1 -Hooks
+```
+
+---
+
+## 요구사항
+
+- **Python 3** (필수 — 훅과 병합 엔진이 사용)
+- **POSIX**: `bash`, `trash-cli`(자동 설치 시도 — 없으면 `rm` 계열이 **차단**됨)
+- **Windows**: `send2trash`(pip로 자동 설치 시도 — 없으면 `rm`/`del` 계열이 **차단**됨)
+
+> `auto` 모드는 계정/버전 자격 요건(플랜·모델·Claude Code 버전)을 충족해야 실제로 켜진다. 설치 후 세션에서 `Shift+Tab`으로 모드를 순환시켜 확인할 수 있다.
+
+---
+
+## 저장소 구조
+
+```
+res/
+  AGENTS.md                 # 배포될 프로젝트 워크플로 규칙
+  settings.json             # 실제 settings.json 조각 (SSoT, {{PY}}·{{HOOKS_DIR}} 자리표시자)
+  hooks/
+    danger_guard.windows.py # Windows용 (Bash + PowerShell)
+    danger_guard.posix.py   # macOS/Linux용 (Bash)
+    secrets_guard.py        # 공용
+    send_to_trash.py        # Windows 휴지통 헬퍼
+    merge_and_diff.py       # 자리표시자 치환 + 외과적 병합 엔진
+scripts/
+  setup.{ps1,sh}            # CLI 디스패처 (엔트리포인트)
+  setup_hooks.{ps1,sh}      # 가드 훅 + 권한 설치 워커
+  setup_agentsmd.{ps1,sh}   # AGENTS.md 설치 워커
+  lib/                      # 공용 오케스트레이션 함수
+install.{ps1,sh}            # 원격 설치 부트스트랩 (curl | sh / irm | iex)
+```
+
+---
+
+## 되돌리기
+
+가드 훅은 `~/.claude/settings.json`의 `hooks.PreToolUse`에서 `danger_guard` / `secrets_guard` 항목을 지우고,
+`~/.claude/hooks/`의 해당 `.py` 파일을 삭제하면 비활성화된다. 권한(`permissions.allow/deny/defaultMode`)도
+같은 파일에서 원하는 대로 수정할 수 있다. (이 설정 외 다른 키는 설치 시 건드리지 않았으므로 그대로다.)
