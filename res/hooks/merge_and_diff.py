@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+merge_and_diff.py — 실제 settings.json 조각을 기존 settings.json에 외과적으로 병합
+
+입력 조각(res/settings.json)은 진짜 Claude Code settings.json 형식이며(SSoT), 훅 command에
+{{PY}} / {{HOOKS_DIR}} 자리표시자를 담는다. 이 스크립트가:
+  1) 자리표시자를 치환하고 (Windows/POSIX 설치 스크립트 양쪽이 같은 이 로직을 씀),
+  2) permissions(allow/deny/defaultMode)와 hooks.* 만 기존 settings.json에 병합하며,
+  3) 그 외 최상위 키(model, env, statusLine, 다른 훅 등)는 100% 그대로 보존한다.
+예상치 못하게 바뀐 최상위 키가 감지되면 비정상 종료(exit 1)한다.
+
+allow/deny 는 합집합(중복 없이 뒤에 추가), defaultMode 는 덮어쓰기, hooks.* 는
+(matcher, 훅 스크립트 파일명 집합) 시그니처로 중복 판정해 없는 것만 추가한다 → 재실행 멱등.
+
+usage: merge_and_diff.py <fragment.json> <settings_path> <dry_run:0|1> <py_invoke> <hooks_dir>
+"""
+import copy
+import json
+import os
+import re
+import sys
+
+PY_RE = re.compile(r'[A-Za-z0-9_.\-]+\.py')
+
+
+def substitute(obj, mapping):
+    """조각 안 모든 문자열 값에서 자리표시자를 치환한다 (파싱된 객체 기준이라 JSON 이스케이프는 자동)."""
+    if isinstance(obj, str):
+        for key, value in mapping.items():
+            obj = obj.replace(key, value)
+        return obj
+    if isinstance(obj, list):
+        return [substitute(x, mapping) for x in obj]
+    if isinstance(obj, dict):
+        return {k: substitute(v, mapping) for k, v in obj.items()}
+    return obj
+
+
+def script_names(entry):
+    names = []
+    for h in entry.get("hooks", []):
+        names.extend(PY_RE.findall(h.get("command", "")))
+    return tuple(sorted(names))
+
+
+def hook_sig(entry):
+    return (entry.get("matcher"), script_names(entry))
+
+
+def merge_list(perms, key, incoming, changes):
+    if not incoming:
+        return
+    before = list(perms.get(key, []))
+    merged = list(before)
+    for item in incoming:
+        if item not in merged:
+            merged.append(item)
+    perms[key] = merged
+    added = [x for x in merged if x not in before]
+    if added:
+        changes.append(f"permissions.{key}: +{added}")
+
+
+def merge(existing: dict, fragment: dict) -> list:
+    changes = []
+
+    frag_perms = fragment.get("permissions", {})
+    if frag_perms:
+        perms = existing.setdefault("permissions", {})
+        merge_list(perms, "allow", frag_perms.get("allow", []), changes)
+        merge_list(perms, "deny", frag_perms.get("deny", []), changes)
+        if "defaultMode" in frag_perms:
+            old_mode = perms.get("defaultMode")
+            new_mode = frag_perms["defaultMode"]
+            if old_mode != new_mode:
+                changes.append(f"permissions.defaultMode: {old_mode!r} -> {new_mode!r}")
+                perms["defaultMode"] = new_mode
+        if "mode" in perms:
+            changes.append(f"permissions.mode (잘못된 legacy 키) 제거: {perms['mode']!r}")
+            del perms["mode"]
+
+    frag_hooks = fragment.get("hooks", {})
+    if frag_hooks:
+        hooks = existing.setdefault("hooks", {})
+        for event, entries in frag_hooks.items():
+            existing_list = hooks.setdefault(event, [])
+            existing_sigs = {hook_sig(e) for e in existing_list}
+            for entry in entries:
+                sig = hook_sig(entry)
+                if sig not in existing_sigs:
+                    existing_list.append(entry)
+                    existing_sigs.add(sig)
+                    names = ", ".join(sig[1]) or "(?)"
+                    changes.append(f"hooks.{event}: + matcher={entry.get('matcher')!r} ({names})")
+
+    return changes
+
+
+def top_level_diff(before: dict, after: dict):
+    preserved, violated = [], []
+    for k in before:
+        if k in ("permissions", "hooks"):
+            continue
+        (preserved if after.get(k) == before.get(k) else violated).append(k)
+    return preserved, violated
+
+
+def main() -> int:
+    if len(sys.argv) != 6:
+        print("usage: merge_and_diff.py <fragment.json> <settings_path> <dry_run> <py_invoke> <hooks_dir>",
+              file=sys.stderr)
+        return 1
+
+    fragment_path, settings_path, dry_run_s, py_invoke, hooks_dir = sys.argv[1:6]
+    dry_run = dry_run_s == "1"
+
+    # 훅 command 경로 구분자를 정슬래시로 통일한다. Windows Python 도 정슬래시 경로를
+    # 정상 처리하고, Claude Code 자체도 settings.json 에 정슬래시 Windows 경로를 쓴다
+    # (예: statusLine 의 "C:/Users/.../omc-hud.mjs"). 혼합 슬래시를 피해 일관성을 얻는다.
+    hooks_dir = hooks_dir.replace("\\", "/")
+
+    with open(fragment_path, "r", encoding="utf-8") as f:
+        fragment = json.load(f)
+    fragment.pop("_comment", None)
+    fragment = substitute(fragment, {"{{PY}}": py_invoke, "{{HOOKS_DIR}}": hooks_dir})
+
+    if os.path.exists(settings_path):
+        with open(settings_path, "r", encoding="utf-8") as f:
+            before = json.load(f)
+    else:
+        before = {}
+
+    after = copy.deepcopy(before)
+    changes = merge(after, fragment)
+    preserved, violated = top_level_diff(before, after)
+
+    print("── 변경 계획 ──────────────────────────")
+    if changes:
+        for c in changes:
+            print(f"  • {c}")
+    else:
+        print("  (변경 사항 없음 — 이미 최신 상태)")
+    if before:
+        print(f"── 보존된 기존 최상위 키: {preserved or '(없음)'}")
+        if violated:
+            print(f"  ⚠️ 예상과 다르게 변경된 키 발견: {violated}")
+    print("──────────────────────────────────────")
+
+    if dry_run:
+        print(f"🧪 DRY RUN — {settings_path} 에 실제로 쓰지 않았습니다.")
+        print("── 병합 결과 미리보기 (AFTER) ──")
+        print(json.dumps(after, ensure_ascii=False, indent=2))
+    else:
+        os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+        with open(settings_path, "w", encoding="utf-8") as f:
+            json.dump(after, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        print(f"✅ 병합 완료: {settings_path}")
+
+    return 1 if violated else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

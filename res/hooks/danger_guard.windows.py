@@ -1,0 +1,186 @@
+# -*- coding: utf-8 -*-
+"""
+danger_guard.py — PreToolUse hook (Claude Code, 유저 레벨, Windows)
+
+Bash 툴(Git Bash)과 PowerShell 툴(네이티브, Git for Windows 미설치 시 기본으로 쓰임)
+양쪽 모두를 대상으로 한다. 둘 다 tool_input.command 에 실행할 명령 문자열을 담는다.
+
+정책:
+  1) rm / del / erase / Remove-Item / rd / rmdir  → send_to_trash.py 로 치환 (allow + updatedInput)
+     단, 드라이브 루트(C 드라이브 전체, / 또는 ~) 삭제 시도는 치환하지 않고 즉시 deny.
+     send2trash 가 설치되어 있지 않으면 치환할 수 없으므로 fail-closed 로 deny.
+     멀티라인 스크립트 안에 섞여 있으면(아래 참고) 자동 치환 대신 deny.
+  2) git push / git push --force / git reset --hard / git clean -f* → deny (수동 실행 요구)
+     git checkout -- <path> / git restore → ask (되돌릴 수 없는 변경 손실 가능성)
+  3) format / diskpart / mkfs / fdisk / dd of=... → deny (디스크 레벨 파괴적 작업)
+  4) curl|bash, irm ... | iex 같은 "원격 스크립트를 바로 실행 셸로 파이프" 패턴 → deny
+  5) shutdown / Restart-Computer / Stop-Computer → ask
+
+Bash 툴은 여러 줄짜리 스크립트를 통째로 하나의 command 문자열로 보낸다. shlex.split을
+전체 문자열에 한 번만 적용하면 (a) 파이프 뒤 검사가 전혀 무관한 다음 줄까지 새어 들어가
+오탐이 나거나 (b) 위험한 명령이 첫 줄이 아니면 검사 자체가 안 되는 미탐이 생긴다. 그래서
+command를 줄 단위로 나눠 각 줄을 독립적으로 검사한다 (알려진 한계: 같은 줄 안에서
+`&&`/`;` 로 이어붙인 다중 명령까지는 분리하지 않는다 — 완전한 셸 문법 파서가 필요해
+이 휴리스틱 훅의 범위를 벗어난다).
+
+모든 판단은 hookSpecificOutput.permissionDecision(allow|deny|ask) 방식으로 반환하고,
+guard.log 에 감사 로그를 남긴다. 이 훅은 유저 레벨에 설치되므로 이 사용자가 여는
+모든 프로젝트에 적용된다.
+"""
+import sys
+import json
+import shlex
+import re
+import os
+import datetime
+
+HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_PATH = os.path.join(HOOKS_DIR, "guard.log")
+SEND_TO_TRASH = os.path.join(HOOKS_DIR, "send_to_trash.py")
+
+DELETE_COMMANDS = {"rm", "del", "erase", "remove-item", "ri", "rd", "rmdir"}
+WINDOWS_FLAG_STYLE = {"del", "erase", "rd", "rmdir"}  # 이 명령들은 /flag 사용 (rm/Remove-Item 은 -flag)
+
+ROOT_RE = re.compile(r'^([a-zA-Z]:[\\/]*|[\\/]+|~[\\/]*)$')
+
+REMOTE_EXEC_TOKENS = {"bash", "sh", "zsh", "iex", "invoke-expression", "powershell", "pwsh"}
+
+
+def log(entry: dict) -> None:
+    entry["ts"] = datetime.datetime.now().isoformat(timespec="seconds")
+    try:
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def emit(decision: str, reason: str, updated_input: dict | None = None) -> None:
+    payload = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": decision,
+            "permissionDecisionReason": reason,
+        }
+    }
+    if updated_input is not None:
+        payload["hookSpecificOutput"]["permissionDecision"] = "allow"
+        payload["hookSpecificOutput"]["updatedInput"] = updated_input
+    print(json.dumps(payload, ensure_ascii=False))
+    sys.exit(0)
+
+
+def quote_bash(arg: str) -> str:
+    return shlex.quote(arg)
+
+
+def quote_ps(arg: str) -> str:
+    return "'" + arg.replace("'", "''") + "'"
+
+
+def strip_ps_quotes(token: str) -> str:
+    # shlex.split(posix=False) (PowerShell 경로에서 사용, 백슬래시 경로를 보존하기 위해
+    # posix=True 대신 이걸 씀) 는 따옴표 문자를 토큰에서 벗겨내지 않고 그대로 남긴다.
+    # 이걸 벗겨두지 않으면 (a) send_to_trash.py 로 넘어가는 경로에 리터럴 따옴표가
+    # 섞여 들어가 실패하고, (b) 드라이브 루트 삭제 탐지(ROOT_RE)가 따옴표 붙은
+    # 토큰에는 매칭되지 않아 우회될 수 있다.
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in ('"', "'"):
+        return token[1:-1]
+    return token
+
+
+def main() -> None:
+    try:
+        raw = sys.stdin.read()
+        data = json.loads(raw) if raw else {}
+    except (json.JSONDecodeError, ValueError):
+        sys.exit(0)
+
+    tool_name = data.get("tool_name", "")
+    if tool_name not in ("Bash", "PowerShell"):
+        sys.exit(0)
+
+    command = data.get("tool_input", {}).get("command", "")
+    if not command.strip():
+        sys.exit(0)
+
+    is_bash = tool_name == "Bash"
+    lines = [ln for ln in command.splitlines() if ln.strip()]
+    is_multiline = len(lines) > 1
+
+    for line in lines:
+        try:
+            parts = shlex.split(line, posix=is_bash)
+        except ValueError:
+            log({"tool": tool_name, "line": line, "decision": "pass-unparsed"})
+            continue
+
+        if not parts:
+            continue
+
+        if not is_bash:
+            parts = [strip_ps_quotes(p) for p in parts]
+
+        base = os.path.basename(parts[0]).lower()
+        args = parts[1:]
+        lower_args = [a.lower() for a in args]
+
+        if base in DELETE_COMMANDS:
+            if base in WINDOWS_FLAG_STYLE:
+                clean_args = [a for a in args if not a.startswith("/")]
+            else:
+                clean_args = [a for a in args if not a.startswith("-")]
+
+            if not clean_args:
+                emit("deny", "삭제 대상 경로가 지정되지 않았습니다.")
+
+            for a in clean_args:
+                if ROOT_RE.match(a.strip()):
+                    log({"tool": tool_name, "command": command, "decision": "deny-root-delete"})
+                    emit("deny", f"드라이브/파일시스템 루트({a})를 삭제하려는 시도는 차단됩니다.")
+
+            if is_multiline:
+                emit("deny", "여러 줄 스크립트 안에 삭제 명령이 섞여 있어 안전하게 자동 치환할 수 없습니다. 삭제 명령은 단독으로 실행하세요.")
+
+            if not os.path.exists(SEND_TO_TRASH):
+                emit("deny", "안전 삭제 스크립트(send_to_trash.py)가 없어 삭제를 차단합니다.")
+
+            quote = quote_bash if is_bash else quote_ps
+            py_exe = "python"
+            new_command = f'{py_exe} -X utf8 {quote(SEND_TO_TRASH)} ' + " ".join(quote(a) for a in clean_args)
+
+            log({"tool": tool_name, "command": command, "decision": "redirect-to-trash", "new_command": new_command})
+            emit("allow", "삭제 명령을 휴지통 이동으로 안전하게 치환했습니다 (send2trash).",
+                 updated_input={"command": new_command})
+
+        if base == "git":
+            if "push" in lower_args and any(f in lower_args for f in ("--force", "-f", "--force-with-lease")):
+                emit("deny", "git push --force 류는 원격 히스토리를 파괴할 수 있어 수동 실행이 필요합니다.")
+            if "push" in lower_args:
+                emit("deny", "git push는 수동으로 실행하세요.")
+            if "reset" in lower_args and "--hard" in lower_args:
+                emit("deny", "git reset --hard는 커밋되지 않은 변경사항을 되돌릴 수 없이 삭제합니다. (stash/soft 권장)")
+            if "clean" in lower_args and any(f in lower_args for f in ("-f", "-fd", "-fx", "-fdx", "-xdf", "--force")):
+                emit("deny", "git clean -f 류는 추적되지 않는 파일을 되돌릴 수 없이 삭제합니다.")
+            if ("checkout" in lower_args and "--" in args) or "restore" in lower_args:
+                emit("ask", "커밋되지 않은 로컬 변경사항을 버릴 수 있는 명령입니다. 계속할까요?")
+
+        if base in {"format", "diskpart", "mkfs", "fdisk"}:
+            emit("deny", f"디스크 레벨 명령({base})은 되돌릴 수 없어 자동 실행을 차단합니다.")
+        if base == "dd" and any(a.startswith("of=") for a in args):
+            emit("deny", "dd of=... 는 대상 장치/파일을 덮어쓸 수 있어 차단합니다.")
+
+        if "|" in parts:
+            idx = parts.index("|")
+            downstream = [p.lower() for p in parts[idx + 1:]]
+            if any(tok in downstream for tok in REMOTE_EXEC_TOKENS):
+                emit("deny", "원격/외부 출력을 바로 셸에 파이프 실행하는 패턴입니다. 스크립트를 먼저 저장해 검토한 뒤 실행하세요.")
+
+        if base in {"shutdown", "restart-computer", "stop-computer"}:
+            emit("ask", f"'{base}' 는 시스템을 종료/재시작합니다. 계속할까요?")
+
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
