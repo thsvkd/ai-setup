@@ -49,7 +49,7 @@ DRY_FLAG=()
 
 # uninstall 은 훅 전용 (프로젝트 AGENTS.md 는 사용자 콘텐츠라 건드리지 않음).
 if [[ "$UNINSTALL" -eq 1 ]]; then
-    exec "$SCRIPT_DIR/setup_hooks.sh" --uninstall "${DRY_FLAG[@]}"
+    exec bash "$SCRIPT_DIR/setup_hooks.sh" --uninstall "${DRY_FLAG[@]}"
 fi
 
 if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 ]]; then
@@ -58,9 +58,9 @@ if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 ]]; then
 fi
 
 if [[ "$RUN_HOOKS" -eq 1 ]]; then
-    "$SCRIPT_DIR/setup_hooks.sh" "${DRY_FLAG[@]}"
+    bash "$SCRIPT_DIR/setup_hooks.sh" "${DRY_FLAG[@]}"
 fi
 
 if [[ "$RUN_AGENTSMD" -eq 1 ]]; then
-    "$SCRIPT_DIR/setup_agentsmd.sh" "${DRY_FLAG[@]}"
+    bash "$SCRIPT_DIR/setup_agentsmd.sh" "${DRY_FLAG[@]}"
 fi
