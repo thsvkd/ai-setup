@@ -1,5 +1,8 @@
 {
-  "_comment": "실제 Claude Code settings.json 조각(SSoT). 여기 보이는 구조가 그대로 병합·설치된다. 설치 시 {{PY}}는 감지된 python 실행 명령(python / py -3 등)으로, {{HOOKS_DIR}}는 유저 훅 디렉터리(예: ~/.claude/hooks)로 치환된다. merge_and_diff.py가 permissions/hooks만 기존 settings.json에 외과적으로 병합하고 나머지 최상위 키(model, env, statusLine 등)는 100% 보존한다. PowerShell 규칙/matcher는 Windows용이며 POSIX에선 무해(inert)하다. 이 _comment 키는 병합 시 무시되어 대상 settings.json에는 들어가지 않는다.",
+  "_comment": "실제 Claude Code settings.json 조각(SSoT). 여기 보이는 구조가 그대로 병합·설치된다. 설치 시 {{PY}}는 감지된 python 실행 명령(python / py -3 등)으로, {{HOOKS_DIR}}는 유저 훅 디렉터리(예: ~/.claude/hooks)로 치환된다. merge_and_diff.py가 permissions/hooks를 외과적으로 병합하고, model/effortLevel/language 는 '없을 때만' 추가한다(기존 값이 있으면 사용자 선택을 그대로 보존 — allow/deny 와 동일한 union 철학). 그 외 최상위 키(env, statusLine 등)는 100% 보존한다. PowerShell 규칙/matcher는 Windows용이며 POSIX에선 무해(inert)하다. 이 _comment 키는 병합 시 무시되어 대상 settings.json에는 들어가지 않는다.",
+  "model": "opus",
+  "effortLevel": "xhigh",
+  "language": "korean",
   "permissions": {
     "defaultMode": "auto",
     "allow": [

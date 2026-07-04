@@ -31,6 +31,10 @@ import sys
 
 PY_RE = re.compile(r'[A-Za-z0-9_.\-]+\.py')
 
+# 스칼라 최상위 설정 키(단일 값). allow/deny 처럼 '없을 때만 추가'하고, 기존 값이 있으면
+# 사용자 선택을 그대로 보존한다. uninstall 은 '우리가 실제로 추가한' 키만 정밀 제거한다.
+SCALAR_KEYS = ("model", "effortLevel", "language")
+
 
 def backup_file(path):
     """덮어쓰기 전 타임스탬프 백업을 만든다. 생성한 백업 경로(없으면 None)를 반환."""
@@ -89,16 +93,31 @@ def merge_list(perms, key, incoming, changes):
     return added
 
 
+def merge_scalars(existing: dict, fragment: dict, changes: list) -> dict:
+    """model/effortLevel/language 를 '없을 때만' 추가한다(기존 값 보존). 실제로 추가한 {키: 값} 을 반환."""
+    added = {}
+    for key in SCALAR_KEYS:
+        if key not in fragment or key in existing:
+            continue  # 조각에 없거나, 사용자가 이미 값을 갖고 있으면 건드리지 않는다.
+        existing[key] = fragment[key]
+        added[key] = fragment[key]
+        changes.append(f"{key}: (없음) -> {fragment[key]!r}")
+    return added
+
+
 def merge(existing: dict, fragment: dict):
     """(changes, receipt) 를 반환. receipt 는 uninstall 이 정밀 복원에 쓰는 '설치 영수증'."""
     changes = []
     receipt = {
         "added_allow": [],
         "added_deny": [],
+        "added_scalars": {},
         "default_mode_before": None,
         "default_mode_after": None,
         "default_mode_changed": False,
     }
+
+    receipt["added_scalars"] = merge_scalars(existing, fragment, changes)
 
     frag_perms = fragment.get("permissions", {})
     if frag_perms:
@@ -172,6 +191,19 @@ def revert_permissions(existing: dict, receipt: dict) -> list:
     return changes
 
 
+def revert_scalars(existing: dict, receipt: dict) -> list:
+    """설치가 '없어서 새로 추가한' model/effortLevel/language 만 제거한다.
+    사용자가 원래 갖고 있던 값(영수증에 없음)이나 설치 후 사용자가 다시 바꾼 값은 건드리지 않는다."""
+    changes = []
+    added = receipt.get("added_scalars") or {}
+    for key, value in added.items():
+        # 설치 이후 사용자가 값을 또 바꿨다면 건드리지 않는다 (여전히 우리 값일 때만 제거).
+        if key in existing and existing[key] == value:
+            del existing[key]
+            changes.append(f"{key} 제거 ({value!r})")
+    return changes
+
+
 def remove_hooks(existing: dict, targets: list) -> list:
     """PreToolUse 등 hooks.* 에서, 지정한 스크립트 파일명을 참조하는 항목을 제거한다."""
     changes = []
@@ -231,6 +263,7 @@ def main_uninstall(argv) -> int:
 
     changes = remove_hooks(after, hook_files)
     changes += revert_permissions(after, receipt)
+    changes += revert_scalars(after, receipt)
 
     print("── 되돌리기 계획 ──────────────────────")
     if changes:

@@ -5,7 +5,7 @@ Claude Code를 **더 안전하게** 쓰기 위한 사용자 레벨(user-level) �
 그리고 프로젝트용 **AGENTS.md**를 Windows / macOS / Linux에 한 번에 설치한다.
 
 - 🛡️ **가드 훅** — `rm`을 휴지통 이동으로 치환, `git push --force`·`git reset --hard`·디스크 포맷·`curl | bash` 등 되돌릴 수 없는 명령을 차단, 시크릿 파일 접근 시 확인 요청
-- 🧩 **외과적 병합** — 기존 `settings.json`의 다른 설정(model, env, statusLine 등)은 **100% 보존**하고 권한/훅만 추가
+- 🧩 **외과적 병합** — 권한/훅을 추가하고 `model`·`effortLevel`·`language`는 **없을 때만** 채운다. 사용자가 이미 고른 값과 그 외 키(env, statusLine 등)는 **100% 보존**
 - 🔁 **멱등성 · dry-run** — 몇 번을 실행해도 안전하고, `--dry-run`으로 실제 적용 전에 바뀔 내용을 미리 확인
 - 🖥️ **크로스 플랫폼** — Windows(PowerShell)와 POSIX(bash) 양쪽을 단일 소스로 관리
 
@@ -105,7 +105,7 @@ irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/
 | `~/.claude/hooks/danger_guard.py` | 위험 명령 가드 (Bash·PowerShell 툴) |
 | `~/.claude/hooks/secrets_guard.py` | 시크릿 파일 접근 가드 (Read·Write·Edit) |
 | `~/.claude/hooks/send_to_trash.py` | (Windows) 휴지통 이동 헬퍼 |
-| `~/.claude/settings.json` | 권한 + PreToolUse 훅 등록 (**기존 키는 보존**) |
+| `~/.claude/settings.json` | 권한 + PreToolUse 훅 등록 + `model`/`effortLevel`/`language` 기본값(없을 때만) (**기존 키는 보존**) |
 | `./AGENTS.md` | (`--agentsmd` 시) 현재 폴더에 프로젝트 워크플로 규칙 — 이미 있으면 건너뜀 |
 
 ### settings.json에 병합되는 것
@@ -114,8 +114,9 @@ irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/
 - `permissions.allow` — `Bash`, `PowerShell`, `Read(*)`, `Edit(*)`, `Write(*)`, `Agent(*)`, `WebFetch(*)` 등 핵심 툴
 - `permissions.deny` — `git push`, `git reset --hard` (Bash·PowerShell 모두)
 - `hooks.PreToolUse` — `danger_guard` / `secrets_guard` 등록
+- `model: "opus"`, `effortLevel: "xhigh"`, `language: "korean"` — **없을 때만** 추가한다(사용자가 이미 값을 갖고 있으면 그대로 보존). `allow`/`deny` 와 같은 union 철학이라, `--uninstall`은 우리가 실제로 추가한 키만 되돌린다.
 
-그 외 최상위 키(`model`, `env`, `statusLine`, 다른 훅 등)는 **하나도 건드리지 않는다**. 단일 소스는 [`res/settings.json`](res/settings.json)이며, 설치 시 python 실행 명령과 훅 경로만 치환된다.
+그 외 최상위 키(`env`, `statusLine`, 다른 훅 등)와 사용자가 이미 고른 `model`/`effortLevel`/`language`는 **건드리지 않는다**. 단일 소스는 [`res/settings.json`](res/settings.json)이며, 설치 시 python 실행 명령과 훅 경로만 치환된다.
 
 ---
 
@@ -155,7 +156,7 @@ irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/
 | --- | --- |
 | `--hooks` / `-Hooks` | 가드 훅 + 권한만 설치 (전역, `~/.claude`) |
 | `--agentsmd` / `-AgentsMd` | 현재 폴더에 `AGENTS.md`만 설치 |
-| `--uninstall` / `-Uninstall` | **설치가 건드린 것만 정밀 복원** — 훅 제거 + 우리가 추가한 allow/deny·defaultMode 원복 (사용자가 원래 갖고 있던 설정은 보존, 백업 후) |
+| `--uninstall` / `-Uninstall` | **설치가 건드린 것만 정밀 복원** — 훅 제거 + 우리가 추가한 allow/deny·defaultMode·`model`/`effortLevel`/`language` 원복 (사용자가 원래 갖고 있던 설정은 보존, 백업 후) |
 | `--dry-run` / `-DryRun` | 아무것도 바꾸지 않고 변경 계획만 출력 |
 | `--help` / `-Help` | 도움말 |
 | (없음) | 위 설치를 모두 수행 |
@@ -229,8 +230,8 @@ Invoke-Pester tests/Setup.Tests.ps1 -Output Detailed   # 셋업 스크립트 (Po
 ## 되돌리기
 
 `setup.sh --uninstall` / `setup.ps1 -Uninstall`은 **설치가 건드린 부분만 정밀하게 되돌린다**.
-설치 시 기록해둔 영수증(`~/.claude/.claude-code-setup.json`)을 근거로, 우리가 추가한 훅·allow/deny 항목만
-제거하고 `defaultMode`를 이전 값으로 원복하며(설치 이후 사용자가 또 바꿨다면 건드리지 않음), 훅 파일·guard.log·매니페스트를
+설치 시 기록해둔 영수증(`~/.claude/.claude-code-setup.json`)을 근거로, 우리가 추가한 훅·allow/deny 항목과
+우리가 새로 넣은 `model`/`effortLevel`/`language`만 제거하고 `defaultMode`를 이전 값으로 원복하며(설치 이후 사용자가 또 바꿨다면 건드리지 않음), 훅 파일·guard.log·매니페스트를
 지운다. 설치가 `settings.json`을 처음 만든 경우 되돌린 뒤 비면 그 파일도 제거한다. 사용자가 원래 갖고 있던 설정과
 그 외 모든 키는 그대로 보존되고, 변경 전 `.bak`을 남긴다. 원격에서 바로 실행하려면:
 

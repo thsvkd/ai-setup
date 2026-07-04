@@ -222,3 +222,63 @@ def test_install_writes_manifest_receipt(tmp_path):
     assert m["default_mode_before"] == "default"
     assert m["default_mode_after"] == "auto"
     assert m["default_mode_changed"] is True
+
+
+# --- 스칼라 최상위 설정(model/effortLevel/language) — '없을 때만 추가' ---
+
+def test_scalars_set_when_absent(tmp_path):
+    # 아무 값도 없던 settings.json 에는 우리의 오피니언 기본값이 설치된다.
+    _, result = run_merge(tmp_path / "settings.json")
+    assert result["model"] == "opus"
+    assert result["effortLevel"] == "xhigh"
+    assert result["language"] == "korean"
+
+
+def test_scalars_preserve_existing(tmp_path):
+    # 사용자가 이미 고른 값은 절대 덮어쓰지 않는다. 없는 것만 채운다.
+    target = tmp_path / "settings.json"
+    target.write_text(json.dumps({"model": "sonnet", "effortLevel": "high"}), encoding="utf-8")
+    proc, result = run_merge(target)
+    assert proc.returncode == 0
+    assert result["model"] == "sonnet"        # 보존
+    assert result["effortLevel"] == "high"    # 보존
+    assert result["language"] == "korean"     # 없던 것만 추가
+
+
+def test_scalars_idempotent(tmp_path):
+    target = tmp_path / "settings.json"
+    run_merge(target)
+    proc2, _ = run_merge(target)
+    assert "변경 사항 없음" in proc2.stdout   # 두 번째 실행은 이미 다 있어 변경 없음
+
+
+def test_install_manifest_records_added_scalars(tmp_path):
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    target.write_text(json.dumps({"model": "sonnet"}), encoding="utf-8")
+    run_merge(target, manifest_path=manifest)
+    m = json.loads(manifest.read_text(encoding="utf-8"))
+    assert "model" not in m["added_scalars"]              # 이미 있던 model 은 추가 목록에 없음
+    assert m["added_scalars"]["effortLevel"] == "xhigh"
+    assert m["added_scalars"]["language"] == "korean"
+
+
+def test_uninstall_removes_only_added_scalars(tmp_path):
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    target.write_text(json.dumps({"model": "sonnet"}), encoding="utf-8")
+    run_merge(target, manifest_path=manifest)
+    _, result = run_uninstall(target, manifest)
+    assert result["model"] == "sonnet"                   # 사용자 것 보존
+    assert "effortLevel" not in result                   # 우리가 추가한 것만 제거
+    assert "language" not in result
+
+
+def test_uninstall_does_not_clobber_user_changed_scalar(tmp_path):
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    target.write_text(json.dumps({}), encoding="utf-8")
+    run_merge(target, manifest_path=manifest)            # effortLevel=xhigh 설치 (없던 값)
+    s = json.loads(target.read_text(encoding="utf-8"))
+    s["effortLevel"] = "high"                            # 설치 후 사용자가 바꿈
+    target.write_text(json.dumps(s), encoding="utf-8")
+    _, result = run_uninstall(target, manifest)
+    assert result["effortLevel"] == "high"              # 우리 값이 아니므로 안 건드림
+    assert "language" not in result                      # 안 바꾼 것은 정상 제거
