@@ -15,27 +15,68 @@ Claude Code를 **더 안전하게** 쓰기 위한 사용자 레벨(user-level) �
 
 ## 빠른 시작
 
+### 🔐 비공개 레포 인증 (이 저장소는 private)
+
+이 저장소는 **비공개(private)** 이므로 원격 설치 명령에는 GitHub 인증이 필요하다.
+인증 없이 실행하면 raw URL 과 아카이브 다운로드가 모두 **404 (Not Found)** 로 실패한다.
+
+설치 스크립트는 환경변수 `GITHUB_TOKEN`(또는 `GH_TOKEN`)이 있으면 레포 아카이브를 자동으로
+인증해서 받는다. 부트스트랩 파일 자체(`install.ps1`/`install.sh`)를 받을 때만 아래처럼 헤더로
+토큰을 넘겨주면 된다.
+
+**토큰 준비 — `gh` CLI 를 쓰고 있다면 이게 가장 안전하다 (평문 저장 없이 keyring 에서 그때그때 읽음):**
+
+```powershell
+# Windows PowerShell — 현재 세션
+$env:GITHUB_TOKEN = gh auth token
+```
+```sh
+# POSIX — 현재 세션
+export GITHUB_TOKEN="$(gh auth token)"
+```
+
+`gh` 없이 PAT 을 직접 발급하려면 **classic 은 `repo` 스코프**, **fine-grained 는 대상 레포 Contents: Read** 권한이면 된다. 그 값을 위 변수에 넣는다.
+
+**영구 저장 (새 세션마다 자동):**
+
+```powershell
+# Windows — 사용자 환경변수(레지스트리). 새 세션부터 적용
+[Environment]::SetEnvironmentVariable('GITHUB_TOKEN', (gh auth token), 'User')
+# 또는 프로필($PROFILE)에 아래 한 줄 — 매 세션 keyring 에서 읽어와 평문 파일에 토큰이 안 남아 더 안전
+#   $env:GITHUB_TOKEN = gh auth token
+```
+```sh
+# POSIX — ~/.bashrc 또는 ~/.zshrc 에 추가
+export GITHUB_TOKEN="$(gh auth token)"
+```
+
+> ⚠️ 사용자 환경변수·셸 프로필에 PAT 문자열을 **직접** 박아두면 평문으로 저장된다. 가능하면 위처럼 `gh auth token` 으로 keyring 에서 읽어오는 방식을 권장한다. 아래 모든 명령은 `GITHUB_TOKEN` 이 설정돼 있다고 가정한다.
+
 ### 전역 가드/권한만 설치 (권장 시작점)
 
 어느 위치에서 실행해도 됩니다. `~/.claude`에만 설치됩니다.
 
 **macOS / Linux / Git Bash**
 ```sh
-curl -fsSL https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --hooks
+curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+  https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --hooks
 ```
 
 **Windows PowerShell**
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -Hooks
+$h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
+& ([scriptblock]::Create((irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -Hooks
 ```
 
 ### 먼저 미리보기 (아무것도 바꾸지 않음)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --dry-run
+curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+  https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --dry-run
 ```
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -DryRun
+$h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
+& ([scriptblock]::Create((irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -DryRun
 ```
 
 ### 전체 설치 (가드/권한 + 현재 폴더에 AGENTS.md)
@@ -44,11 +85,13 @@ curl -fsSL https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/insta
 
 ```sh
 cd my-project
-curl -fsSL https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh
+curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+  https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh
 ```
 ```powershell
 cd my-project
-irm https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1 | iex
+$h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
+irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1 | iex
 ```
 
 > 인자를 주지 않으면 **가드/권한 + AGENTS.md**가 모두 설치됩니다. PowerShell에서 `irm | iex`는 인자를 넘기기 어려우므로, 플래그가 필요할 땐 위의 `scriptblock` 형태를 쓰세요.
@@ -192,7 +235,12 @@ Invoke-Pester tests/Setup.Tests.ps1 -Output Detailed   # 셋업 스크립트 (Po
 그 외 모든 키는 그대로 보존되고, 변경 전 `.bak`을 남긴다. 원격에서 바로 실행하려면:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --uninstall
+curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+  https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --uninstall
+```
+```powershell
+$h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
+& ([scriptblock]::Create((irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -Uninstall
 ```
 
 수동으로 지우려면 `~/.claude/settings.json`의 `hooks.PreToolUse`에서 `danger_guard`/`secrets_guard` 항목과

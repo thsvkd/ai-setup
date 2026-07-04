@@ -14,6 +14,7 @@
 # 환경변수:
 #   CLAUDE_SETUP_REPO=owner/repo   대상 레포 (기본 thsvkd/claude-code-setup)
 #   CLAUDE_SETUP_REF=main          브랜치/태그 (기본 main; 배포 시 vX.Y.Z 태그 권장)
+#   GITHUB_TOKEN / GH_TOKEN        비공개(private) 레포 다운로드용 PAT (있으면 자동 사용)
 #
 # 이 스크립트는 전체 로직을 main() 안에 넣고 마지막 줄에서만 호출한다. curl 다운로드가
 # 중간에 끊겨도 셸은 "함수 정의"까지만 파싱하고 main 을 실행하지 않으므로, 잘린
@@ -61,12 +62,22 @@ main() {
 
     TARBALL="https://github.com/$REPO/archive/refs/heads/$REF.tar.gz"
     echo "⬇️  claude-code-setup 다운로드 중 ($REPO@$REF)..."
+    # 비공개 레포면 PAT 로 인증한다. github.com 아카이브 URL 은 Authorization 헤더를 받아준다.
+    TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
     # --proto '=https': HTTPS 만 허용(다운그레이드 차단), --tlsv1.2: TLS 1.2 이상,
     # -f: HTTP 오류 시 실패(에러 페이지를 tar 로 넘기지 않음).
     if need_cmd curl; then
-        curl --proto '=https' --tlsv1.2 -fsSL "$TARBALL" | tar -xz -C "$TMP"
+        if [ -n "$TOKEN" ]; then
+            curl --proto '=https' --tlsv1.2 -fsSL -H "Authorization: Bearer $TOKEN" "$TARBALL" | tar -xz -C "$TMP"
+        else
+            curl --proto '=https' --tlsv1.2 -fsSL "$TARBALL" | tar -xz -C "$TMP"
+        fi
     elif need_cmd wget; then
-        wget --https-only -qO- "$TARBALL" | tar -xz -C "$TMP"
+        if [ -n "$TOKEN" ]; then
+            wget --https-only -qO- --header "Authorization: Bearer $TOKEN" "$TARBALL" | tar -xz -C "$TMP"
+        else
+            wget --https-only -qO- "$TARBALL" | tar -xz -C "$TMP"
+        fi
     else
         echo "❌ curl 또는 wget 이 필요합니다." >&2
         exit 1
