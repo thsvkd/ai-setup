@@ -224,6 +224,45 @@ def test_install_writes_manifest_receipt(tmp_path):
     assert m["default_mode_changed"] is True
 
 
+# --- ask 규칙 병합 (스킬 게이팅) — allow/deny 와 동일한 union + 정밀 복원 ---
+
+def test_ask_merged_from_fragment(tmp_path):
+    # 조각(res/settings.json)의 ask 항목(스킬 게이팅)이 빈 settings 에 합쳐진다.
+    _, result = run_merge(tmp_path / "settings.json")
+    perms = result["permissions"]
+    assert "Skill(loop)" in perms.get("ask", [])   # 위험 스킬은 ask 로 게이팅
+    assert "Skill" in perms["allow"]               # 그 외 스킬은 전체 자동 허용
+    assert "Artifact" in perms["allow"]
+
+
+def test_ask_union_preserves_user_items(tmp_path):
+    target = tmp_path / "settings.json"
+    target.write_text(json.dumps({
+        "permissions": {"ask": ["Skill(my-own *)"]},
+    }), encoding="utf-8")
+    _, result = run_merge(target)
+    ask = result["permissions"]["ask"]
+    assert "Skill(my-own *)" in ask                # 사용자 항목 보존
+    assert "Skill(loop)" in ask                    # 우리 항목 추가
+
+
+def test_install_manifest_records_added_ask(tmp_path):
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    run_merge(target, manifest_path=manifest)
+    m = json.loads(manifest.read_text(encoding="utf-8"))
+    assert "Skill(loop)" in m["added_ask"]
+
+
+def test_uninstall_removes_only_added_ask(tmp_path):
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    target.write_text(json.dumps({
+        "permissions": {"ask": ["Skill(my-own *)"]},
+    }), encoding="utf-8")
+    run_merge(target, manifest_path=manifest)
+    _, result = run_uninstall(target, manifest)
+    assert result["permissions"].get("ask", []) == ["Skill(my-own *)"]  # 우리 것만 제거
+
+
 # --- 스칼라 최상위 설정(model/effortLevel/language) — '없을 때만 추가' ---
 
 def test_scalars_set_when_absent(tmp_path):

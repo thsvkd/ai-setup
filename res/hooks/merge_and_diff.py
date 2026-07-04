@@ -6,15 +6,15 @@ merge_and_diff.py — 실제 settings.json 조각을 기존 settings.json에 외
 입력 조각(res/settings.json)은 진짜 Claude Code settings.json 형식이며(SSoT), 훅 command에
 {{PY}} / {{HOOKS_DIR}} 자리표시자를 담는다. 이 스크립트가:
   1) 자리표시자를 치환하고 (Windows/POSIX 설치 스크립트 양쪽이 같은 이 로직을 씀),
-  2) permissions(allow/deny/defaultMode)와 hooks.* 만 기존 settings.json에 병합하며,
+  2) permissions(allow/deny/ask/defaultMode)와 hooks.* 만 기존 settings.json에 병합하며,
   3) 그 외 최상위 키(model, env, statusLine, 다른 훅 등)는 100% 그대로 보존한다.
 예상치 못하게 바뀐 최상위 키가 감지되면 비정상 종료(exit 1)한다.
 
-allow/deny 는 합집합(중복 없이 뒤에 추가), defaultMode 는 덮어쓰기, hooks.* 는
+allow/deny/ask 는 합집합(중복 없이 뒤에 추가), defaultMode 는 덮어쓰기, hooks.* 는
 (matcher, 훅 스크립트 파일명 집합) 시그니처로 중복 판정해 없는 것만 추가한다 → 재실행 멱등.
 
 병합 시 기존 settings.json 이 있고 변경이 있으면 <path>.bak.<timestamp> 로 백업한다.
-설치 시 manifest_path 를 주면 "우리가 실제로 추가한 allow/deny 항목 + 이전 defaultMode" 를
+설치 시 manifest_path 를 주면 "우리가 실제로 추가한 allow/deny/ask 항목 + 이전 defaultMode" 를
 설치 영수증(매니페스트)으로 기록한다. --uninstall 모드는 그 영수증을 읽어, 설치가 건드린
 부분만 정밀하게 되돌린다 (훅 등록 해제 + 우리가 추가한 권한 항목만 제거 + defaultMode 원복).
 
@@ -111,6 +111,7 @@ def merge(existing: dict, fragment: dict):
     receipt = {
         "added_allow": [],
         "added_deny": [],
+        "added_ask": [],
         "added_scalars": {},
         "default_mode_before": None,
         "default_mode_after": None,
@@ -124,6 +125,7 @@ def merge(existing: dict, fragment: dict):
         perms = existing.setdefault("permissions", {})
         receipt["added_allow"] = merge_list(perms, "allow", frag_perms.get("allow", []), changes)
         receipt["added_deny"] = merge_list(perms, "deny", frag_perms.get("deny", []), changes)
+        receipt["added_ask"] = merge_list(perms, "ask", frag_perms.get("ask", []), changes)
         if "defaultMode" in frag_perms:
             old_mode = perms.get("defaultMode")
             new_mode = frag_perms["defaultMode"]
@@ -162,7 +164,7 @@ def revert_permissions(existing: dict, receipt: dict) -> list:
     if not perms:
         return changes
 
-    for key in ("allow", "deny"):
+    for key in ("allow", "deny", "ask"):
         added = receipt.get("added_" + key) or []
         if not added or key not in perms:
             continue

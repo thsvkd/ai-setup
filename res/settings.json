@@ -19,13 +19,31 @@
       "WebSearch",
       "Monitor",
       "Workflow",
-      "mcp__plugin_oh-my-claudecode_t__*"
+      "Artifact",
+      "mcp__plugin_oh-my-claudecode_t__*",
+      "mcp__plugin_context7_context7__*",
+      "mcp__claude_ai_Context7__*",
+      "Skill"
     ],
     "deny": [
       "Bash(git push *)",
       "Bash(git reset --hard *)",
       "PowerShell(git push *)",
       "PowerShell(git reset --hard *)"
+    ],
+    "ask": [
+      "Skill(oh-my-claudecode:release)",
+      "Skill(oh-my-claudecode:release *)",
+      "Skill(to-issues)",
+      "Skill(to-issues *)",
+      "Skill(to-prd)",
+      "Skill(to-prd *)",
+      "Skill(triage)",
+      "Skill(triage *)",
+      "Skill(schedule)",
+      "Skill(schedule *)",
+      "Skill(loop)",
+      "Skill(loop *)"
     ]
   },
   "hooks": {
