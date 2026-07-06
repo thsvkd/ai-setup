@@ -144,16 +144,18 @@ def main() -> None:
 
             base = os.path.basename(cmd_parts[0])
             args = cmd_parts[1:]
+            lower_args = [a.lower() for a in args]
 
             # sudo 접두어는 벗겨서 실제 명령을 검사한다 (sudo rm -rf / 가 우회되지 않도록).
             if base == "sudo" and args and not args[0].startswith("-"):
                 base = os.path.basename(args[0])
                 args = args[1:]
+                lower_args = [a.lower() for a in args]
 
             # bash/sh -c "inner" 패턴: 내부 명령을 처리 큐에 추가해 동일 규칙으로 검사한다
             # (예: sudo bash -c "rm -rf /" 우회 차단).
-            if base in REMOTE_EXEC_TOKENS and "-c" in args:
-                c_idx = args.index("-c")
+            if base in REMOTE_EXEC_TOKENS and "-c" in lower_args:
+                c_idx = lower_args.index("-c")
                 if c_idx + 1 < len(args):
                     lines.append(args[c_idx + 1])
 
