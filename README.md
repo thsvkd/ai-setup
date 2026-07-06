@@ -15,46 +15,79 @@ Claude Code를 **더 안전하게** 쓰기 위한 사용자 레벨(user-level) �
 
 ## 빠른 시작
 
-### 🔐 비공개 레포 인증 (이 저장소는 private)
+> 이 저장소는 **비공개(private)** 이므로 GitHub 인증이 필요하다. 아래 순서대로 따라하면 된다.
 
-이 저장소는 **비공개(private)** 이므로 원격 설치 명령에는 GitHub 인증이 필요하다.
-인증 없이 실행하면 raw URL 과 아카이브 다운로드가 모두 **404 (Not Found)** 로 실패한다.
+### Step 1 — `gh` CLI 설치
 
-설치 스크립트는 환경변수 `GITHUB_TOKEN`(또는 `GH_TOKEN`)이 있으면 레포 아카이브를 자동으로
-인증해서 받는다. 부트스트랩 파일 자체(`install.ps1`/`install.sh`)를 받을 때만 아래처럼 헤더로
-토큰을 넘겨주면 된다.
+`gh` CLI가 있으면 토큰을 keyring에서 안전하게 읽어올 수 있다. 이미 설치돼 있으면 Step 2로 건너뛰자.
 
-**토큰 준비 — `gh` CLI 를 쓰고 있다면 이게 가장 안전하다 (평문 저장 없이 keyring 에서 그때그때 읽음):**
+**macOS**
+```sh
+brew install gh
+```
 
+**Linux (Debian/Ubuntu)**
+```sh
+sudo apt install gh
+# 또는 공식 패키지 저장소: https://github.com/cli/cli/blob/trunk/docs/install_linux.md
+```
+
+**Windows**
 ```powershell
-# Windows PowerShell — 현재 세션
+winget install --id GitHub.cli
+# 또는 Scoop: scoop install gh
+```
+
+설치 후 한 번만 로그인:
+```sh
+gh auth login
+```
+
+### Step 2 — 토큰을 환경변수로 설정
+
+**`gh` CLI 사용 (권장 — 평문 저장 없이 keyring 에서 읽음):**
+
+```sh
+# macOS / Linux / Git Bash
+export GITHUB_TOKEN="$(gh auth token)"
+```
+```powershell
+# Windows PowerShell
 $env:GITHUB_TOKEN = gh auth token
 ```
+
+**`gh` 없이 PAT 직접 사용:**
+
+GitHub → Settings → Developer settings → Personal access tokens에서 토큰 발급.
+- classic PAT: `repo` 스코프
+- fine-grained PAT: 대상 레포 Contents: Read 권한
+
 ```sh
-# POSIX — 현재 세션
-export GITHUB_TOKEN="$(gh auth token)"
+export GITHUB_TOKEN="ghp_xxxxxxxxxxxx"   # 발급한 PAT 값으로 교체
 ```
 
-`gh` 없이 PAT 을 직접 발급하려면 **classic 은 `repo` 스코프**, **fine-grained 는 대상 레포 Contents: Read** 권한이면 된다. 그 값을 위 변수에 넣는다.
+> ⚠️ PAT 문자열을 셸 프로필에 **직접** 박아두면 평문으로 저장된다. 가능하면 `gh auth token`으로 keyring에서 읽어오는 방식을 권장한다.
 
-**영구 저장 (새 세션마다 자동):**
+**영구 저장 (새 세션마다 자동으로 적용):**
 
+```sh
+# ~/.bashrc 또는 ~/.zshrc 에 추가
+export GITHUB_TOKEN="$(gh auth token)"
+```
 ```powershell
-# Windows — 사용자 환경변수(레지스트리). 새 세션부터 적용
+# PowerShell 프로필($PROFILE)에 추가
+$env:GITHUB_TOKEN = gh auth token
+# 또는 사용자 환경변수(레지스트리)에 등록 — 새 세션부터 적용
 [Environment]::SetEnvironmentVariable('GITHUB_TOKEN', (gh auth token), 'User')
-# 또는 프로필($PROFILE)에 아래 한 줄 — 매 세션 keyring 에서 읽어와 평문 파일에 토큰이 안 남아 더 안전
-#   $env:GITHUB_TOKEN = gh auth token
-```
-```sh
-# POSIX — ~/.bashrc 또는 ~/.zshrc 에 추가
-export GITHUB_TOKEN="$(gh auth token)"
 ```
 
-> ⚠️ 사용자 환경변수·셸 프로필에 PAT 문자열을 **직접** 박아두면 평문으로 저장된다. 가능하면 위처럼 `gh auth token` 으로 keyring 에서 읽어오는 방식을 권장한다. 아래 모든 명령은 `GITHUB_TOKEN` 이 설정돼 있다고 가정한다.
+### Step 3 — 설치
 
-### 전역 가드/권한만 설치 (권장 시작점)
+아래 모든 명령은 `GITHUB_TOKEN`이 설정돼 있다고 가정한다.
 
-어느 위치에서 실행해도 됩니다. `~/.claude`에만 설치됩니다.
+#### a) 전역 가드/권한만 설치 (권장 시작점)
+
+어느 위치에서 실행해도 된다. `~/.claude`에만 설치된다.
 
 **macOS / Linux / Git Bash**
 ```sh
@@ -68,33 +101,39 @@ $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
 & ([scriptblock]::Create((irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -Hooks
 ```
 
-### 먼저 미리보기 (아무것도 바꾸지 않음)
+#### b) 먼저 미리보기 (아무것도 바꾸지 않음)
 
+설치 전에 어떤 변경이 일어날지 확인하고 싶다면:
+
+**macOS / Linux / Git Bash**
 ```sh
 curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
   https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --dry-run
 ```
+**Windows PowerShell**
 ```powershell
 $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
 & ([scriptblock]::Create((irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -DryRun
 ```
 
-### 전체 설치 (가드/권한 + 현재 폴더에 AGENTS.md)
+#### c) 전체 설치 (가드/권한 + 현재 폴더에 AGENTS.md)
 
-`AGENTS.md`는 **현재 작업 디렉터리**에 설치되므로, 프로젝트 루트에서 실행하세요.
+`AGENTS.md`는 **현재 작업 디렉터리**에 설치되므로 프로젝트 루트에서 실행하자.
 
+**macOS / Linux / Git Bash**
 ```sh
 cd my-project
 curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
   https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh
 ```
+**Windows PowerShell**
 ```powershell
 cd my-project
 $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
 irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1 | iex
 ```
 
-> 인자를 주지 않으면 **가드/권한 + AGENTS.md**가 모두 설치됩니다. PowerShell에서 `irm | iex`는 인자를 넘기기 어려우므로, 플래그가 필요할 땐 위의 `scriptblock` 형태를 쓰세요.
+> 인자를 주지 않으면 **가드/권한 + AGENTS.md**가 모두 설치된다. PowerShell에서 `irm | iex`는 인자를 넘기기 어려우므로, 플래그가 필요할 땐 위의 `scriptblock` 형태를 쓰자.
 
 ---
 
