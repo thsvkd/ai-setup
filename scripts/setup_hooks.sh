@@ -89,9 +89,9 @@ if ! PY="$(resolve_python_command)"; then
 fi
 echo "  🐍 Python 실행 명령: $PY"
 
-PIP_FLAGS=""
+PIP_FLAGS=()
 if "$PY" -m pip install --help 2>/dev/null | grep -q "break-system-packages"; then
-    PIP_FLAGS="--break-system-packages"
+    PIP_FLAGS=(--break-system-packages)
 fi
 
 # --- 2. trash-cli 설치 확인 (POSIX 전용 의존성) ---
@@ -111,8 +111,8 @@ else
         brew install trash-cli 2>/dev/null
     fi
     if ! command -v trash-put &>/dev/null; then
-        "$PY" -m pip install $PIP_FLAGS --user trash-cli 2>/dev/null || \
-        "$PY" -m pip install $PIP_FLAGS trash-cli 2>/dev/null
+        "$PY" -m pip install "${PIP_FLAGS[@]}" --user trash-cli 2>/dev/null || \
+        "$PY" -m pip install "${PIP_FLAGS[@]}" trash-cli 2>/dev/null
     fi
     set -e
 

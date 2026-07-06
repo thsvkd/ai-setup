@@ -30,6 +30,11 @@ done
 
 echo "🔧 AGENTS.md 설치..."
 
+if [[ ! -f "$SOURCE" ]]; then
+    echo "❌ 소스 파일을 찾을 수 없습니다: $SOURCE" >&2
+    exit 1
+fi
+
 if [[ -f "$TARGET" ]]; then
     echo "  ℹ️ 이미 $TARGET 가 존재합니다 — 덮어쓰지 않고 건너뜁니다."
 elif [[ "$DRY_RUN" -eq 1 ]]; then

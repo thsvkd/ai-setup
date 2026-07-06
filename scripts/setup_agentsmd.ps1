@@ -27,6 +27,11 @@ $Target = Join-Path (Get-Location).Path "AGENTS.md"
 
 Write-Host "🔧 AGENTS.md 설치..." -ForegroundColor Cyan
 
+if (-not (Test-Path $Source)) {
+    Write-Error "❌ 소스 파일을 찾을 수 없습니다: $Source"
+    exit 1
+}
+
 if (Test-Path $Target) {
     Write-Host "  ℹ️ 이미 $Target 가 존재합니다 — 덮어쓰지 않고 건너뜁니다." -ForegroundColor DarkGray
 } elseif ($DryRun) {
