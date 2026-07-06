@@ -47,7 +47,9 @@ def backup_file(path):
 
 
 def write_json(path, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.write("\n")
@@ -256,7 +258,7 @@ def main_uninstall(argv) -> int:
             with open(manifest_path, "r", encoding="utf-8") as f:
                 receipt = json.load(f)
             if receipt.get("hook_files"):
-                hook_files = receipt["hook_files"]
+                hook_files = [f for f in receipt["hook_files"] if f and "/" not in f and "\\" not in f]
         except (OSError, ValueError):
             pass
 
@@ -358,7 +360,7 @@ def main() -> int:
                 "hooks_dir": hooks_dir,
                 "settings_path": settings_path,
                 "settings_existed_before": settings_existed,
-                "hook_files": [f for f in hook_files_csv.split(",") if f],
+                "hook_files": [f for f in hook_files_csv.split(",") if f and "/" not in f and "\\" not in f],
             }
             manifest.update(receipt)
             write_json(manifest_path, manifest)
