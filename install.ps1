@@ -67,7 +67,7 @@ claude-code-setup 원격 설치 부트스트랩 (Windows)
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
     try {
         $zip = Join-Path $tmp "repo.zip"
-        $url = "https://github.com/$repo/archive/refs/heads/$ref.zip"
+        $url = "https://github.com/$repo/archive/$ref.zip"
         Write-Host "⬇️  claude-code-setup 다운로드 중 ($repo@$ref)..." -ForegroundColor Cyan
         # 비공개 레포면 PAT 로 인증한다. github.com 아카이브 URL 은 Authorization 헤더를 받아준다.
         $token = if ($env:GITHUB_TOKEN) { $env:GITHUB_TOKEN } elseif ($env:GH_TOKEN) { $env:GH_TOKEN } else { $null }

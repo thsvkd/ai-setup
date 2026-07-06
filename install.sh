@@ -58,9 +58,11 @@ main() {
     fi
 
     TMP="$(mktemp -d)"
-    trap 'rm -rf "$TMP"' EXIT INT TERM
+    TOKEN_CONF=""
+    cleanup() { rm -rf "$TMP"; [ -n "$TOKEN_CONF" ] && rm -f "$TOKEN_CONF"; }
+    trap 'cleanup' EXIT INT TERM
 
-    TARBALL="https://github.com/$REPO/archive/refs/heads/$REF.tar.gz"
+    TARBALL="https://github.com/$REPO/archive/$REF.tar.gz"
     echo "⬇️  claude-code-setup 다운로드 중 ($REPO@$REF)..."
     # 비공개 레포면 PAT 로 인증한다. github.com 아카이브 URL 은 Authorization 헤더를 받아준다.
     TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
@@ -68,7 +70,10 @@ main() {
     # -f: HTTP 오류 시 실패(에러 페이지를 tar 로 넘기지 않음).
     if need_cmd curl; then
         if [ -n "$TOKEN" ]; then
-            curl --proto '=https' --tlsv1.2 -fsSL -H "Authorization: Bearer $TOKEN" "$TARBALL" | tar -xz -C "$TMP"
+            TOKEN_CONF="$(mktemp)"
+            printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" > "$TOKEN_CONF"
+            curl --proto '=https' --tlsv1.2 -fsSL -K "$TOKEN_CONF" "$TARBALL" | tar -xz -C "$TMP"
+            rm -f "$TOKEN_CONF"; TOKEN_CONF=""
         else
             curl --proto '=https' --tlsv1.2 -fsSL "$TARBALL" | tar -xz -C "$TMP"
         fi
