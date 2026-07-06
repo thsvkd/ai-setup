@@ -51,7 +51,20 @@ REMOTE_EXEC_TOKENS = {"bash", "sh", "zsh", "iex", "invoke-expression", "powershe
 def log(entry: dict) -> None:
     entry["ts"] = datetime.datetime.now().isoformat(timespec="seconds")
     try:
+        first_write = not os.path.exists(LOG_PATH)
         with open(LOG_PATH, "a", encoding="utf-8") as f:
+            if first_write:
+                try:
+                    os.chmod(LOG_PATH, 0o600)
+                    username = os.getenv("USERNAME") or os.getenv("USER", "")
+                    if username:
+                        import subprocess
+                        subprocess.run(
+                            ["icacls", LOG_PATH, "/inheritance:r", "/grant:r", f"{username}:F"],
+                            capture_output=True,
+                        )
+                except OSError:
+                    pass
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except OSError:
         pass
