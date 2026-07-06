@@ -60,7 +60,7 @@ main() {
     TMP="$(mktemp -d)"
     trap 'rm -rf "$TMP"' EXIT INT TERM
 
-    TARBALL="https://github.com/$REPO/archive/refs/heads/$REF.tar.gz"
+    TARBALL="https://github.com/$REPO/archive/$REF.tar.gz"
     echo "⬇️  claude-code-setup 다운로드 중 ($REPO@$REF)..."
     # 비공개 레포면 PAT 로 인증한다. github.com 아카이브 URL 은 Authorization 헤더를 받아준다.
     TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
