@@ -153,6 +153,10 @@ print_setup_report() {
     if [[ -n "$dependency_warning" ]]; then
         echo "  ⚠️ $dependency_warning"
     fi
+    echo "  🔁 중요: 방금 바뀐 권한/모드는 '새 Claude Code 세션'부터 적용됩니다. 실행 중인"
+    echo "     세션은 시작 시점의 권한 스냅샷을 그대로 쓰므로(실시간 재로드 안 함), 방금 allow"
+    echo "     목록에 넣은 Artifact 등이 이 세션에서는 계속 확인 프롬프트를 띄울 수 있습니다."
+    echo "     Claude Code 를 종료 후 다시 실행(새 세션)하면 프롬프트가 사라집니다."
     echo "  ⚠️ 범위 변경 안내: 이 훅과 defaultMode(auto)는 이제 이 사용자가 여는 모든"
     echo "     프로젝트에 적용됩니다 (특정 프로젝트 한정이 아님)."
     echo "  ℹ️ defaultMode를 'auto'로 설정했지만, 실제로 auto 모드가 켜지려면 계정이"
