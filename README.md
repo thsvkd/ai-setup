@@ -47,12 +47,13 @@ gh auth login
 
 **`gh` CLI 사용 (권장 — 평문 저장 없이 keyring 에서 읽음):**
 
+**macOS / Linux / Git Bash**
 ```sh
-# macOS / Linux / Git Bash
 export GITHUB_TOKEN="$(gh auth token)"
 ```
+
+**Windows PowerShell**
 ```powershell
-# Windows PowerShell
 $env:GITHUB_TOKEN = gh auth token
 ```
 
@@ -70,13 +71,26 @@ export GITHUB_TOKEN="ghp_xxxxxxxxxxxx"   # 발급한 PAT 값으로 교체
 
 **영구 저장 (새 세션마다 자동으로 적용):**
 
+아래 블록을 그대로 붙여넣으면 rc 파일(또는 PowerShell 프로필)에 export 라인이 **한 번만** 추가된다(이미 있으면 건너뜀).
+
+**macOS / Linux / Git Bash**
 ```sh
-# ~/.bashrc 또는 ~/.zshrc 에 추가
-export GITHUB_TOKEN="$(gh auth token)"
+# 로그인 셸에 맞는 rc 파일에 한 줄 추가 (이미 있으면 그대로 둠)
+LINE='export GITHUB_TOKEN="$(gh auth token)"'
+case "${SHELL##*/}" in zsh) RC="${ZDOTDIR:-$HOME}/.zshrc" ;; *) RC="$HOME/.bashrc" ;; esac
+grep -qxF "$LINE" "$RC" 2>/dev/null || printf '\n%s\n' "$LINE" >> "$RC"
+echo "✅ $RC 에 추가됨 — 새 셸부터 적용됩니다 (지금 세션에 즉시 반영: source \"$RC\")"
 ```
+
+**Windows PowerShell**
 ```powershell
-# PowerShell 프로필($PROFILE)에 추가
-$env:GITHUB_TOKEN = gh auth token
+# $PROFILE 에 한 줄 추가 (이미 있으면 그대로 둠)
+$line = '$env:GITHUB_TOKEN = gh auth token'
+if (-not (Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
+if (-not (Select-String -Path $PROFILE -SimpleMatch -Pattern $line -Quiet)) {
+    Add-Content -Path $PROFILE -Value $line
+    Write-Host "✅ $PROFILE 에 추가됨 — 새 세션부터 적용됩니다 (지금 세션에 즉시 반영: . `$PROFILE)"
+}
 # 또는 사용자 환경변수(레지스트리)에 등록 — 새 세션부터 적용
 [Environment]::SetEnvironmentVariable('GITHUB_TOKEN', (gh auth token), 'User')
 ```
