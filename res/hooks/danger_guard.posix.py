@@ -4,18 +4,27 @@
 danger_guard.py — PreToolUse hook (Claude Code, Bash 툴 대상, 유저 레벨, macOS/Linux)
 
 정책:
-  1) rm → trash-put 치환 (allow + updatedInput)
+  1) rm → 휴지통 이동으로 치환 (allow + updatedInput)
+     치환에 쓸 도구는 trash-put (trash-cli) → trash (macOS 14.4+ 기본 내장) 순으로 찾는다.
      단, 루트 경로(/, ~, $HOME, 와일드카드 포함) 삭제 시도는 즉시 deny.
-     trash-put 이 없으면 치환할 수 없으므로 fail-closed 로 deny.
+     휴지통 도구가 하나도 없으면 치환할 수 없으므로 fail-closed 로 deny.
      멀티라인 또는 체이닝(&&/;) 스크립트 안에 섞여 있으면 자동 치환 대신 deny.
   2) git push / git push --force / git reset --hard / git clean -f* / git stash drop|clear → deny
      git branch -D / git checkout -- <path> / git restore → ask (되돌릴 수 없는 변경 손실 가능성)
-  3) dd of=... / mkfs* / wipefs / diskutil eraseDisk|eraseVolume / fdisk / parted → deny
-     /dev/sd* 등 블록 디바이스로의 리다이렉트, 포크밤 패턴 → deny
+  3) dd of=... / mkfs* / newfs_* / wipefs / fdisk / parted → deny
+     diskutil 의 파괴적 서브커맨드(eraseDisk, eraseVolume, secureErase, partitionDisk,
+     apfs deleteContainer 등) → deny
+     /dev/sd*, /dev/disk* 등 블록 디바이스로의 리다이렉트, 포크밤 패턴 → deny
   4) curl|bash, wget -O- | sh 같은 "원격 스크립트를 바로 셸로 파이프 실행" 패턴 → deny
+     (`curl url|bash` 처럼 파이프 앞뒤에 공백이 없어도 잡는다)
   5) shutdown / reboot / halt / poweroff → ask ; chmod 777 / shred → ask
   6) sudo 접두어는 벗겨서 실제 명령을 위 규칙으로 검사한다.
   7) bash/sh -c "inner" 패턴: 내부 명령을 추출해 동일 규칙으로 추가 검사한다.
+
+이 훅은 macOS 기본 인터프리터(/usr/bin/python3, 3.9.x)에서도 반드시 실행되어야 한다.
+훅이 예외로 죽으면 Claude Code 는 가드 없이 명령을 실행하므로, 3.10+ 전용 문법(PEP 604
+`X | None` 애노테이션 등)을 쓰지 않는다. 애노테이션은 `from __future__ import annotations`
+로 지연 평가시킨다.
 
 Bash 툴은 여러 줄짜리 스크립트를 통째로 하나의 command 문자열로 보낸다. shlex.split을
 전체 문자열에 한 번만 적용하면 (a) 파이프 뒤 검사가 전혀 무관한 다음 줄까지 새어 들어가
@@ -27,6 +36,8 @@ command를 줄 단위로 나눠 각 줄을 독립적으로 검사한다. 또한 
 ~/.claude/hooks/guard.log 에 감사 로그를 남긴다. 이 훅은 유저 레벨에 설치되므로
 이 사용자가 여는 모든 프로젝트에 적용된다.
 """
+from __future__ import annotations
+
 import sys
 import json
 import shutil
@@ -41,11 +52,40 @@ LOG_PATH = os.path.join(HOOKS_DIR, "guard.log")
 ROOT_RE = re.compile(r'^(/(\*)?|~(/\*?)?|\$HOME(/\*?)?)$')
 
 REMOTE_EXEC_TOKENS = {"bash", "sh", "zsh", "dash"}
-DISK_COMMANDS = {"mkfs", "mkfs.ext4", "mkfs.xfs", "mkfs.vfat", "fdisk", "parted", "wipefs"}
+DISK_COMMANDS = {"fdisk", "parted", "wipefs", "gdisk", "sgdisk", "mke2fs"}
+# 접두어로 판정하는 파일시스템 생성 도구: Linux 의 mkfs.* 와 macOS 의 newfs_* 계열.
+DISK_COMMAND_PREFIXES = ("mkfs", "newfs_")
+# diskutil 의 파괴적 서브커맨드. `diskutil apfs deleteContainer` 처럼 두 번째 인자에
+# 오는 형태가 있어 앞의 두 인자를 모두 살펴본다.
+DISKUTIL_DESTRUCTIVE = {
+    "erasedisk", "erasevolume", "eraseoptical", "reformat", "secureerase",
+    "zerodisk", "randomdisk", "partitiondisk", "splitpartition",
+    "deletecontainer", "deletevolume",
+}
+
+# 휴지통 이동 도구 우선순위. macOS 14.4+ 는 /usr/bin/trash 를 기본 제공하므로 별도 설치가
+# 필요 없다 (Homebrew 의 trash-cli 는 keg-only 라 trash-put 이 PATH 에 잡히지 않는다).
+TRASH_COMMANDS = ("trash-put", "trash") if sys.platform == "darwin" else ("trash-put",)
 
 # shlex 로 파싱되지 않는(또는 파싱 전에 잡아야 하는) 원시 문자열 패턴.
 FORK_BOMB_RE = re.compile(r'\(\s*\)\s*\{[^}]*\|[^}]*&')  # :(){ :|:& };:
 DEVICE_REDIRECT_RE = re.compile(r'>\s*/dev/(sd|nvme|hd|disk|mmcblk|vd)[a-z0-9]*', re.IGNORECASE)
+# `curl url|bash` 처럼 파이프 앞뒤에 공백이 없으면 shlex 가 `url|bash` 를 한 토큰으로 묶어
+# 토큰 기반 검사를 그대로 빠져나간다. 원시 문자열에서 한 번 더 잡는다. (?<!\|)\|(?!\|) 는
+# OR 연산자 `||` 를 제외하기 위한 것.
+PIPE_TO_SHELL_RE = re.compile(
+    r'(?<!\|)\|(?!\|)\s*(?:sudo\s+)?(?:\S*/)?(?:' + "|".join(REMOTE_EXEC_TOKENS) + r')\b'
+)
+# 따옴표 안의 문자열은 실행되는 명령이 아니므로 위 파이프 검사에서 제외한다
+# (예: grep "x|bash" file 이 오탐으로 차단되지 않도록).
+QUOTED_RE = re.compile(r'"[^"]*"|\'[^\']*\'')
+
+
+def resolve_trash_command() -> str | None:
+    for candidate in TRASH_COMMANDS:
+        if shutil.which(candidate):
+            return candidate
+    return None
 
 
 def log(entry: dict) -> None:
@@ -125,6 +165,9 @@ def main() -> None:
         if DEVICE_REDIRECT_RE.search(stripped):
             log({"command": command, "decision": "deny-device-redirect"})
             emit("deny", "블록 디바이스(/dev/sd* 등)로의 출력 리다이렉트는 디스크를 파괴할 수 있어 차단합니다.")
+        if PIPE_TO_SHELL_RE.search(QUOTED_RE.sub(" ", stripped)):
+            log({"command": command, "decision": "deny-pipe-to-shell"})
+            emit("deny", "원격/외부 출력을 바로 셸에 파이프 실행하는 패턴입니다. 스크립트를 먼저 저장해 검토한 뒤 실행하세요.")
 
         try:
             parts = shlex.split(line)
@@ -173,12 +216,13 @@ def main() -> None:
                 if is_multiline or is_chained:
                     emit("deny", "여러 줄 또는 체이닝된 명령 안에 삭제 명령이 섞여 있어 안전하게 자동 치환할 수 없습니다. 삭제 명령은 단독으로 실행하세요.")
 
-                if not shutil.which("trash-put"):
-                    emit("deny", "trash-put 이 설치되어 있지 않아 삭제를 차단합니다. (pip install trash-cli)")
+                trash_cmd = resolve_trash_command()
+                if not trash_cmd:
+                    emit("deny", "휴지통 이동 도구(trash-put / macOS trash)가 없어 삭제를 차단합니다. (pip install trash-cli)")
 
-                new_command = "trash-put " + " ".join(shlex.quote(a) for a in clean_args)
+                new_command = trash_cmd + " " + " ".join(shlex.quote(a) for a in clean_args)
                 log({"command": command, "decision": "redirect-to-trash", "new_command": new_command})
-                emit("allow", "rm → trash-put 치환 (휴지통으로 안전하게 이동)",
+                emit("allow", f"rm → {trash_cmd} 치환 (휴지통으로 안전하게 이동)",
                      updated_input={"command": new_command})
 
             if base == "git":
@@ -197,12 +241,14 @@ def main() -> None:
                 if ("checkout" in args and "--" in args) or "restore" in args:
                     emit("ask", "커밋되지 않은 로컬 변경사항을 버릴 수 있는 명령입니다. 계속할까요?")
 
-            if base in DISK_COMMANDS:
+            if base in DISK_COMMANDS or base.startswith(DISK_COMMAND_PREFIXES):
                 emit("deny", f"디스크 레벨 명령({base})은 되돌릴 수 없어 자동 실행을 차단합니다.")
             if base == "dd" and any(a.startswith("of=") for a in args):
                 emit("deny", "dd of=... 는 대상 장치/파일을 덮어쓸 수 있어 차단합니다.")
-            if base == "diskutil" and args and args[0] in ("eraseDisk", "eraseVolume", "reformat"):
-                emit("deny", f"diskutil {args[0]} 은 되돌릴 수 없어 자동 실행을 차단합니다.")
+            if base == "diskutil":
+                hit = next((a for a in lower_args[:2] if a in DISKUTIL_DESTRUCTIVE), None)
+                if hit:
+                    emit("deny", f"diskutil {hit} 은 되돌릴 수 없어 자동 실행을 차단합니다.")
             if base == "chmod" and any(a in ("777", "0777", "a+rwx", "a=rwx") for a in args):
                 emit("ask", "chmod 777 류는 모든 사용자에게 전체 권한을 부여합니다 (보안 위험). 계속할까요?")
             if base == "shred":
