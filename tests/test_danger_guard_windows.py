@@ -1,6 +1,11 @@
 """danger_guard.windows.py 정책 테스트 (Bash + PowerShell 툴).
 
-이 훅은 Windows 에 설치되지만 순수 파이썬이라 어느 OS 에서도 정책을 검증할 수 있다.
+이 훅은 Windows 에 설치되지만 순수 파이썬이라 어느 OS 에서도 정책을 검증할 수 있다 —
+단 하나의 예외가 `import send2trash` 다. 그 임포트 성패에 따라 삭제 명령이 치환(allow)되거나
+차단(deny)되므로, 호스트에 패키지가 깔려 있는지에 테스트 결과가 좌우된다. 아래
+_run_with_send2trash 가 있음/없음 양쪽을 sys.modules 로 주입해 그 의존성을 제거한다.
+플랫폼으로 테스트를 스킵하면(pytest mark) 개발 머신이 macOS 인 한 이 훅은 영영 검증되지
+않으므로, 스킵이 아니라 주입으로 푼다.
 """
 import json
 import subprocess
@@ -102,24 +107,28 @@ def test_safe_get_childitem_passes(run_hook):
     assert d is None
 
 
-def test_rm_temp_substitutes_or_denies(run_hook):
-    d, *_ = run_hook(HOOK, bash("rm -rf temp/"))
-    assert d in ("allow", "deny")
-
-
 def test_unknown_tool_ignored(run_hook):
     d, *_ = run_hook(HOOK, {"tool_name": "Read", "tool_input": {"file_path": "x"}})
     assert d is None
 
 
-# --- S4: send2trash 모듈이 없으면 fail-closed 로 deny (POSIX 쪽과 정책 통일) ---
+# --- S4: send2trash 유무에 따른 치환/차단 (POSIX 쪽과 정책 통일) ---
 
-def _run_without_send2trash(event):
-    """실제 send2trash 패키지를 지우지 않고, sys.modules 트릭으로 import 실패만 시뮬레이션한다
-    (공유 테스트 환경의 실제 설치 상태를 건드리면 병렬 테스트/다른 테스트에 영향을 준다)."""
+def _run_with_send2trash(event, *, present):
+    """send2trash 의 설치 여부를 sys.modules 로 주입해 호스트 환경과 무관하게 고정한다.
+
+    실제 패키지를 설치/제거하면 공유 테스트 환경과 병렬 테스트에 영향을 주므로 임포트만 가로챈다.
+    없음(None)뿐 아니라 있음(빈 모듈)까지 주입하는 게 핵심이다 — 없음만 시뮬레이션하고 있음을
+    호스트에 맡기면, send2trash 가 없는 macOS/Linux 에서 치환 경로(allow)가 deny 로 뒤집혀
+    '휴지통 치환' 정책이 통째로 검증되지 않는다.
+    """
+    inject = (
+        "sys.modules['send2trash'] = types.ModuleType('send2trash')" if present
+        else "sys.modules['send2trash'] = None"
+    )
     code = (
-        "import sys, runpy; "
-        "sys.modules['send2trash'] = None; "
+        "import sys, types, runpy; "
+        f"{inject}; "
         f"runpy.run_path(r'{HOOK_PATH}', run_name='__main__')"
     )
     proc = subprocess.run(
@@ -133,15 +142,22 @@ def _run_without_send2trash(event):
 
 
 def test_rm_denied_when_send2trash_module_missing():
-    d, payload = _run_without_send2trash(bash("rm -rf temp/"))
+    d, payload = _run_with_send2trash(bash("rm -rf temp/"), present=False)
     assert d == "deny"
     assert "send2trash" in payload["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_rm_root_still_denied_when_send2trash_module_missing():
     # 루트 삭제는 send2trash 유무와 무관하게 항상 즉시 deny 여야 한다 (순서 회귀 방지).
-    d, _ = _run_without_send2trash(ps("Remove-Item -Recurse -Force C:\\"))
+    d, _ = _run_with_send2trash(ps("Remove-Item -Recurse -Force C:\\"), present=False)
     assert d == "deny"
+
+
+def test_rm_substituted_when_send2trash_present():
+    # send2trash 가 있으면 삭제는 send_to_trash.py 호출로 치환된다 (차단이 아니라 안전한 우회).
+    d, payload = _run_with_send2trash(bash("rm -rf temp/"), present=True)
+    assert d == "allow"
+    assert "send_to_trash.py" in payload["hookSpecificOutput"]["updatedInput"]["command"]
 
 
 # --- 루트 삭제: 와일드카드/환경변수 변형 ---
@@ -180,9 +196,9 @@ def test_bash_root_delete_variants_denied(run_hook, cmd):
     r"Remove-Item -Recurse C:\Users\me\tmp",
     r"del /q C:\Users\me\a.txt",
 ])
-def test_non_root_delete_still_substituted(run_hook, cmd):
+def test_non_root_delete_still_substituted(cmd):
     # 루트가 아닌 경로는 계속 휴지통 이동으로 치환되어야 한다 (과잉 차단 방지).
-    d, *_ = run_hook(HOOK, ps(cmd))
+    d, _ = _run_with_send2trash(ps(cmd), present=True)
     assert d == "allow"
 
 

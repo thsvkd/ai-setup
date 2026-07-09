@@ -142,10 +142,9 @@ def test_multiline_rm_denied(run_hook):
     assert d == "deny"
 
 
-def test_rm_temp_substitutes_or_denies(run_hook):
-    # trash-put 설치 여부에 따라 allow(치환) 또는 deny(fail-closed).
-    d, *_ = run_hook(HOOK, bash("rm -rf temp/"))
-    assert d in ("allow", "deny")
+# `rm -rf temp/` 의 치환/차단은 호스트의 trash-put 설치 여부에 좌우되므로 여기서 검사하지
+# 않는다. PATH 를 통제해 양쪽 분기를 결정론적으로 확인하는 test_rm_denied_when_no_trash_tool /
+# test_rm_substituted_with_trash_put 이 아래에 따로 있다.
 
 
 def test_non_bash_tool_ignored(run_hook):
