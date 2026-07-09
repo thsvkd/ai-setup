@@ -142,13 +142,19 @@ def test_uninstall_after_rerun_restores_prior_state(sandbox_home, stub_bin):
 
 @pytest.fixture
 def curl_stub(tmp_path, stub_bin):
-    """레포를 tarball 로 말아, curl 스텁이 그것을 stdout 으로 뱉게 한다."""
+    """레포를 tarball 로 말아, curl 스텁이 그것을 내려받은 척한다 (`-o` 를 존중)."""
     tarball = tmp_path / "repo.tar.gz"
     with tarfile.open(tarball, "w:gz") as tar:
         for item in ("install.sh", "scripts", "res"):
             tar.add(ROOT / item, arcname=f"claude-code-setup-main/{item}")
     curl = stub_bin / "curl"
-    curl.write_text(f'#!/bin/sh\ncat "{tarball}"\n', encoding="utf-8")
+    curl.write_text(
+        "#!/bin/sh\n"
+        "out=''; prev=''\n"
+        'for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done\n'
+        f'if [ -n "$out" ]; then cp "{tarball}" "$out"; else cat "{tarball}"; fi\n',
+        encoding="utf-8",
+    )
     curl.chmod(0o755)
     return stub_bin
 
@@ -176,3 +182,106 @@ def test_install_sh_hooks_installs_end_to_end(sandbox_home, curl_stub):
 def test_install_sh_propagates_failure(sandbox_home, curl_stub):
     proc = run_script(["sh", str(ROOT / "install.sh"), "--bogus"], sandbox_home, curl_stub)
     assert proc.returncode != 0
+
+
+# --- 다운로드 실패 진단 ---
+#
+# 비공개 레포는 인증 실패를 401 이 아니라 404 로 위장한다. 그래서 만료된 토큰으로 설치하면
+# "install.sh 가 없다"처럼 보이는 404 가 나고, 진짜 원인(재로그인 필요)을 알 수 없다.
+# install.sh 는 실패 시 GitHub API 를 한 번 찔러 원인을 특정해야 한다.
+
+
+def failing_curl(bin_dir, api_status):
+    """아카이브 다운로드는 실패하고, API 프로브는 지정한 상태코드를 돌려주는 curl 스텁."""
+    curl = bin_dir / "curl"
+    curl.write_text(
+        "#!/bin/sh\n"
+        "for a in \"$@\"; do\n"
+        "  case \"$a\" in\n"
+        f"    *api.github.com*) printf '%s' '{api_status}'; exit 0 ;;\n"
+        "  esac\n"
+        "done\n"
+        "echo 'curl: (22) The requested URL returned error: 404' >&2\n"
+        "exit 22\n",
+        encoding="utf-8",
+    )
+    curl.chmod(0o755)
+    # gh 폴백이 실환경 토큰을 집어오지 않도록 PATH 에서 가린다.
+    gh = bin_dir / "gh"
+    gh.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    gh.chmod(0o755)
+    return bin_dir
+
+
+def install_with(sandbox_home, bin_dir, token=None):
+    env = dict(os.environ)
+    env["HOME"] = str(sandbox_home)
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    env.pop("GITHUB_TOKEN", None)
+    env.pop("GH_TOKEN", None)
+    if token:
+        env["GITHUB_TOKEN"] = token
+    return subprocess.run(
+        ["sh", str(ROOT / "install.sh"), "--dry-run"],
+        cwd=str(ROOT), env=env, capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+
+
+def test_install_sh_diagnoses_expired_token(sandbox_home, stub_bin):
+    proc = install_with(sandbox_home, failing_curl(stub_bin, 401), token="ghp_dead")
+    assert proc.returncode != 0
+    assert "만료" in proc.stderr
+    assert "unset GITHUB_TOKEN" in proc.stderr      # gh auth login 이 거부되는 함정까지 안내
+
+
+def test_install_sh_diagnoses_missing_token(sandbox_home, stub_bin):
+    proc = install_with(sandbox_home, failing_curl(stub_bin, 401), token=None)
+    assert proc.returncode != 0
+    assert "토큰을 찾지 못했습니다" in proc.stderr
+    assert "gh auth login" in proc.stderr
+
+
+def test_install_sh_diagnoses_insufficient_scope(sandbox_home, stub_bin):
+    proc = install_with(sandbox_home, failing_curl(stub_bin, 403), token="ghp_weak")
+    assert proc.returncode != 0
+    assert "권한이 없습니다" in proc.stderr
+    assert "Contents:Read" in proc.stderr
+
+
+def test_install_sh_diagnoses_bad_ref(sandbox_home, stub_bin):
+    # API 는 200 (레포 접근 OK) 인데 아카이브만 실패 → ref 가 잘못된 것이다.
+    proc = install_with(sandbox_home, failing_curl(stub_bin, 200), token="ghp_ok")
+    assert proc.returncode != 0
+    assert "ref" in proc.stderr
+    assert "refs/heads/" in proc.stderr             # 슬래시 브랜치명 해법 안내
+
+
+def test_install_sh_falls_back_to_gh_auth_token(sandbox_home, stub_bin):
+    """GITHUB_TOKEN 을 export 하지 않아도 gh 에서 토큰을 읽어와야 한다.
+
+    GITHUB_TOKEN 을 셸에 영구 export 하면 gh 가 `gh auth login` 을 거부하게 되므로,
+    스크립트가 알아서 gh 를 읽는 편이 안전하다.
+    """
+    curl = stub_bin / "curl"
+    # 토큰이 실제로 전달됐는지 -K 설정 파일 내용으로 확인한 뒤 실패시킨다.
+    curl.write_text(
+        "#!/bin/sh\n"
+        "for a in \"$@\"; do\n"
+        "  case \"$a\" in\n"
+        "    *api.github.com*) printf '%s' 401; exit 0 ;;\n"
+        "  esac\n"
+        "done\n"
+        "while [ $# -gt 0 ]; do\n"
+        "  if [ \"$1\" = '-K' ]; then grep -q 'gh_token_from_cli' \"$2\" && echo 'TOKEN_FORWARDED' >&2; fi\n"
+        "  shift\n"
+        "done\n"
+        "exit 22\n",
+        encoding="utf-8",
+    )
+    curl.chmod(0o755)
+    gh = stub_bin / "gh"
+    gh.write_text("#!/bin/sh\n[ \"$1\" = auth ] && [ \"$2\" = token ] && echo gh_token_from_cli\n", encoding="utf-8")
+    gh.chmod(0o755)
+
+    proc = install_with(sandbox_home, stub_bin, token=None)
+    assert "TOKEN_FORWARDED" in proc.stderr, proc.stderr
