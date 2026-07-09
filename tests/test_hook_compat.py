@@ -1,0 +1,107 @@
+"""훅이 '설치 대상 머신에 실제로 있는 python3' 에서 실행되는지 검증한다.
+
+설치 스크립트는 훅 command 에 절대 경로가 아니라 `python3` 를 그대로 박는다. 그래서 훅은
+Claude Code 가 PATH 에서 찾아내는 아무 python3 에서나 돌아야 한다. macOS 는 여전히
+/usr/bin/python3 = 3.9.x 를 기본으로 제공한다.
+
+훅이 예외로 죽으면 Claude Code 는 가드 없이 명령을 실행한다(fail-open). 즉 3.10 전용 문법을
+하나만 써도 가드 전체가 조용히 무력화된다 — 테스트가 최신 인터프리터로만 돌면 절대 안 잡힌다.
+"""
+import ast
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+HOOKS_DIR = Path(__file__).resolve().parent.parent / "res" / "hooks"
+HOOKS = sorted(HOOKS_DIR.glob("*.py"))
+
+# 훅이 지원해야 하는 최저 인터프리터. macOS Sonoma~Sequoia 의 /usr/bin/python3 가 3.9.x 다.
+MIN_SUPPORTED = (3, 9)
+
+
+def _has_future_annotations(tree: ast.Module) -> bool:
+    return any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "__future__"
+        and any(alias.name == "annotations" for alias in node.names)
+        for node in tree.body
+    )
+
+
+def _pep604_annotations(tree: ast.Module) -> list:
+    """`X | None` 처럼 3.10+ 에서만 런타임 평가되는 애노테이션을 모은다."""
+    found = []
+    for node in ast.walk(tree):
+        annotations = []
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            annotations = [a.annotation for a in node.args.args if a.annotation]
+            annotations += [a.annotation for a in node.args.kwonlyargs if a.annotation]
+            if node.returns:
+                annotations.append(node.returns)
+        elif isinstance(node, ast.AnnAssign) and node.annotation:
+            annotations = [node.annotation]
+        for annotation in annotations:
+            for sub in ast.walk(annotation):
+                if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.BitOr):
+                    found.append(ast.dump(annotation))
+    return found
+
+
+@pytest.mark.parametrize("hook", HOOKS, ids=lambda p: p.name)
+def test_pep604_annotations_are_deferred(hook):
+    """PEP 604 (`X | None`) 를 쓰려면 `from __future__ import annotations` 가 있어야 한다.
+
+    없으면 애노테이션이 정의 시점에 평가되어 Python 3.9 에서 TypeError 로 죽는다.
+    """
+    tree = ast.parse(hook.read_text(encoding="utf-8"))
+    offenders = _pep604_annotations(tree)
+    if offenders:
+        assert _has_future_annotations(tree), (
+            f"{hook.name} 이 PEP 604 애노테이션을 쓰면서 "
+            f"`from __future__ import annotations` 가 없습니다 → Python 3.9 에서 죽습니다: {offenders[0]}"
+        )
+
+
+def _legacy_interpreter():
+    """3.10 미만의 python3 를 찾는다 (없으면 None)."""
+    for candidate in ("/usr/bin/python3", "python3.9", "python3.8"):
+        try:
+            out = subprocess.run(
+                [candidate, "-c", "import sys; print('%d %d' % sys.version_info[:2])"],
+                capture_output=True, text=True, timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if out.returncode != 0:
+            continue
+        major, minor = (int(x) for x in out.stdout.split())
+        if (major, minor) >= MIN_SUPPORTED and (major, minor) < (3, 10):
+            return candidate
+    return None
+
+
+@pytest.mark.parametrize("hook", HOOKS, ids=lambda p: p.name)
+def test_hook_runs_on_legacy_interpreter(hook):
+    """실제 구버전 인터프리터가 있으면 그것으로 훅을 돌려본다 (macOS 의 /usr/bin/python3)."""
+    interpreter = _legacy_interpreter()
+    if interpreter is None:
+        pytest.skip(f"3.9.x python3 를 찾지 못함 (>= {MIN_SUPPORTED} 이고 < 3.10 인 것)")
+
+    if hook.name in ("merge_and_diff.py", "send_to_trash.py"):
+        pytest.skip(f"{hook.name} 은 stdin 훅 프로토콜을 쓰지 않는다 (인자 기반)")
+
+    event = {"tool_name": "Bash", "tool_input": {"command": "git push origin main"}}
+    proc = subprocess.run(
+        [interpreter, "-X", "utf8", str(hook)],
+        input=json.dumps(event), capture_output=True, text=True, encoding="utf-8",
+    )
+    assert proc.returncode == 0, f"{hook.name} 이 {interpreter} 에서 죽었습니다:\n{proc.stderr}"
+    assert "Traceback" not in proc.stderr, f"{hook.name} 이 {interpreter} 에서 예외:\n{proc.stderr}"
+
+
+@pytest.mark.parametrize("hook", HOOKS, ids=lambda p: p.name)
+def test_hook_compiles_under_current_interpreter(hook):
+    subprocess.run([sys.executable, "-m", "py_compile", str(hook)], check=True, capture_output=True)
