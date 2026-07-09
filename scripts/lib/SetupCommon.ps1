@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     scripts/setup_hooks.ps1, scripts/setup_agentsmd.ps1 이 dot-source 하는 공용 오케스트레이션 함수 모음.
 .DESCRIPTION
@@ -11,6 +11,10 @@
 $MANIFEST_NAME = ".claude-code-setup.json"
 
 function Resolve-PythonCommand {
+    # 호출부가 이미 설정했더라도, 이 함수가 단독으로(dot-source 후 직접) 쓰이는 경우까지 방어한다
+    # (S1: PS 7.4+ 에서 네이티브 명령의 0이 아닌 종료 코드가 종료 오류로 승격되는 것을 방지 —
+    # 아래 프로브는 $LASTEXITCODE 로 성패를 판정하도록 설계돼 있다).
+    $PSNativeCommandUseErrorActionPreference = $false
     $candidates = @(
         @{ Exe = "python";  Args = @() },
         @{ Exe = "python3"; Args = @() },
@@ -84,6 +88,7 @@ function Invoke-SettingsMerge {
         [string]$ManifestPath = "",     # 주면 (비 dry-run) merge 가 설치 영수증을 기록
         [string]$HookFilesCsv = ""
     )
+    $PSNativeCommandUseErrorActionPreference = $false   # S1 방어 — 아래 exit code 는 $LASTEXITCODE 로 판정
     $dry = if ($DryRun) { "1" } else { "0" }
     # 출력을 변수로 캡처해서 다시 Write-Host 로 찍는다 — 그냥 & 로 호출하면 stdout 줄들이
     # 이 함수의 파이프라인 출력에 섞여 들어가서 호출부가 $exitCode 로 받는 값이 오염된다.
