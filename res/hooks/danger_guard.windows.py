@@ -45,9 +45,36 @@ SEND_TO_TRASH = os.path.join(HOOKS_DIR, "send_to_trash.py")
 DELETE_COMMANDS = {"rm", "del", "erase", "remove-item", "ri", "rd", "rmdir"}
 WINDOWS_FLAG_STYLE = {"del", "erase", "rd", "rmdir"}  # 이 명령들은 /flag 사용 (rm/Remove-Item 은 -flag)
 
-ROOT_RE = re.compile(r'^([a-zA-Z]:[\\/]*|[\\/]+|~[\\/]*)$')
+# 드라이브/홈 루트 삭제. 와일드카드 변형과 홈을 가리키는 환경변수 표기까지 포함해야 한다 —
+# `C:\` 를 막으면서 `C:\*` 를 흘려보내면 막은 의미가 없다. Bash 툴(Git Bash)도 이 훅을 쓰므로
+# POSIX 표기(`/`, `/*`, `~/*`, `$HOME`)도 함께 본다.
+ROOT_RE = re.compile(
+    r'^('
+    r'[a-zA-Z]:[\\/]*(\*(\.\*)?)?'          # C:   C:\   C:/   C:\*   C:\*.*
+    r'|[\\/]+\*?'                            # /    \     /*    \*
+    r'|~[\\/]*\*?'                           # ~    ~\    ~/    ~\*   ~/*
+    r'|\$HOME([\\/]\*?)?'                    # $HOME  $HOME/  $HOME/*
+    r'|\$env:USERPROFILE([\\/]\*?)?'
+    r'|\$env:HOMEPATH([\\/]\*?)?'
+    r'|%USERPROFILE%([\\/]\*?)?'
+    r'|%HOMEPATH%([\\/]\*?)?'
+    r')$',
+    re.IGNORECASE,
+)
 
 REMOTE_EXEC_TOKENS = {"bash", "sh", "zsh", "iex", "invoke-expression", "powershell", "pwsh"}
+
+# `irm http://x|iex` 처럼 파이프 앞뒤에 공백이 없으면 shlex 가 `http://x|iex` 를 한 토큰으로
+# 묶어 토큰 기반 검사를 그대로 빠져나간다. 원시 문자열에서 한 번 더 잡는다.
+# (?<!\|)\|(?!\|) 는 PowerShell/셸의 OR 연산자 `||` 를 제외하기 위한 것.
+PIPE_TO_SHELL_RE = re.compile(
+    r'(?<!\|)\|(?!\|)\s*(?:sudo\s+)?(?:[^\s|]*[\\/])?'
+    r'(?:' + "|".join(sorted(REMOTE_EXEC_TOKENS, key=len, reverse=True)) + r')(?:\.exe)?\b',
+    re.IGNORECASE,
+)
+# 따옴표 안의 문자열은 실행되는 명령이 아니므로 위 파이프 검사에서 제외한다
+# (예: Select-String -Pattern "x|iex" 가 오탐으로 차단되지 않도록).
+QUOTED_RE = re.compile(r'"[^"]*"|\'[^\']*\'')
 
 
 def log(entry: dict) -> None:
@@ -147,6 +174,11 @@ def main() -> None:
     while i < len(lines):
         line = lines[i]
         i += 1
+        # shlex 파싱 전에 원시 문자열로 잡아야 하는 패턴 (공백 없는 파이프).
+        if PIPE_TO_SHELL_RE.search(QUOTED_RE.sub(" ", line)):
+            log({"tool": tool_name, "command": command, "decision": "deny-pipe-to-shell"})
+            emit("deny", "원격/외부 출력을 바로 셸에 파이프 실행하는 패턴입니다. 스크립트를 먼저 저장해 검토한 뒤 실행하세요.")
+
         try:
             parts = shlex.split(line, posix=is_bash)
         except ValueError:
