@@ -8,7 +8,8 @@ danger_guard.py — PreToolUse hook (Claude Code, Bash 툴 대상, 유저 레벨
      단, 루트 경로(/, ~, $HOME, 와일드카드 포함) 삭제 시도는 즉시 deny.
      trash-put 이 없으면 치환할 수 없으므로 fail-closed 로 deny.
      멀티라인 또는 체이닝(&&/;) 스크립트 안에 섞여 있으면 자동 치환 대신 deny.
-  2) git push / git push --force / git reset --hard / git clean -f* / git stash drop|clear → deny
+  2) git push --force / --force-with-lease / -f → deny (원격 히스토리 파괴 방지)
+     git reset --hard / git clean -f* / git stash drop|clear → deny
      git branch -D / git checkout -- <path> / git restore → ask (되돌릴 수 없는 변경 손실 가능성)
   3) dd of=... / mkfs* / wipefs / diskutil eraseDisk|eraseVolume / fdisk / parted → deny
      /dev/sd* 등 블록 디바이스로의 리다이렉트, 포크밤 패턴 → deny
@@ -184,8 +185,6 @@ def main() -> None:
             if base == "git":
                 if "push" in args and any(f in args for f in ("--force", "-f", "--force-with-lease")):
                     emit("deny", "git push --force 류는 원격 히스토리를 파괴할 수 있어 수동 실행이 필요합니다.")
-                if "push" in args:
-                    emit("deny", "git push는 수동으로 실행하세요.")
                 if "reset" in args and "--hard" in args:
                     emit("deny", "git reset --hard는 커밋되지 않은 변경사항을 되돌릴 수 없이 삭제합니다. (stash/soft 권장)")
                 if "clean" in args and any(f in args for f in ("-f", "-fd", "-fx", "-fdx", "-xdf", "--force")):

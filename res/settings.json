@@ -26,9 +26,7 @@
       "Skill"
     ],
     "deny": [
-      "Bash(git push *)",
       "Bash(git reset --hard *)",
-      "PowerShell(git push *)",
       "PowerShell(git reset --hard *)"
     ],
     "ask": [

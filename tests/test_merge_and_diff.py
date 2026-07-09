@@ -37,7 +37,7 @@ def test_merge_into_empty(tmp_path):
     assert proc.returncode == 0
     assert result["permissions"]["defaultMode"] == "auto"
     assert "Bash" in result["permissions"]["allow"]
-    assert "Bash(git push *)" in result["permissions"]["deny"]
+    assert "Bash(git reset --hard *)" in result["permissions"]["deny"]
 
 
 def test_placeholders_substituted(tmp_path):

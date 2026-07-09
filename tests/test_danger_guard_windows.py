@@ -26,9 +26,9 @@ def test_ps_git_push_force_denied(run_hook):
     assert d == "deny"
 
 
-def test_bash_git_push_denied(run_hook):
+def test_bash_git_push_allowed(run_hook):
     d, *_ = run_hook(HOOK, bash("git push origin main"))
-    assert d == "deny"
+    assert d is None
 
 
 def test_git_stash_drop_denied(run_hook):

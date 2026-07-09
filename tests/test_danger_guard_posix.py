@@ -21,9 +21,9 @@ def test_git_push_force_denied(run_hook):
     assert d == "deny"
 
 
-def test_git_push_denied(run_hook):
+def test_git_push_allowed(run_hook):
     d, *_ = run_hook(HOOK, bash("git push origin main"))
-    assert d == "deny"
+    assert d is None
 
 
 def test_git_reset_hard_denied(run_hook):
@@ -139,10 +139,10 @@ def test_chained_rm_root_denied(run_hook):
     assert d == "deny"
 
 
-def test_chained_git_push_denied(run_hook):
-    # echo ok ; git push → 체이닝 안의 git push 도 차단해야 한다.
+def test_chained_git_push_allowed(run_hook):
+    # echo ok ; git push → 일반 push는 체이닝 안에서도 허용되어야 한다.
     d, *_ = run_hook(HOOK, bash("echo ok ; git push origin main"))
-    assert d == "deny"
+    assert d is None
 
 
 def test_chained_rm_denies_substitution(run_hook):
@@ -171,10 +171,10 @@ def test_sudo_bash_c_rm_root_denied(run_hook):
     assert d == "deny"
 
 
-def test_bash_c_git_push_denied(run_hook):
-    # bash -c "git push origin main" → 내부 git push 차단.
+def test_bash_c_git_push_allowed(run_hook):
+    # bash -c "git push origin main" → 일반 push는 허용되어야 한다.
     d, *_ = run_hook(HOOK, bash('bash -c "git push origin main"'))
-    assert d == "deny"
+    assert d is None
 
 
 def test_bash_c_safe_command_passes(run_hook):
