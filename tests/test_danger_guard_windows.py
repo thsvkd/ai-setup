@@ -2,9 +2,15 @@
 
 이 훅은 Windows 에 설치되지만 순수 파이썬이라 어느 OS 에서도 정책을 검증할 수 있다.
 """
+import json
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 HOOK = "danger_guard.windows.py"
+HOOK_PATH = Path(__file__).resolve().parent.parent / "res" / "hooks" / HOOK
 
 
 def ps(cmd):
@@ -104,6 +110,38 @@ def test_rm_temp_substitutes_or_denies(run_hook):
 def test_unknown_tool_ignored(run_hook):
     d, *_ = run_hook(HOOK, {"tool_name": "Read", "tool_input": {"file_path": "x"}})
     assert d is None
+
+
+# --- S4: send2trash 모듈이 없으면 fail-closed 로 deny (POSIX 쪽과 정책 통일) ---
+
+def _run_without_send2trash(event):
+    """실제 send2trash 패키지를 지우지 않고, sys.modules 트릭으로 import 실패만 시뮬레이션한다
+    (공유 테스트 환경의 실제 설치 상태를 건드리면 병렬 테스트/다른 테스트에 영향을 준다)."""
+    code = (
+        "import sys, runpy; "
+        "sys.modules['send2trash'] = None; "
+        f"runpy.run_path(r'{HOOK_PATH}', run_name='__main__')"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-X", "utf8", "-c", code],
+        input=json.dumps(event), text=True, capture_output=True, encoding="utf-8",
+    )
+    out = (proc.stdout or "").strip()
+    payload = json.loads(out) if out else None
+    decision = payload["hookSpecificOutput"]["permissionDecision"] if payload else None
+    return decision, payload
+
+
+def test_rm_denied_when_send2trash_module_missing():
+    d, payload = _run_without_send2trash(bash("rm -rf temp/"))
+    assert d == "deny"
+    assert "send2trash" in payload["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_rm_root_still_denied_when_send2trash_module_missing():
+    # 루트 삭제는 send2trash 유무와 무관하게 항상 즉시 deny 여야 한다 (순서 회귀 방지).
+    d, _ = _run_without_send2trash(ps("Remove-Item -Recurse -Force C:\\"))
+    assert d == "deny"
 
 
 # --- 루트 삭제: 와일드카드/환경변수 변형 ---

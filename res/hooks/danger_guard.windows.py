@@ -42,6 +42,18 @@ HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(HOOKS_DIR, "guard.log")
 SEND_TO_TRASH = os.path.join(HOOKS_DIR, "send_to_trash.py")
 
+
+def send2trash_available() -> bool:
+    """send_to_trash.py 파일 존재만으로는 부족하다 — 그 파일이 실제로 삭제를 수행하려면
+    send2trash 패키지가 임포트돼야 한다. 패키지가 없으면 send_to_trash.py 는 실행 시점에
+    BLOCKED 로 종료해 파일은 안전하지만, 그 사이 Claude Code 에게는 'allow'로 보고돼
+    POSIX 쪽(fail-closed)과 정책이 어긋난다. 여기서 미리 확인해 deny 로 통일한다."""
+    try:
+        import send2trash  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
 DELETE_COMMANDS = {"rm", "del", "erase", "remove-item", "ri", "rd", "rmdir"}
 WINDOWS_FLAG_STYLE = {"del", "erase", "rd", "rmdir"}  # 이 명령들은 /flag 사용 (rm/Remove-Item 은 -flag)
 
@@ -228,6 +240,9 @@ def main() -> None:
 
                 if not os.path.exists(SEND_TO_TRASH):
                     emit("deny", "안전 삭제 스크립트(send_to_trash.py)가 없어 삭제를 차단합니다.")
+
+                if not send2trash_available():
+                    emit("deny", "휴지통 이동 도구(send2trash)가 설치되어 있지 않아 삭제를 차단합니다. (pip install send2trash)")
 
                 quote = quote_bash if is_bash else quote_ps
                 py_exe = sys.executable
