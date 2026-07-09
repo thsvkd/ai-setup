@@ -59,7 +59,17 @@ main() {
 
     TMP="$(mktemp -d)"
     TOKEN_CONF=""
-    cleanup() { rm -rf "$TMP"; [ -n "$TOKEN_CONF" ] && rm -f "$TOKEN_CONF"; }
+    # EXIT 트랩의 종료 상태가 스크립트의 종료 상태가 된다. 진입 시점의 $? 를 붙잡아
+    # 그대로 돌려주지 않으면, 정리 작업의 마지막 명령이 실패했다는 이유만으로 설치가
+    # 성공해도 exit 1 이 된다 (예: TOKEN_CONF 가 비어 `[ -n "" ]` 가 1 을 반환).
+    cleanup() {
+        _status=$?
+        rm -rf "$TMP"
+        if [ -n "$TOKEN_CONF" ]; then
+            rm -f "$TOKEN_CONF"
+        fi
+        return "$_status"
+    }
     trap 'cleanup' EXIT INT TERM
 
     TARBALL="https://github.com/$REPO/archive/$REF.tar.gz"
