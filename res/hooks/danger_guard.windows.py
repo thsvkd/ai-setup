@@ -29,6 +29,8 @@ command를 줄 단위로 나눠 각 줄을 독립적으로 검사한다. 또한 
 guard.log 에 감사 로그를 남긴다. 이 훅은 유저 레벨에 설치되므로 이 사용자가 여는
 모든 프로젝트에 적용된다.
 """
+from __future__ import annotations
+
 import sys
 import json
 import shlex
