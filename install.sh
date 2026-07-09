@@ -5,11 +5,17 @@
 # 내려받아 scripts/setup.sh 를 실행한다. (setup.sh 는 res/ 와 scripts/lib/ 등
 # 형제 파일이 있어야 동작하므로, 단일 파일 실행이 아니라 이 부트스트랩이 필요하다.)
 #
-# 사용법 (버전 태그로 고정 권장):
+# 사용법 (버전 태그로 고정 권장) — 파이프하지 말고 파일로 받아 실행한다:
+#   f="$(mktemp)"
 #   curl --proto '=https' --tlsv1.2 -fsSL \
-#     https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh
-#   curl ... | sh -s -- --dry-run     # 미리보기
-#   curl ... | sh -s -- --hooks       # 전역 가드/권한만
+#     -o "$f" https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh \
+#     && sh "$f"                     # 전체 설치
+#   sh "$f" --dry-run                # 미리보기
+#   sh "$f" --hooks                  # 전역 가드/권한만
+#
+# `curl ... | sh` 로 파이프하면 파이프라인의 종료 상태가 sh 의 것이라, curl 이 404 로 실패해도
+# 빈 stdin 을 받은 sh 가 0 으로 끝난다 — 아무것도 설치되지 않았는데 성공처럼 보인다. 아래에서
+# 아카이브를 `curl | tar` 대신 파일로 받는 것과 같은 이유다.
 #
 # 환경변수:
 #   CLAUDE_SETUP_REPO=owner/repo   대상 레포 (기본 thsvkd/claude-code-setup)
@@ -27,12 +33,13 @@ print_help() {
     cat <<'EOF'
 claude-code-setup 원격 설치 부트스트랩
 
-사용법:
-  curl -fsSL .../install.sh | sh                 # 전체 설치 (가드/권한 + AGENTS.md)
-  curl -fsSL .../install.sh | sh -s -- --hooks    # 전역 가드/권한만
-  curl -fsSL .../install.sh | sh -s -- --agentsmd # 현재 폴더에 AGENTS.md 만
-  curl -fsSL .../install.sh | sh -s -- --dry-run  # 아무것도 바꾸지 않고 미리보기
-  curl -fsSL .../install.sh | sh -s -- --help     # 이 도움말
+사용법 (이 파일을 curl -o 로 받아둔 뒤 실행하세요 — `curl ... | sh` 로 파이프하면
+curl 이 실패해도 전체 명령이 0 으로 끝나 '조용한 실패'가 됩니다):
+  sh install.sh                # 전체 설치 (가드/권한 + AGENTS.md)
+  sh install.sh --hooks        # 전역 가드/권한만
+  sh install.sh --agentsmd     # 현재 폴더에 AGENTS.md 만
+  sh install.sh --dry-run      # 아무것도 바꾸지 않고 미리보기
+  sh install.sh --help         # 이 도움말
 
 환경변수:
   CLAUDE_SETUP_REPO=owner/repo   대상 레포 (기본 thsvkd/claude-code-setup)

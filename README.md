@@ -85,14 +85,24 @@ gh auth login -h github.com
 아래 명령의 `${GITHUB_TOKEN:-$(gh auth token)}`는 "환경변수가 있으면 그걸,
 없으면 `gh`에서 읽어라"라는 뜻이라 위 두 방식 모두에서 그대로 동작한다.
 
+> 📥 **`curl … | sh` 로 파이프하지 않고 파일로 받아 실행한다.** 파이프라인의 종료 코드는 마지막
+> 명령(`sh`)의 것이다. 그래서 토큰이 죽어 `curl`이 404로 실패해도, 빈 stdin을 받은 `sh`는
+> **0(성공)으로 끝난다** — 아무것도 설치되지 않았는데 성공처럼 보인다. `install.sh`가 내부에서
+> `curl | tar` 대신 파일로 받는 것도 같은 이유이고, 이 저장소가 설치하는 `danger_guard`는 아예
+> `curl … | sh` 패턴을 차단한다. 받아둔 파일은 실행 전에 `less "$f"`로 훑어볼 수 있다.
+
 #### a) 전역 가드/권한만 설치 (권장 시작점)
 
 어느 위치에서 실행해도 된다. `~/.claude`에만 설치된다.
 
 **macOS / Linux / Git Bash**
 ```sh
-curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN:-$(gh auth token)}" \
-  https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --hooks
+f="$(mktemp)"
+curl --proto '=https' --tlsv1.2 -fsSL \
+  -H "Authorization: Bearer ${GITHUB_TOKEN:-$(gh auth token)}" \
+  -o "$f" https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh \
+  && sh "$f" --hooks
+rm -f "$f"
 ```
 
 **Windows PowerShell**
@@ -109,8 +119,12 @@ $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
 
 **macOS / Linux / Git Bash**
 ```sh
-curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN:-$(gh auth token)}" \
-  https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --dry-run
+f="$(mktemp)"
+curl --proto '=https' --tlsv1.2 -fsSL \
+  -H "Authorization: Bearer ${GITHUB_TOKEN:-$(gh auth token)}" \
+  -o "$f" https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh \
+  && sh "$f" --dry-run
+rm -f "$f"
 ```
 **Windows PowerShell**
 ```powershell
@@ -127,8 +141,12 @@ $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
 **macOS / Linux / Git Bash**
 ```sh
 cd my-project
-curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN:-$(gh auth token)}" \
-  https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh
+f="$(mktemp)"
+curl --proto '=https' --tlsv1.2 -fsSL \
+  -H "Authorization: Bearer ${GITHUB_TOKEN:-$(gh auth token)}" \
+  -o "$f" https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh \
+  && sh "$f"
+rm -f "$f"
 ```
 **Windows PowerShell**
 ```powershell
@@ -159,8 +177,21 @@ unset GITHUB_TOKEN GH_TOKEN
 gh auth login -h github.com
 ```
 
-`install.sh`는 다운로드가 실패하면 GitHub API를 한 번 찔러 `401`(토큰 만료) / `403`(권한 부족) /
-`404`(레포 못 봄) / ref 오류를 구분해 알려준다. 그 메시지를 따르면 된다.
+**오류가 어디서 나오는지 구분하자.** 다운로드는 두 단계이고, 각 단계를 다른 쪽이 보고한다.
+
+1. **`install.sh` 자체를 받는 단계** — `curl`이 직접 보고한다. 토큰이 죽었으면 이렇게 뜬다:
+   ```
+   curl: (56) The requested URL returned error: 404
+   ```
+   `curl`은 56으로 종료하고, 위 설치 명령은 `&&` 때문에 `sh`를 실행하지 않는다. 여기서
+   멈췄다면 `install.sh`는 **아직 실행조차 되지 않았으므로** 아래 2번의 친절한 진단은 볼 수 없다.
+
+2. **`install.sh`가 실행된 뒤 레포 아카이브를 받는 단계** — 이때 실패하면 스크립트가 GitHub API를
+   한 번 찔러 `401`(토큰 만료) / `403`(권한 부족) / `404`(레포 못 봄) / ref 오류를 구분해 알려준다.
+   주로 `CLAUDE_SETUP_REPO`·`CLAUDE_SETUP_REF`를 잘못 줬을 때, 또는 clone 해둔 `install.sh`를
+   직접 실행할 때 만난다.
+
+어느 쪽이든 먼저 확인할 것은 `gh auth status` 하나로 같다.
 
 > `CLAUDE_SETUP_REF`에는 `feature/my-branch`처럼 슬래시가 든 브랜치명을 **그대로 써도 된다**
 > (raw URL과 archive URL 양쪽에서 확인했다). ref와 경로의 경계를 분명히 하고 싶다면
@@ -315,6 +346,10 @@ Invoke-Pester tests/Setup.Tests.ps1 -Output Detailed   # 셋업 스크립트 (Po
 
 `pytest`만으로도 셋업 스크립트의 **실제 설치 경로**(`--dry-run`이 아닌 쪽)까지 커버한다
 ([`tests/test_setup_scripts.py`](tests/test_setup_scripts.py)) — `bats`는 없어도 된다.
+훅 테스트는 **호스트에 휴지통 도구가 깔려 있는지에 좌우되지 않는다**: `send2trash`의 유무는
+`sys.modules` 주입으로, `trash-put`/`trash`의 유무는 `PATH` 통제로 시뮬레이션하므로 어느
+OS에서든 같은 결과가 나온다. 그래서 Windows 가드도 macOS에서 그대로 검증된다 — 플랫폼별
+`skipif`는 훅이 실제로 `sys.platform`으로 분기하는 지점에만 쓴다(예: macOS 기본 `/usr/bin/trash`).
 그리고 [`tests/test_hook_compat.py`](tests/test_hook_compat.py)는 훅이 시스템의 구버전
 python3(macOS의 3.9.x)에서도 죽지 않는지 확인한다. 훅이 예외로 죽으면 Claude Code는
 가드 없이 명령을 실행하므로(fail-open), 최신 인터프리터로만 테스트하면 위험하다.
@@ -330,8 +365,12 @@ python3(macOS의 3.9.x)에서도 죽지 않는지 확인한다. 훅이 예외로
 그 외 모든 키는 그대로 보존되고, 변경 전 `.bak`을 남긴다. 원격에서 바로 실행하려면:
 
 ```sh
-curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN:-$(gh auth token)}" \
-  https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --uninstall
+f="$(mktemp)"
+curl --proto '=https' --tlsv1.2 -fsSL \
+  -H "Authorization: Bearer ${GITHUB_TOKEN:-$(gh auth token)}" \
+  -o "$f" https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh \
+  && sh "$f" --uninstall
+rm -f "$f"
 ```
 ```powershell
 # install.ps1 은 $env:GITHUB_TOKEN 을 읽는다 — 이 세션에만 채워둔다 (영구 저장 금지)
