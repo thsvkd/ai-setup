@@ -44,12 +44,14 @@ for arg in "$@"; do
     esac
 done
 
+# bash 3.2 (macOS 기본) 는 set -u 에서 빈 배열의 "${arr[@]}" 확장을 unbound variable 로
+# 취급한다. ${arr[@]+"${arr[@]}"} 형태로 감싸야 빈 배열이 안전하게 0개 인자로 펼쳐진다.
 DRY_FLAG=()
 [[ "$DRY_RUN" -eq 1 ]] && DRY_FLAG=(--dry-run)
 
 # uninstall 은 훅 전용 (프로젝트 AGENTS.md 는 사용자 콘텐츠라 건드리지 않음).
 if [[ "$UNINSTALL" -eq 1 ]]; then
-    exec bash "$SCRIPT_DIR/setup_hooks.sh" --uninstall "${DRY_FLAG[@]}"
+    exec bash "$SCRIPT_DIR/setup_hooks.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"}
 fi
 
 if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 ]]; then
@@ -58,9 +60,9 @@ if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 ]]; then
 fi
 
 if [[ "$RUN_HOOKS" -eq 1 ]]; then
-    bash "$SCRIPT_DIR/setup_hooks.sh" "${DRY_FLAG[@]}"
+    bash "$SCRIPT_DIR/setup_hooks.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"}
 fi
 
 if [[ "$RUN_AGENTSMD" -eq 1 ]]; then
-    bash "$SCRIPT_DIR/setup_agentsmd.sh" "${DRY_FLAG[@]}"
+    bash "$SCRIPT_DIR/setup_agentsmd.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"}
 fi
