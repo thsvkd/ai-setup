@@ -401,7 +401,10 @@ def main() -> int:
                 # settings.json 이 원래 있었는지는 '첫 설치' 시점의 사실이어야 한다.
                 "settings_existed_before": previous.get("settings_existed_before", settings_existed)
                 if previous else settings_existed,
-                "hook_files": [f for f in hook_files_csv.split(",") if f and "/" not in f and "\\" not in f],
+                "hook_files": sorted(
+                    set(previous.get("hook_files", []) if previous else [])
+                    | {f for f in hook_files_csv.split(",") if f and "/" not in f and "\\" not in f}
+                ),
             }
             manifest.update(fold_receipt(previous, receipt))
             write_json(manifest_path, manifest)
