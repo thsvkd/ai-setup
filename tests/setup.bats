@@ -7,6 +7,12 @@ setup() {
     REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
     SANDBOX="$(mktemp -d)"
     export HOME="$SANDBOX"          # 실제 ~/.claude 를 건드리지 않도록 격리
+
+    # 실제 휴지통 도구를 설치하려 들지 않도록 스텁을 PATH 앞에 둔다.
+    mkdir -p "$SANDBOX/bin"
+    printf '#!/bin/sh\nexit 0\n' > "$SANDBOX/bin/trash-put"
+    chmod +x "$SANDBOX/bin/trash-put"
+    export PATH="$SANDBOX/bin:$PATH"
 }
 
 teardown() {
@@ -47,4 +53,37 @@ teardown() {
     run sh "$REPO_ROOT/install.sh" --help
     [ "$status" -eq 0 ]
     [[ "$output" == *"부트스트랩"* ]]
+}
+
+# 아래는 dry-run 이 아닌 '실제 설치' 경로다. bash 3.2 (macOS 기본) 는 set -u 에서 빈 배열의
+# "${arr[@]}" 확장을 unbound variable 로 취급하는데, --dry-run 일 때는 배열이 비어있지 않아
+# 그 버그가 드러나지 않는다. 실제 설치를 밟는 테스트가 없으면 macOS 전체가 깨진 채로 통과한다.
+
+@test "setup.sh --hooks actually installs the guard hooks" {
+    run bash "$REPO_ROOT/scripts/setup.sh" --hooks
+    [ "$status" -eq 0 ]
+    [ -f "$HOME/.claude/hooks/danger_guard.py" ]
+    [ -f "$HOME/.claude/hooks/secrets_guard.py" ]
+    [ -f "$HOME/.claude/settings.json" ]
+}
+
+@test "setup.sh with no args installs hooks and AGENTS.md" {
+    cd "$SANDBOX"
+    run bash "$REPO_ROOT/scripts/setup.sh"
+    [ "$status" -eq 0 ]
+    [ -f "$HOME/.claude/hooks/danger_guard.py" ]
+    [ -f "$SANDBOX/AGENTS.md" ]
+}
+
+@test "setup.sh --uninstall removes the hooks it installed" {
+    bash "$REPO_ROOT/scripts/setup.sh" --hooks
+    run bash "$REPO_ROOT/scripts/setup.sh" --uninstall
+    [ "$status" -eq 0 ]
+    [ ! -f "$HOME/.claude/hooks/danger_guard.py" ]
+}
+
+@test "setup.sh --hooks is idempotent across repeated real installs" {
+    bash "$REPO_ROOT/scripts/setup.sh" --hooks
+    run bash "$REPO_ROOT/scripts/setup.sh" --hooks
+    [ "$status" -eq 0 ]
 }

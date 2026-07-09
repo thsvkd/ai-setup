@@ -321,3 +321,76 @@ def test_uninstall_does_not_clobber_user_changed_scalar(tmp_path):
     _, result = run_uninstall(target, manifest)
     assert result["effortLevel"] == "high"              # 우리 값이 아니므로 안 건드림
     assert "language" not in result                      # 안 바꾼 것은 정상 제거
+
+
+# --- 재실행(멱등)이 설치 영수증을 파괴하지 않는다 ---
+#
+# 두 번째 실행의 merge() 는 "추가한 것이 없다"는 빈 영수증을 낸다. 그걸 매니페스트에 그대로
+# 덮어쓰면 첫 설치가 무엇을 바꿨는지 기억이 사라져, --uninstall 이 아무것도 되돌리지 못한다.
+
+def test_rerun_keeps_added_allow_in_manifest(tmp_path):
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    run_merge(target, manifest_path=manifest)
+    run_merge(target, manifest_path=manifest)            # 멱등 재실행
+    m = json.loads(manifest.read_text(encoding="utf-8"))
+    assert "Bash" in m["added_allow"]
+    assert "Bash(git push *)" in m["added_deny"]
+    assert "Skill(loop)" in m["added_ask"]
+
+
+def test_rerun_keeps_default_mode_before(tmp_path):
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    target.write_text(json.dumps({"permissions": {"defaultMode": "acceptEdits"}}), encoding="utf-8")
+    run_merge(target, manifest_path=manifest)
+    run_merge(target, manifest_path=manifest)
+    m = json.loads(manifest.read_text(encoding="utf-8"))
+    assert m["default_mode_before"] == "acceptEdits"     # 두 번째 실행은 auto->auto 라 changed=False 였다
+    assert m["default_mode_changed"] is True
+
+
+def test_rerun_keeps_added_scalars(tmp_path):
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    run_merge(target, manifest_path=manifest)
+    run_merge(target, manifest_path=manifest)
+    m = json.loads(manifest.read_text(encoding="utf-8"))
+    assert m["added_scalars"] == {"model": "opus", "effortLevel": "xhigh", "language": "korean"}
+
+
+def test_rerun_keeps_settings_existed_before(tmp_path):
+    # 첫 설치 시점에 settings.json 이 없었다는 사실이 유지되어야 uninstall 이 파일을 지운다.
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    assert not target.exists()
+    run_merge(target, manifest_path=manifest)
+    run_merge(target, manifest_path=manifest)            # 이제는 존재한다
+    m = json.loads(manifest.read_text(encoding="utf-8"))
+    assert m["settings_existed_before"] is False
+    run_uninstall(target, manifest)
+    assert not target.exists()
+
+
+def test_uninstall_after_rerun_restores_prior_state(tmp_path):
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    target.write_text(json.dumps({
+        "model": "sonnet",
+        "permissions": {"allow": ["CustomTool"], "defaultMode": "acceptEdits"},
+    }), encoding="utf-8")
+    for _ in range(3):
+        run_merge(target, manifest_path=manifest)
+    _, result = run_uninstall(target, manifest)
+    assert result["model"] == "sonnet"
+    assert result["permissions"]["allow"] == ["CustomTool"]
+    assert result["permissions"]["defaultMode"] == "acceptEdits"
+    assert "effortLevel" not in result
+    assert not result.get("hooks", {}).get("PreToolUse")
+
+
+def test_reinstall_after_uninstall_starts_fresh_receipt(tmp_path):
+    # uninstall 이 매니페스트를 지우므로, 재설치는 그 시점의 상태를 새 기준선으로 삼는다.
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    target.write_text(json.dumps({"permissions": {"defaultMode": "plan"}}), encoding="utf-8")
+    run_merge(target, manifest_path=manifest)
+    run_uninstall(target, manifest)
+    manifest.unlink(missing_ok=True)                     # setup_hooks.sh 가 실제로 지운다
+    run_merge(target, manifest_path=manifest)
+    m = json.loads(manifest.read_text(encoding="utf-8"))
+    assert m["default_mode_before"] == "plan"

@@ -36,6 +36,49 @@ PY_RE = re.compile(r'[A-Za-z0-9_.\-]+\.py')
 SCALAR_KEYS = ("model", "effortLevel", "language")
 
 
+def load_manifest(path):
+    """설치 영수증을 읽는다. 없거나 깨졌으면 빈 dict."""
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def fold_receipt(previous: dict, current: dict) -> dict:
+    """이전 설치 영수증 위에 이번 병합 결과를 누적한다.
+
+    설치는 멱등이라 두 번째 실행의 merge() 는 "추가한 것이 없다"는 빈 영수증을 낸다.
+    그걸 그대로 기록하면 첫 설치가 무엇을 바꿨는지에 대한 기억이 사라져, 이후 --uninstall
+    이 권한/defaultMode/스칼라 키를 되돌리지 못한다. 그래서 덮어쓰지 않고 합친다.
+    """
+    if not previous:
+        return current
+
+    folded = dict(current)
+    for key in ("added_allow", "added_deny", "added_ask"):
+        merged = list(previous.get(key) or [])
+        for item in current.get(key) or []:
+            if item not in merged:
+                merged.append(item)
+        folded[key] = merged
+
+    scalars = dict(previous.get("added_scalars") or {})
+    scalars.update(current.get("added_scalars") or {})
+    folded["added_scalars"] = scalars
+
+    # defaultMode 는 '설치 전 원래 값'이 유일하게 중요하다. 한 번이라도 우리가 바꿨다면
+    # 그 최초 값을 계속 들고 간다.
+    if previous.get("default_mode_changed"):
+        folded["default_mode_before"] = previous.get("default_mode_before")
+        folded["default_mode_after"] = current.get("default_mode_after") or previous.get("default_mode_after")
+        folded["default_mode_changed"] = True
+
+    return folded
+
+
 def backup_file(path):
     """덮어쓰기 전 타임스탬프 백업을 만든다. 생성한 백업 경로(없으면 None)를 반환."""
     if not os.path.exists(path):
@@ -251,16 +294,10 @@ def main_uninstall(argv) -> int:
         return 0
 
     # 설치 영수증(매니페스트). 없으면(구버전 설치) 훅 등록 해제만 하고 권한은 건드리지 못한다.
-    receipt = {}
-    hook_files = ["danger_guard.py", "secrets_guard.py"]
-    if os.path.exists(manifest_path):
-        try:
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                receipt = json.load(f)
-            if receipt.get("hook_files"):
-                hook_files = [f for f in receipt["hook_files"] if f and "/" not in f and "\\" not in f]
-        except (OSError, ValueError):
-            pass
+    receipt = load_manifest(manifest_path)
+    hook_files = [f for f in receipt.get("hook_files") or [] if f and "/" not in f and "\\" not in f]
+    if not hook_files:
+        hook_files = ["danger_guard.py", "secrets_guard.py"]
 
     with open(settings_path, "r", encoding="utf-8") as f:
         after = json.load(f)
@@ -354,15 +391,22 @@ def main() -> int:
         print(f"✅ 병합 완료: {settings_path}")
 
         # 설치 영수증(매니페스트) 기록 — uninstall 이 '건드린 것만' 정밀 복원하는 근거.
+        # 재실행(멱등)해도 첫 설치의 기억을 잃지 않도록 이전 영수증 위에 누적한다.
         if manifest_path:
+            previous = load_manifest(manifest_path)
             manifest = {
                 "version": 1,
                 "hooks_dir": hooks_dir,
                 "settings_path": settings_path,
-                "settings_existed_before": settings_existed,
-                "hook_files": [f for f in hook_files_csv.split(",") if f and "/" not in f and "\\" not in f],
+                # settings.json 이 원래 있었는지는 '첫 설치' 시점의 사실이어야 한다.
+                "settings_existed_before": previous.get("settings_existed_before", settings_existed)
+                if previous else settings_existed,
+                "hook_files": sorted(
+                    set(previous.get("hook_files", []) if previous else [])
+                    | {f for f in hook_files_csv.split(",") if f and "/" not in f and "\\" not in f}
+                ),
             }
-            manifest.update(receipt)
+            manifest.update(fold_receipt(previous, receipt))
             write_json(manifest_path, manifest)
 
     return 1 if violated else 0
