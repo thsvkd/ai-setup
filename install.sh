@@ -178,7 +178,9 @@ main() {
         fi
         return "$_status"
     }
-    trap 'cleanup' EXIT INT TERM
+    trap 'cleanup' EXIT
+    trap 'cleanup; exit 130' INT
+    trap 'cleanup; exit 143' TERM
 
     # 비공개 레포면 PAT 로 인증한다. github.com 아카이브 URL 은 Authorization 헤더를 받아준다.
     TOKEN="$(resolve_token)"
