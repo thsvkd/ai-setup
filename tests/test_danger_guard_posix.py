@@ -264,8 +264,13 @@ def test_pipe_false_positives_pass(run_hook, cmd):
 # --- 휴지통 도구 탐지 (fail-closed / macOS 기본 trash) ---
 
 def _stub(tmp_path, name):
-    tmp_path.joinpath(name).write_text('#!/bin/sh\nexit 0\n', encoding="utf-8")
-    tmp_path.joinpath(name).chmod(0o755)
+    # Windows 의 shutil.which() 는 PATHEXT 확장자가 있는 파일만 실행 가능으로 인식한다 —
+    # POSIX 의 실행 비트(chmod)는 Windows 에서 아무 의미가 없다.
+    if sys.platform == "win32":
+        tmp_path.joinpath(name + ".cmd").write_text("@exit /b 0\r\n", encoding="utf-8")
+    else:
+        tmp_path.joinpath(name).write_text('#!/bin/sh\nexit 0\n', encoding="utf-8")
+        tmp_path.joinpath(name).chmod(0o755)
     return tmp_path
 
 
