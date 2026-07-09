@@ -43,19 +43,10 @@ winget install --id GitHub.cli
 gh auth login
 ```
 
-### Step 2 — 토큰을 환경변수로 설정
+### Step 2 — 인증
 
-**`gh` CLI 사용 (권장 — 평문 저장 없이 keyring 에서 읽음):**
-
-**macOS / Linux / Git Bash**
-```sh
-export GITHUB_TOKEN="$(gh auth token)"
-```
-
-**Windows PowerShell**
-```powershell
-$env:GITHUB_TOKEN = gh auth token
-```
+**`gh` CLI 사용 (권장):** Step 1에서 `gh auth login`을 했다면 **더 할 일이 없다.**
+`install.sh`는 `GITHUB_TOKEN`/`GH_TOKEN`이 없으면 `gh auth token`으로 알아서 폴백한다.
 
 **`gh` 없이 PAT 직접 사용:**
 
@@ -64,40 +55,35 @@ GitHub → Settings → Developer settings → Personal access tokens에서 토�
 - fine-grained PAT: 대상 레포 Contents: Read 권한
 
 ```sh
-export GITHUB_TOKEN="ghp_xxxxxxxxxxxx"   # 발급한 PAT 값으로 교체
+export GITHUB_TOKEN="ghp_xxxxxxxxxxxx"   # 발급한 PAT 값으로 교체 — 이 셸 세션 한정
 ```
 
-> ⚠️ PAT 문자열을 셸 프로필에 **직접** 박아두면 평문으로 저장된다. 가능하면 `gh auth token`으로 keyring에서 읽어오는 방식을 권장한다.
+> ⛔ **`GITHUB_TOKEN`을 rc 파일(`.zshrc` 등)에 영구 export 하지 말 것.**
+> `gh`는 `GITHUB_TOKEN`이 설정돼 있으면 그 값을 우선 쓰고 **`gh auth login`을 거부한다.**
+> 그 상태에서 토큰이 만료되면 재로그인조차 못 하고, 설치는 계속 `404`로 실패한다
+> (비공개 레포는 인증 실패를 401이 아니라 404로 위장하기 때문에 원인도 안 보인다).
+> 이미 그렇게 해뒀다면 rc에서 그 줄을 지우고, 현재 셸에서 `unset GITHUB_TOKEN` 하자.
 
-**영구 저장 (새 세션마다 자동으로 적용):**
+**토큰이 살아있는지 확인 (설치 전 1초):**
 
-아래 블록을 그대로 붙여넣으면 rc 파일(또는 PowerShell 프로필)에 export 라인이 **한 번만** 추가된다(이미 있으면 건너뜀).
-
-**macOS / Linux / Git Bash**
 ```sh
-# 로그인 셸에 맞는 rc 파일에 한 줄 추가 (이미 있으면 그대로 둠)
-LINE='export GITHUB_TOKEN="$(gh auth token)"'
-case "${SHELL##*/}" in zsh) RC="${ZDOTDIR:-$HOME}/.zshrc" ;; *) RC="$HOME/.bashrc" ;; esac
-grep -qxF "$LINE" "$RC" 2>/dev/null || printf '\n%s\n' "$LINE" >> "$RC"
-echo "✅ $RC 에 추가됨 — 새 셸부터 적용됩니다 (지금 세션에 즉시 반영: source \"$RC\")"
+gh auth status                 # "Logged in" 이어야 한다
+```
+```powershell
+gh auth status
 ```
 
-**Windows PowerShell**
-```powershell
-# $PROFILE 에 한 줄 추가 (이미 있으면 그대로 둠)
-$line = '$env:GITHUB_TOKEN = gh auth token'
-if (-not (Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
-if (-not (Select-String -Path $PROFILE -SimpleMatch -Pattern $line -Quiet)) {
-    Add-Content -Path $PROFILE -Value $line
-    Write-Host "✅ $PROFILE 에 추가됨 — 새 세션부터 적용됩니다 (지금 세션에 즉시 반영: . `$PROFILE)"
-}
-# 또는 사용자 환경변수(레지스트리)에 등록 — 새 세션부터 적용
-[Environment]::SetEnvironmentVariable('GITHUB_TOKEN', (gh auth token), 'User')
+`The token in keyring is invalid`가 뜨면 아래로 되살린다.
+
+```sh
+unset GITHUB_TOKEN GH_TOKEN    # 이걸 먼저 해야 gh auth login 이 동작한다
+gh auth login -h github.com
 ```
 
 ### Step 3 — 설치
 
-아래 모든 명령은 `GITHUB_TOKEN`이 설정돼 있다고 가정한다.
+아래 명령의 `${GITHUB_TOKEN:-$(gh auth token)}`는 "환경변수가 있으면 그걸,
+없으면 `gh`에서 읽어라"라는 뜻이라 위 두 방식 모두에서 그대로 동작한다.
 
 #### a) 전역 가드/권한만 설치 (권장 시작점)
 
@@ -105,12 +91,14 @@ if (-not (Select-String -Path $PROFILE -SimpleMatch -Pattern $line -Quiet)) {
 
 **macOS / Linux / Git Bash**
 ```sh
-curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN:-$(gh auth token)}" \
   https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --hooks
 ```
 
 **Windows PowerShell**
 ```powershell
+# install.ps1 은 $env:GITHUB_TOKEN 을 읽는다 — 이 세션에만 채워둔다 (영구 저장 금지)
+if (-not $env:GITHUB_TOKEN) { $env:GITHUB_TOKEN = gh auth token }
 $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
 & ([scriptblock]::Create((irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -Hooks
 ```
@@ -121,11 +109,13 @@ $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
 
 **macOS / Linux / Git Bash**
 ```sh
-curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN:-$(gh auth token)}" \
   https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --dry-run
 ```
 **Windows PowerShell**
 ```powershell
+# install.ps1 은 $env:GITHUB_TOKEN 을 읽는다 — 이 세션에만 채워둔다 (영구 저장 금지)
+if (-not $env:GITHUB_TOKEN) { $env:GITHUB_TOKEN = gh auth token }
 $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
 & ([scriptblock]::Create((irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -DryRun
 ```
@@ -137,17 +127,44 @@ $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
 **macOS / Linux / Git Bash**
 ```sh
 cd my-project
-curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN:-$(gh auth token)}" \
   https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh
 ```
 **Windows PowerShell**
 ```powershell
 cd my-project
+# install.ps1 은 $env:GITHUB_TOKEN 을 읽는다 — 이 세션에만 채워둔다 (영구 저장 금지)
+if (-not $env:GITHUB_TOKEN) { $env:GITHUB_TOKEN = gh auth token }
 $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
 irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1 | iex
 ```
 
 > 인자를 주지 않으면 **가드/권한 + AGENTS.md**가 모두 설치된다. PowerShell에서 `irm | iex`는 인자를 넘기기 어려우므로, 플래그가 필요할 땐 위의 `scriptblock` 형태를 쓰자.
+
+### 문제 해결 — `404`가 뜬다면
+
+거의 항상 **토큰 문제**다. 비공개 레포는 인증 실패를 `401`이 아니라 `404`로 돌려준다
+("이 레포는 존재조차 하지 않는다"고 시치미를 떼는 게 GitHub의 정책이다). 그래서
+`install.sh 파일이 없다`처럼 보이지만, 파일은 멀쩡히 있다.
+
+```sh
+gh auth status    # "The token in keyring is invalid" → 토큰이 죽었다
+```
+
+되살리는 **순서**가 중요하다. `GITHUB_TOKEN`이 설정돼 있으면 `gh`가 그 값을 우선 쓰면서
+로그인 자체를 거부하므로, 반드시 먼저 `unset` 해야 한다.
+
+```sh
+unset GITHUB_TOKEN GH_TOKEN
+gh auth login -h github.com
+```
+
+`install.sh`는 다운로드가 실패하면 GitHub API를 한 번 찔러 `401`(토큰 만료) / `403`(권한 부족) /
+`404`(레포 못 봄) / ref 오류를 구분해 알려준다. 그 메시지를 따르면 된다.
+
+> 슬래시가 든 브랜치를 지정할 땐 `refs/heads/`를 붙인다:
+> `CLAUDE_SETUP_REF=refs/heads/feature/my-branch`. 안 붙이면 GitHub이
+> `feature`를 ref로, `my-branch/...`를 경로로 오해해 역시 `404`가 난다.
 
 ---
 
@@ -313,10 +330,12 @@ python3(macOS의 3.9.x)에서도 죽지 않는지 확인한다. 훅이 예외로
 그 외 모든 키는 그대로 보존되고, 변경 전 `.bak`을 남긴다. 원격에서 바로 실행하려면:
 
 ```sh
-curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN:-$(gh auth token)}" \
   https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --uninstall
 ```
 ```powershell
+# install.ps1 은 $env:GITHUB_TOKEN 을 읽는다 — 이 세션에만 채워둔다 (영구 저장 금지)
+if (-not $env:GITHUB_TOKEN) { $env:GITHUB_TOKEN = gh auth token }
 $h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
 & ([scriptblock]::Create((irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -Uninstall
 ```
