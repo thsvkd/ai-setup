@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Claude Code 사용자 레벨 설정 CLI 엔트리포인트 (Windows)
 .DESCRIPTION
@@ -21,6 +21,9 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+# PS 7.4+ 는 네이티브 명령의 0이 아닌 종료 코드를 종료 오류로 승격시킬 수 있다 ($true 가 기본인
+# 빌드/프로필이 있음). 이 스크립트들은 실패를 $LASTEXITCODE 로 직접 판정하므로 명시적으로 끈다.
+$PSNativeCommandUseErrorActionPreference = $false
 
 if ($Help) {
     Write-Host @"

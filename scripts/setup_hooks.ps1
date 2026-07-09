@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Claude Code 사용자 레벨(user-level) 훅/권한 설정 (Windows) — v4
 .DESCRIPTION
@@ -31,6 +31,9 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+# PS 7.4+ 는 네이티브 명령의 0이 아닌 종료 코드를 종료 오류로 승격시킬 수 있다 ($true 가 기본인
+# 빌드/프로필이 있음). send2trash 미설치 탐지 등은 $LASTEXITCODE 로 직접 판정하므로 명시적으로 끈다.
+$PSNativeCommandUseErrorActionPreference = $false
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot

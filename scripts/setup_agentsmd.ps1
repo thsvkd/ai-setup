@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     res/AGENTS.md 를 현재 작업 디렉터리(대상 프로젝트 루트로 가정)에 설치 (Windows)
 .DESCRIPTION
