@@ -14,7 +14,7 @@
 # 환경변수:
 #   CLAUDE_SETUP_REPO=owner/repo   대상 레포 (기본 thsvkd/claude-code-setup)
 #   CLAUDE_SETUP_REF=main          브랜치/태그 (기본 main; 배포 시 vX.Y.Z 태그 권장)
-#                                  슬래시가 든 브랜치명은 refs/heads/feature/foo 형태로
+#                                  feature/foo 처럼 슬래시가 든 브랜치명도 그대로 쓸 수 있다.
 #   GITHUB_TOKEN / GH_TOKEN        비공개(private) 레포 다운로드용 PAT. 둘 다 없으면
 #                                  `gh auth token` 으로 폴백한다.
 #
@@ -36,8 +36,8 @@ claude-code-setup 원격 설치 부트스트랩
 
 환경변수:
   CLAUDE_SETUP_REPO=owner/repo   대상 레포 (기본 thsvkd/claude-code-setup)
-  CLAUDE_SETUP_REF=main          브랜치/태그 (기본 main)
-                                 슬래시가 든 브랜치명: refs/heads/feature/foo
+  CLAUDE_SETUP_REF=main          브랜치/태그 (기본 main). feature/foo 처럼 슬래시가
+                                 들어가도 되고, refs/heads/feature/foo 도 된다.
   GITHUB_TOKEN / GH_TOKEN        비공개 레포용 PAT. 없으면 `gh auth token` 으로 폴백.
 
 비공개 레포에서 404 가 나면 대부분 토큰 문제입니다 (GitHub 은 인증 실패를 404 로
@@ -141,7 +141,7 @@ explain_download_failure() {
             ;;
         200)
             echo "  진단: 레포 접근은 되는데 ref '$REF' 를 찾지 못했습니다." >&2
-            echo "    슬래시가 든 브랜치명은 refs/heads/ 를 붙여야 합니다:" >&2
+            echo "    브랜치/태그 이름을 확인하세요. 완전한 형태로도 지정할 수 있습니다:" >&2
             echo "      CLAUDE_SETUP_REF=refs/heads/feature/my-branch" >&2
             ;;
         *)

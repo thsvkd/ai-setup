@@ -162,9 +162,9 @@ gh auth login -h github.com
 `install.sh`는 다운로드가 실패하면 GitHub API를 한 번 찔러 `401`(토큰 만료) / `403`(권한 부족) /
 `404`(레포 못 봄) / ref 오류를 구분해 알려준다. 그 메시지를 따르면 된다.
 
-> 슬래시가 든 브랜치를 지정할 땐 `refs/heads/`를 붙인다:
-> `CLAUDE_SETUP_REF=refs/heads/feature/my-branch`. 안 붙이면 GitHub이
-> `feature`를 ref로, `my-branch/...`를 경로로 오해해 역시 `404`가 난다.
+> `CLAUDE_SETUP_REF`에는 `feature/my-branch`처럼 슬래시가 든 브랜치명을 **그대로 써도 된다**
+> (raw URL과 archive URL 양쪽에서 확인했다). ref와 경로의 경계를 분명히 하고 싶다면
+> `refs/heads/feature/my-branch` 형태도 동작한다.
 
 ---
 
