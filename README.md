@@ -179,15 +179,16 @@ irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/
 
 | 명령 | 조치 |
 | --- | --- |
-| `rm`, `del`, `Remove-Item`, `rd`, `rmdir` | 🗑️ 휴지통 이동으로 **치환** (send2trash / trash-put) |
+| `rm`, `del`, `Remove-Item`, `rd`, `rmdir` | 🗑️ 휴지통 이동으로 **치환** (macOS `trash` / `trash-put` / send2trash) |
 | ↳ 드라이브·홈 루트 삭제 (`C:\`, `/`, `~`) | ⛔ **차단** |
 | ↳ 휴지통 도구 미설치 / 여러 줄 스크립트에 섞임 | ⛔ **차단** (fail-closed) |
 | `git push`, `git push --force` | ⛔ **차단** (수동 실행 요구) |
 | `git reset --hard`, `git clean -f*`, `git stash drop`/`clear` | ⛔ **차단** |
 | `git branch -D`, `git checkout -- <경로>`, `git restore` | ❓ **확인** |
-| `format` / `diskpart` / `mkfs` / `fdisk` / `parted` / `wipefs` / `Clear-Disk` / `Format-Volume` / `diskutil eraseDisk` / `dd of=` | ⛔ **차단** |
-| `/dev/sd*` 등 블록 디바이스로의 리다이렉트, 포크밤 `:(){ :\|:& };:` | ⛔ **차단** |
-| `curl … \| bash`, `irm … \| iex` (원격 출력을 셸로 파이프) | ⛔ **차단** |
+| `format` / `diskpart` / `mkfs*` / `newfs_*` / `fdisk` / `parted` / `wipefs` / `Clear-Disk` / `Format-Volume` / `dd of=` | ⛔ **차단** |
+| `diskutil` 파괴적 서브커맨드 (`eraseDisk`, `eraseVolume`, `secureErase`, `partitionDisk`, `apfs deleteContainer` 등) | ⛔ **차단** |
+| `/dev/sd*`·`/dev/disk*` 등 블록 디바이스로의 리다이렉트, 포크밤 `:(){ :\|:& };:` | ⛔ **차단** |
+| `curl … \| bash`, `irm … \| iex` (원격 출력을 셸로 파이프 — `curl url\|bash` 처럼 공백이 없어도) | ⛔ **차단** |
 | `shutdown` / `reboot` / `Restart-Computer`, `chmod 777`, `shred`, `Clear-Content`, `reg delete` | ❓ **확인** |
 | 그 외 | ✅ 통과 (판단 안 함) |
 
@@ -248,8 +249,12 @@ cd claude-code-setup
 
 ## 요구사항
 
-- **Python 3** (필수 — 훅과 병합 엔진이 사용)
-- **POSIX**: `bash`, `trash-cli`(자동 설치 시도 — 없으면 `rm` 계열이 **차단**됨)
+- **Python 3.9+** (필수 — 훅과 병합 엔진이 사용).
+  훅은 `settings.json`에 `python3`라는 이름으로 등록되므로, Claude Code가 PATH에서 처음 찾는
+  python3에서 반드시 돌아야 한다 — macOS 기본 `/usr/bin/python3`(3.9.x)를 포함해서.
+- **macOS**: 추가 설치 불필요. 14.4+는 `/usr/bin/trash`를 기본 제공하고 훅이 이걸 쓴다.
+  (Homebrew의 `trash-cli`는 keg-only라 `brew install` 해도 `trash-put`이 PATH에 링크되지 않는다.)
+- **Linux**: `bash`, `trash-cli`(pip로 자동 설치 시도 — 없으면 `rm` 계열이 **차단**됨)
 - **Windows**: `send2trash`(pip로 자동 설치 시도 — 없으면 `rm`/`del` 계열이 **차단**됨)
 
 > `auto` 모드는 계정/버전 자격 요건(플랜·모델·Claude Code 버전)을 충족해야 실제로 켜진다. 설치 후 세션에서 `Shift+Tab`으로 모드를 순환시켜 확인할 수 있다.
@@ -284,12 +289,18 @@ tests/                      # pytest(훅·병합) + bats(bash) + Pester(PowerShe
 가드 훅과 병합 엔진은 블랙박스로 테스트한다 (JSON을 stdin으로 넣고 판정을 검증).
 
 ```sh
-python -m pytest tests/                 # 훅 정책 + 병합 엔진 (Python)
-bats tests/setup.bats                    # 셋업 스크립트 (bash, bats-core 필요)
+python -m pytest tests/                 # 훅 정책 + 병합 엔진 + 셋업 스크립트 (Python)
+bats tests/setup.bats                    # 셋업 스크립트 (선택 — bats-core 필요)
 ```
 ```powershell
 Invoke-Pester tests/Setup.Tests.ps1 -Output Detailed   # 셋업 스크립트 (PowerShell)
 ```
+
+`pytest`만으로도 셋업 스크립트의 **실제 설치 경로**(`--dry-run`이 아닌 쪽)까지 커버한다
+([`tests/test_setup_scripts.py`](tests/test_setup_scripts.py)) — `bats`는 없어도 된다.
+그리고 [`tests/test_hook_compat.py`](tests/test_hook_compat.py)는 훅이 시스템의 구버전
+python3(macOS의 3.9.x)에서도 죽지 않는지 확인한다. 훅이 예외로 죽으면 Claude Code는
+가드 없이 명령을 실행하므로(fail-open), 최신 인터프리터로만 테스트하면 위험하다.
 
 ---
 
