@@ -11,7 +11,7 @@ Bash 툴(Git Bash)과 PowerShell 툴(네이티브, Git for Windows 미설치 시
      단, 드라이브 루트(C 드라이브 전체, / 또는 ~) 삭제 시도는 치환하지 않고 즉시 deny.
      send2trash 가 설치되어 있지 않으면 치환할 수 없으므로 fail-closed 로 deny.
      멀티라인 또는 체이닝(&&/;) 스크립트 안에 섞여 있으면 자동 치환 대신 deny.
-   2) git push --force / --force-with-lease / -f → deny (원격 히스토리 파괴 방지)
+   2) git push --force / --force-with-lease / -f(--force 단축키) → deny (원격 히스토리 파괴 방지)
       git reset --hard / git clean -f* / git stash drop|clear → deny
       git branch -D / git checkout -- <path> / git restore → ask (되돌릴 수 없는 변경 손실 가능성)
   3) format / diskpart / mkfs / fdisk / Clear-Disk / Format-Volume / dd of=... → deny (디스크 레벨 파괴적)
