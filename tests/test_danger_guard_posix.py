@@ -68,8 +68,79 @@ def test_git_branch_force_delete_asks(run_hook):
     assert d == "ask"
 
 
-def test_git_restore_asks(run_hook):
-    d, *_ = run_hook(HOOK, bash("git restore src/main.py"))
+def test_git_restore_substitutes_with_stash(run_hook):
+    # 동작 변경: git restore 는 이제 ask 대신 앞에 git stash push 를 붙여 자동치환한다.
+    d, payload, _ = run_hook(HOOK, bash("git restore src/main.py"))
+    assert d == "allow"
+    assert payload["hookSpecificOutput"]["updatedInput"]["command"] == \
+        "git stash push -- src/main.py && git restore src/main.py"
+
+
+def test_git_checkout_index_stash_prepended(run_hook):
+    # git checkout -- file.txt (인덱스 기준 되돌리기) → stash 로 보존 후 원본 실행.
+    d, payload, _ = run_hook(HOOK, bash("git checkout -- file.txt"))
+    assert d == "allow"
+    assert payload["hookSpecificOutput"]["updatedInput"]["command"] == \
+        "git stash push -- file.txt && git checkout -- file.txt"
+
+
+def test_git_checkout_head_stash_prepended(run_hook):
+    # 실제 계기가 된 케이스: git checkout HEAD -- <path>.
+    d, payload, _ = run_hook(HOOK, bash("git checkout HEAD -- js/dropdown.js"))
+    assert d == "allow"
+    assert payload["hookSpecificOutput"]["updatedInput"]["command"] == \
+        "git stash push -- js/dropdown.js && git checkout HEAD -- js/dropdown.js"
+
+
+def test_git_checkout_other_ref_preserved(run_hook):
+    # 다른 ref 에서 파일을 가져오는 케이스: 원본 명령(other-branch 포함)이 그대로 보존돼야 한다.
+    d, payload, _ = run_hook(HOOK, bash("git checkout other-branch -- file.txt"))
+    assert d == "allow"
+    new_command = payload["hookSpecificOutput"]["updatedInput"]["command"]
+    assert "git checkout other-branch -- file.txt" in new_command
+    assert new_command == "git stash push -- file.txt && git checkout other-branch -- file.txt"
+
+
+def test_git_checkout_multiple_paths_stash_prepended(run_hook):
+    # 다중 경로: stash 부분에 두 경로가 모두 포함돼야 한다.
+    d, payload, _ = run_hook(HOOK, bash("git checkout HEAD -- file1.txt file2.txt"))
+    assert d == "allow"
+    new_command = payload["hookSpecificOutput"]["updatedInput"]["command"]
+    assert new_command == \
+        "git stash push -- file1.txt file2.txt && git checkout HEAD -- file1.txt file2.txt"
+
+
+def test_git_restore_separated_source_value_not_path(run_hook):
+    # `-s HEAD~1` 처럼 값이 분리된 옵션의 값(HEAD~1)이 경로로 오인되면 안 된다.
+    # foo.txt 만 pathspec 으로 잡혀야 한다.
+    d, payload, _ = run_hook(HOOK, bash("git restore -s HEAD~1 foo.txt"))
+    assert d == "allow"
+    assert payload["hookSpecificOutput"]["updatedInput"]["command"] == \
+        "git stash push -- foo.txt && git restore -s HEAD~1 foo.txt"
+
+
+def test_git_checkout_pipe_smuggling_asks(run_hook):
+    # 파이프 스모글링: split_commands 가 | 를 안 나눠서 is_chained=False 라도
+    # 뒤에 파괴적 명령(rm -rf ~)이 붙을 수 있으므로 반드시 ask 로 폴백해야 한다.
+    d, *_ = run_hook(HOOK, bash("git checkout -- foo.txt | rm -rf ~"))
+    assert d == "ask"
+
+
+def test_git_restore_redirect_asks(run_hook):
+    # 리다이렉트가 섞이면 원본 명령을 안전하게 특정할 수 없으므로 ask 로 폴백.
+    d, *_ = run_hook(HOOK, bash("git restore foo.txt > /tmp/log"))
+    assert d == "ask"
+
+
+def test_git_checkout_chained_asks(run_hook):
+    # 체이닝 안에 섞여 있으면 자동치환 불가 → ask (rm 체이닝 가드와 동일 원칙).
+    d, *_ = run_hook(HOOK, bash("echo hi && git checkout HEAD -- file.txt"))
+    assert d == "ask"
+
+
+def test_git_checkout_multiline_asks(run_hook):
+    # 멀티라인 안에 섞여 있으면 자동치환 불가 → ask.
+    d, *_ = run_hook(HOOK, bash("echo start\ngit checkout HEAD -- file.txt"))
     assert d == "ask"
 
 
