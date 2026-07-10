@@ -134,6 +134,37 @@ def split_commands(parts: list) -> list:
     return commands if commands else [parts]
 
 
+def _checkout_restore_paths(args: list) -> list:
+    """git checkout/restore 명령에서 되돌림 대상 pathspec 토큰을 뽑아낸다.
+    - checkout: "--" 뒤의 모든 토큰이 경로다.
+    - restore: "restore" 서브커맨드와 "-" 로 시작하는 옵션, 그리고 값이 분리된
+      옵션(-s <ref> 등)의 값 토큰까지 제외한 나머지 토큰이 경로다.
+    """
+    if "checkout" in args and "--" in args:
+        idx = args.index("--")
+        return [a for a in args[idx + 1:] if a]
+    if "restore" in args:
+        # -s/--source, --conflict, --pathspec-from-file 은 다음 토큰을 값으로 소비한다
+        # (--source=<ref> 처럼 '='로 붙는 형태는 '-'로 시작하므로 이미 걸러진다).
+        value_opts = {"-s", "--source", "--conflict", "--pathspec-from-file"}
+        paths = []
+        skip_next = False
+        for a in args:
+            if skip_next:
+                skip_next = False
+                continue
+            if a == "restore":
+                continue
+            if a in value_opts:
+                skip_next = True
+                continue
+            if a.startswith("-"):
+                continue
+            paths.append(a)
+        return paths
+    return []
+
+
 def main() -> None:
     try:
         raw = sys.stdin.read()
@@ -239,7 +270,26 @@ def main() -> None:
                 if "branch" in args and "-D" in args:
                     emit("ask", "git branch -D 는 병합되지 않은 브랜치를 강제 삭제합니다 (reflog 로만 복구 가능). 계속할까요?")
                 if ("checkout" in args and "--" in args) or "restore" in args:
-                    emit("ask", "커밋되지 않은 로컬 변경사항을 버릴 수 있는 명령입니다. 계속할까요?")
+                    paths = _checkout_restore_paths(args)
+                    # split_commands 는 |/리다이렉트를 나누지 않으므로 이런 토큰이 섞이면
+                    # is_chained 가 False 라도 뒤에 파괴적 명령이 스모글링될 수 있다. 이 경우
+                    # 자동치환 없이 ask 로 폴백한다.
+                    has_pipe_or_redirect = "|" in cmd_parts or any(t in (">", ">>") for t in cmd_parts)
+                    # 멀티라인/체이닝(&&/;)이 섞여 있으면 원본 명령을 안전하게 특정할 수 없어
+                    # stash-prepend 자동치환을 할 수 없다. 경로 추출에 실패(빈 리스트)한 경우도
+                    # 안전하게 ask 로 폴백한다. (rm 자동치환의 multiline/chained 가드와 동일 원칙.)
+                    if is_multiline or is_chained or not paths or has_pipe_or_redirect:
+                        emit("ask", "커밋되지 않은 로컬 변경사항을 버릴 수 있는 명령입니다. 계속할까요?")
+                    # 원본 명령은 건드리지 않고 앞에 git stash push 만 붙인다. 이렇게 해야
+                    # `git checkout <다른-ref> -- <path>` 처럼 다른 ref 에서 가져오는 의미도
+                    # 안 깨지고, 되돌리기 전 uncommitted 변경은 stash 에 보존돼 pop 으로 복구된다.
+                    # `&&` 로 이어붙여 stash 가 실패하면 뒤의 파괴적 원본 명령이 실행되지 않게 한다
+                    # (fail-open 방지). "보존할 게 없음"은 exit 0 이라 정상 진행된다.
+                    stash_cmd = "git stash push -- " + " ".join(shlex.quote(p) for p in paths)
+                    new_command = stash_cmd + " && " + line.strip()
+                    log({"command": command, "decision": "prepend-stash-preserve", "new_command": new_command})
+                    emit("allow", "되돌리기 전 uncommitted 변경사항을 git stash로 보존했습니다 (git stash pop으로 복구 가능).",
+                         updated_input={"command": new_command})
 
             if base in DISK_COMMANDS or base.startswith(DISK_COMMAND_PREFIXES):
                 emit("deny", f"디스크 레벨 명령({base})은 되돌릴 수 없어 자동 실행을 차단합니다.")
