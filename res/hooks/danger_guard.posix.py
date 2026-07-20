@@ -9,10 +9,15 @@ danger_guard.py — PreToolUse hook (Claude Code, Bash 툴 대상, 유저 레벨
      단, 루트 경로(/, ~, $HOME, 와일드카드 포함) 삭제 시도는 즉시 deny.
      휴지통 도구가 하나도 없으면 치환할 수 없으므로 fail-closed 로 deny.
      멀티라인 또는 체이닝(&&/;) 스크립트 안에 섞여 있으면 자동 치환 대신 deny.
-  2) git push --force / git reset --hard / git clean -f* / git stash drop|clear → deny
-     (되돌릴 수 없이 로컬 작업물이나 원격 히스토리를 손상시키는 명령만 deny 한다.)
-     git push (일반) / git branch -D / git checkout -- <path> / git restore → ask
-     (일반 push 는 원격에 반영될 뿐 커밋된/작업중 변경을 손상시키지 않으므로 deny 가 아니라 ask.)
+  2) git: "서브커맨드"를 정확히 판정해 세분화한다(git_subcommand). 순진하게 "push in args" 로
+     매칭하면 `git stash push`(작업을 저장하는 안전한 명령)까지 막히므로, 전역 옵션(-C/-c/…)을
+     건너뛰고 실제 서브커맨드를 뽑아 아래 규칙을 적용한다. "되돌릴 수 없이 손상"만 deny 한다.
+       deny  : push --force/-f/--force-with-lease, reset --hard, clean -f*(단, -n/--dry-run 은 제외),
+               stash drop|clear, filter-branch/filter-repo, reflog expire|delete
+       ask   : push(일반), branch -D, checkout/switch --force(강제 전환), gc --prune=now|all
+       allow : checkout -- <path> / checkout . / restore(워킹트리) → git stash 로 보존 후 실행(자동치환)
+       pass  : stash push/save/pop/apply/list/show, reset --soft/--mixed, clean -n, branch -d,
+               checkout/switch <branch>(전환), restore --staged(인덱스만), 그 외 안전한 서브커맨드
   3) dd of=... / mkfs* / newfs_* / wipefs / fdisk / parted → deny
      diskutil 의 파괴적 서브커맨드(eraseDisk, eraseVolume, secureErase, partitionDisk,
      apfs deleteContainer 등) → deny
@@ -136,35 +141,139 @@ def split_commands(parts: list) -> list:
     return commands if commands else [parts]
 
 
-def _checkout_restore_paths(args: list) -> list:
-    """git checkout/restore 명령에서 되돌림 대상 pathspec 토큰을 뽑아낸다.
-    - checkout: "--" 뒤의 모든 토큰이 경로다.
-    - restore: "restore" 서브커맨드와 "-" 로 시작하는 옵션, 그리고 값이 분리된
-      옵션(-s <ref> 등)의 값 토큰까지 제외한 나머지 토큰이 경로다.
-    """
-    if "checkout" in args and "--" in args:
-        idx = args.index("--")
-        return [a for a in args[idx + 1:] if a]
-    if "restore" in args:
-        # -s/--source, --conflict, --pathspec-from-file 은 다음 토큰을 값으로 소비한다
-        # (--source=<ref> 처럼 '='로 붙는 형태는 '-'로 시작하므로 이미 걸러진다).
-        value_opts = {"-s", "--source", "--conflict", "--pathspec-from-file"}
-        paths = []
-        skip_next = False
-        for a in args:
-            if skip_next:
-                skip_next = False
-                continue
-            if a == "restore":
-                continue
-            if a in value_opts:
-                skip_next = True
-                continue
-            if a.startswith("-"):
-                continue
-            paths.append(a)
-        return paths
-    return []
+# git 전역 옵션 중 '다음 토큰'을 값으로 소비하는 것들 (예: git -C <path> <sub>, git -c k=v <sub>).
+# 서브커맨드를 정확히 찾으려면 이 옵션들의 값 토큰을 건너뛰어야 한다. 대소문자 구분(-C ≠ -c).
+GIT_GLOBAL_VALUE_OPTS = {
+    "-C", "-c", "--git-dir", "--work-tree", "--namespace",
+    "--super-prefix", "--config-env", "--exec-path",
+}
+
+
+def git_subcommand(args: list):
+    """git 전역 옵션(-C/-c/--no-pager 등)을 건너뛰고 (실제 서브커맨드, 그 뒤 인자들) 을 반환한다.
+    이래야 `git stash push` 의 서브커맨드가 'stash'(안전)로, `git push` 만 'push'로 잡힌다.
+    서브커맨드를 못 찾으면 (None, []). 옵션 판정은 대소문자 구분(-C 는 값 소비, -c 도 값 소비)."""
+    i = 0
+    n = len(args)
+    while i < n:
+        a = args[i]
+        if not a.startswith("-"):
+            return a, args[i + 1:]
+        if "=" in a:                       # --git-dir=… 처럼 값이 '=' 로 붙은 형태
+            i += 1
+            continue
+        if a in GIT_GLOBAL_VALUE_OPTS:      # 값이 다음 토큰에 오는 형태 (git -C <path>)
+            i += 2
+            continue
+        i += 1                             # 값 없는 전역 플래그(-p, --no-pager, --bare, …)
+    return None, []
+
+
+def _git_own_args(args: list) -> list:
+    """git 명령 '자체'의 인자만 남긴다 — 파이프/리다이렉트 뒤(다른 명령이나 파일)를 잘라낸다.
+    split_commands 는 &&/||/; 만 나누고 | 와 리다이렉트는 나누지 않으므로, 그대로 두면
+    `git checkout -- f | rm -rf ~` 의 `-rf` 같은 남의 토큰이 rest 에 새어들어 플래그 판정을
+    오염시킨다. (스모글링 자체의 최종 판정은 _emit_stash_prepend 가 cmd_parts 로 다시 잡는다.)"""
+    out = []
+    for t in args:
+        if t in ("|", "|&", "&", ">", ">>", "<", "<<") or t[:1] in (">", "<") or t[:2] in ("2>", "&>", "1>"):
+            break
+        out.append(t)
+    return out
+
+
+def _short_flag_chars(token: str) -> set:
+    """'-fd' → {'f','d'} (단일 대시 짧은 플래그의 문자들). '--force'/비플래그 → 빈 집합.
+    git 플래그는 대소문자를 구분하므로(-S staged ≠ -s source) 소문자화하지 않는다."""
+    if token.startswith("-") and not token.startswith("--") and len(token) > 1:
+        return set(token[1:])
+    return set()
+
+
+def _push_is_force(rest: list) -> bool:
+    """git push 의 강제(force) 계열 플래그 존재 여부. 위치 무관, 짧은 플래그 결합(-fu)도 잡는다."""
+    for t in rest:
+        if t in ("--force", "--force-with-lease", "--force-if-includes"):
+            return True
+        if t.startswith("--force-with-lease") or t.startswith("--force-if-includes"):
+            return True  # --force-with-lease=<ref> 형태
+        if "f" in _short_flag_chars(t):     # -f, -fu, -uf …
+            return True
+    return False
+
+
+def _clean_is_destructive(rest: list) -> bool:
+    """git clean 이 실제로 파일을 삭제하는지. -n/--dry-run(미리보기)이 있으면 삭제하지 않는다."""
+    dry = any(t == "--dry-run" or "n" in _short_flag_chars(t) for t in rest)
+    if dry:
+        return False
+    return any(t == "--force" or "f" in _short_flag_chars(t) for t in rest)
+
+
+def _restore_touches_worktree(rest: list) -> bool:
+    """git restore 가 워킹트리를 건드리는지. `--staged` 만 주면 인덱스만 바뀌어 손실이 없다.
+    기본(옵션 없음)은 워킹트리를 되돌린다. `-S`(staged) 와 `-s`(source)는 다른 옵션이므로 대소문자 구분."""
+    staged = any(t in ("--staged",) or "S" in _short_flag_chars(t) for t in rest)
+    worktree = any(t in ("--worktree",) or "W" in _short_flag_chars(t) for t in rest)
+    return worktree or not staged
+
+
+def _first_non_option(rest: list):
+    """rest 에서 첫 번째 비옵션 토큰(예: stash/reflog 의 하위 동작). 없으면 None."""
+    for t in rest:
+        if not t.startswith("-"):
+            return t
+    return None
+
+
+def _checkout_paths(rest: list) -> list:
+    """git checkout 의 되돌림 대상 pathspec. '--' 뒤 토큰, 또는 '--' 없이 '.' 만 온 경우 '.'."""
+    if "--" in rest:
+        idx = rest.index("--")
+        return [a for a in rest[idx + 1:] if a]
+    return [a for a in rest if a == "."]     # git checkout . (현재 디렉터리 전체 폐기)
+
+
+def _restore_paths(rest: list) -> list:
+    """git restore 의 pathspec. '-s <ref>' 처럼 값이 분리된 옵션의 값과 모든 옵션을 제외한 나머지."""
+    value_opts = {"-s", "--source", "--conflict", "--pathspec-from-file"}
+    paths = []
+    skip_next = False
+    for a in rest:
+        if skip_next:
+            skip_next = False
+            continue
+        if a in value_opts:
+            skip_next = True
+            continue
+        if a.startswith("-"):
+            continue
+        paths.append(a)
+    return paths
+
+
+def _has_force_flag(rest: list) -> bool:
+    """rest 에 -f / --force / --discard-changes 강제 플래그가 있는지 (checkout/switch/branch 판정용)."""
+    for t in rest:
+        if t in ("-f", "--force", "--discard-changes"):
+            return True
+        if "f" in _short_flag_chars(t):
+            return True
+    return False
+
+
+def _emit_stash_prepend(paths, cmd_parts, line, is_multiline, is_chained, command) -> None:
+    """되돌리기 전 uncommitted 변경을 git stash 로 보존한 뒤 원본을 실행하도록 자동 치환한다.
+    원본 명령을 안전하게 특정할 수 없으면(멀티라인/체이닝/파이프/리다이렉트/경로 추출 실패) ask 로 폴백.
+    `&&` 로 이어붙여 stash 실패 시 뒤의 파괴적 원본이 실행되지 않게 한다(fail-open 방지)."""
+    has_pipe_or_redirect = "|" in cmd_parts or any(t in (">", ">>") for t in cmd_parts)
+    if is_multiline or is_chained or not paths or has_pipe_or_redirect:
+        emit("ask", "커밋되지 않은 로컬 변경사항을 버릴 수 있는 명령입니다. 계속할까요?")
+    stash_cmd = "git stash push -- " + " ".join(shlex.quote(p) for p in paths)
+    new_command = stash_cmd + " && " + line.strip()
+    log({"command": command, "decision": "prepend-stash-preserve", "new_command": new_command})
+    emit("allow", "되돌리기 전 uncommitted 변경사항을 git stash로 보존했습니다 (git stash pop으로 복구 가능).",
+         updated_input={"command": new_command})
 
 
 def main() -> None:
@@ -259,39 +368,51 @@ def main() -> None:
                      updated_input={"command": new_command})
 
             if base == "git":
-                if "push" in args and any(f in args for f in ("--force", "-f", "--force-with-lease")):
-                    emit("deny", "git push --force 류는 원격 히스토리를 파괴할 수 있어 수동 실행이 필요합니다.")
-                if "push" in args:
+                # 서브커맨드를 정확히 판정한다. 이래야 `git stash push`(안전, 저장)가
+                # 순진한 "push in args" 매칭으로 오탐되지 않는다.
+                sub, rest = git_subcommand(args)
+                subl = sub.lower() if sub else ""
+
+                if subl == "push":
+                    if _push_is_force(rest):
+                        emit("deny", "git push --force 류는 원격 히스토리를 파괴할 수 있어 수동 실행이 필요합니다.")
                     emit("ask", "git push 는 원격에 반영됩니다 (로컬 변경은 손상되지 않음). 진행할까요?")
-                if "reset" in args and "--hard" in args:
-                    emit("deny", "git reset --hard는 커밋되지 않은 변경사항을 되돌릴 수 없이 삭제합니다. (stash/soft 권장)")
-                if "clean" in args and any(f in args for f in ("-f", "-fd", "-fx", "-fdx", "-xdf", "--force")):
-                    emit("deny", "git clean -f 류는 추적되지 않는 파일을 되돌릴 수 없이 삭제합니다.")
-                if "stash" in args and any(a in args for a in ("drop", "clear")):
-                    emit("deny", "git stash drop/clear 는 스태시를 되돌릴 수 없이 삭제합니다.")
-                if "branch" in args and "-D" in args:
+
+                if subl == "reset" and "--hard" in rest:
+                    emit("deny", "git reset --hard는 커밋되지 않은 변경사항을 되돌릴 수 없이 삭제합니다. (--soft/--mixed/stash 권장)")
+
+                if subl == "clean" and _clean_is_destructive(rest):
+                    emit("deny", "git clean -f 류는 추적되지 않는 파일을 되돌릴 수 없이 삭제합니다. (-n/--dry-run 으로 먼저 확인하세요.)")
+
+                if subl == "stash" and _first_non_option(rest) in ("drop", "clear"):
+                    emit("deny", "git stash drop/clear 는 스태시를 되돌릴 수 없이 삭제합니다. (push/save/pop/apply/list 는 안전.)")
+
+                if subl == "branch" and ("-D" in rest or ("--delete" in rest and _has_force_flag(rest))):
                     emit("ask", "git branch -D 는 병합되지 않은 브랜치를 강제 삭제합니다 (reflog 로만 복구 가능). 계속할까요?")
-                if ("checkout" in args and "--" in args) or "restore" in args:
-                    paths = _checkout_restore_paths(args)
-                    # split_commands 는 |/리다이렉트를 나누지 않으므로 이런 토큰이 섞이면
-                    # is_chained 가 False 라도 뒤에 파괴적 명령이 스모글링될 수 있다. 이 경우
-                    # 자동치환 없이 ask 로 폴백한다.
-                    has_pipe_or_redirect = "|" in cmd_parts or any(t in (">", ">>") for t in cmd_parts)
-                    # 멀티라인/체이닝(&&/;)이 섞여 있으면 원본 명령을 안전하게 특정할 수 없어
-                    # stash-prepend 자동치환을 할 수 없다. 경로 추출에 실패(빈 리스트)한 경우도
-                    # 안전하게 ask 로 폴백한다. (rm 자동치환의 multiline/chained 가드와 동일 원칙.)
-                    if is_multiline or is_chained or not paths or has_pipe_or_redirect:
-                        emit("ask", "커밋되지 않은 로컬 변경사항을 버릴 수 있는 명령입니다. 계속할까요?")
-                    # 원본 명령은 건드리지 않고 앞에 git stash push 만 붙인다. 이렇게 해야
-                    # `git checkout <다른-ref> -- <path>` 처럼 다른 ref 에서 가져오는 의미도
-                    # 안 깨지고, 되돌리기 전 uncommitted 변경은 stash 에 보존돼 pop 으로 복구된다.
-                    # `&&` 로 이어붙여 stash 가 실패하면 뒤의 파괴적 원본 명령이 실행되지 않게 한다
-                    # (fail-open 방지). "보존할 게 없음"은 exit 0 이라 정상 진행된다.
-                    stash_cmd = "git stash push -- " + " ".join(shlex.quote(p) for p in paths)
-                    new_command = stash_cmd + " && " + line.strip()
-                    log({"command": command, "decision": "prepend-stash-preserve", "new_command": new_command})
-                    emit("allow", "되돌리기 전 uncommitted 변경사항을 git stash로 보존했습니다 (git stash pop으로 복구 가능).",
-                         updated_input={"command": new_command})
+
+                if subl in ("filter-branch", "filter-repo"):
+                    emit("deny", f"git {subl} 는 저장소 히스토리를 대량으로 재작성합니다. 신중히 수동으로 실행하세요.")
+
+                if subl == "reflog" and _first_non_option(rest) in ("expire", "delete"):
+                    emit("deny", "git reflog expire/delete 는 커밋 복구 안전망(reflog)을 파괴합니다.")
+
+                if subl == "gc" and any(t in ("--prune=now", "--prune=all") for t in rest):
+                    emit("ask", "git gc --prune=now/all 은 도달 불가능한 객체를 영구 삭제합니다 (reflog 만료분 복구 불가). 계속할까요?")
+
+                if subl == "switch" and _has_force_flag(rest):
+                    emit("ask", "git switch --force/--discard-changes 는 커밋되지 않은 로컬 변경을 버릴 수 있습니다. 계속할까요?")
+
+                if subl == "checkout":
+                    if _has_force_flag(rest):
+                        emit("ask", "git checkout --force 는 전환 시 커밋되지 않은 로컬 변경을 버릴 수 있습니다. 계속할까요?")
+                    # 경로 되돌리기(`-- <path>` 또는 `git checkout .`)만 stash 로 보존 후 실행한다.
+                    # 그냥 브랜치 전환(`git checkout <branch>`)은 충돌 시 git 이 거부하므로 통과.
+                    if "--" in rest or "." in rest:
+                        _emit_stash_prepend(_checkout_paths(rest), cmd_parts, line, is_multiline, is_chained, command)
+
+                if subl == "restore" and _restore_touches_worktree(rest):
+                    # `git restore --staged`(인덱스만)는 손실이 없어 통과. 워킹트리를 되돌리는 경우만 보존.
+                    _emit_stash_prepend(_restore_paths(rest), cmd_parts, line, is_multiline, is_chained, command)
 
             if base in DISK_COMMANDS or base.startswith(DISK_COMMAND_PREFIXES):
                 emit("deny", f"디스크 레벨 명령({base})은 되돌릴 수 없어 자동 실행을 차단합니다.")
