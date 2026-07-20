@@ -77,10 +77,10 @@ bash scripts/setup.sh --dry-run   # 또는 .\scripts\setup.ps1 -DryRun
 | `~/.claude/hooks/danger_guard.py`  | 위험 명령 가드 (Bash·PowerShell 툴)                                                  |
 | `~/.claude/hooks/secrets_guard.py` | 시크릿 파일 접근 가드 (Read·Write·Edit)                                              |
 | `~/.claude/hooks/send_to_trash.py` | (Windows) 휴지통 이동 헬퍼                                                           |
-| `~/.claude/settings.json`          | 권한 + PreToolUse 훅 등록 + `model`/`effortLevel`/`language` 기본값(없을 때만)       |
+| `~/.claude/settings.json`          | 권한 + PreToolUse 훅 등록 + `model`/`effortLevel`/`language`·`env.CLAUDE_CODE_SCROLL_SPEED` 기본값(없을 때만) |
 | `./AGENTS.md`                      | (`--agentsmd` 시) 현재 폴더에 프로젝트 워크플로 규칙 — 이미 있으면 건너뜀            |
 
-`settings.json`에는 `permissions.defaultMode: "auto"`, 핵심 툴 `allow`(`Bash`, `PowerShell`, `Read(*)`, `Edit(*)`, `Write(*)`, `Agent(*)`, `WebFetch(*)` 등), `deny`(`git push`, `git reset --hard`), `hooks.PreToolUse` 등록, 그리고 없을 때만 채우는 `model: "opus"` / `effortLevel: "xhigh"` / `language: "korean"`이 병합된다. 그 외 최상위 키(`env`, `statusLine` 등)와 사용자가 이미 고른 값은 건드리지 않는다. 단일 소스는 [`res/settings.json`](res/settings.json)이며, 설치 시 python 실행 명령과 훅 경로만 치환된다.
+`settings.json`에는 `permissions.defaultMode: "auto"`, 핵심 툴 `allow`(`Bash`, `PowerShell`, `Read(*)`, `Edit(*)`, `Write(*)`, `Agent(*)`, `WebFetch(*)` 등), `deny`(`git push --force`, `git reset --hard`), `ask`(`git push` 일반, 위험 스킬), `hooks.PreToolUse` 등록, 그리고 없을 때만 채우는 `model: "opus"` / `effortLevel: "xhigh"` / `language: "korean"` 과 `env.CLAUDE_CODE_SCROLL_SPEED: "3"`(마우스 휠 스크롤 속도, `/scroll-speed` 대응)이 병합된다. 사용자가 이미 고른 값과 그 외 최상위 키(`statusLine` 등), 그리고 사용자의 기존 `env` 키/값은 건드리지 않는다(우리가 관리하는 `env` 키만 없을 때 추가). 단일 소스는 [`res/settings.json`](res/settings.json)이며, 설치 시 python 실행 명령과 훅 경로만 치환된다.
 
 ---
 
@@ -93,9 +93,9 @@ bash scripts/setup.sh --dry-run   # 또는 .\scripts\setup.ps1 -DryRun
 | `rm`, `del`, `Remove-Item`, `rd`, `rmdir`                                                                               | 🗑️ 휴지통 이동으로 **치환** (macOS `trash` / `trash-put` / send2trash) |
 | ↳ 드라이브·홈 루트 삭제 (`C:\`, `/`, `~`)                                                                               | ⛔ **차단**                                                            |
 | ↳ 휴지통 도구 미설치 / 여러 줄 스크립트에 섞임                                                                          | ⛔ **차단** (fail-closed)                                              |
-| `git push`, `git push --force`                                                                                          | ⛔ **차단** (수동 실행 요구)                                           |
-| `git reset --hard`, `git clean -f*`, `git stash drop`/`clear`                                                           | ⛔ **차단**                                                            |
-| `git branch -D`, `git checkout -- <경로>`, `git restore`                                                                | ❓ **확인**                                                            |
+| `git push --force`                                                                                                      | ⛔ **차단** (원격 히스토리 파괴 위험)                                  |
+| `git reset --hard`, `git clean -f*`, `git stash drop`/`clear`                                                           | ⛔ **차단** (되돌릴 수 없는 로컬 작업물 손상)                          |
+| `git push` (일반), `git branch -D`, `git checkout -- <경로>`, `git restore`                                             | ❓ **확인** (일반 push 는 로컬 변경을 손상시키지 않아 deny→ask 로 완화) |
 | `format` / `diskpart` / `mkfs*` / `newfs_*` / `fdisk` / `parted` / `wipefs` / `Clear-Disk` / `Format-Volume` / `dd of=` | ⛔ **차단**                                                            |
 | `diskutil` 파괴적 서브커맨드 (`eraseDisk`, `eraseVolume`, `secureErase`, `partitionDisk`, `apfs deleteContainer` 등)    | ⛔ **차단**                                                            |
 | `/dev/sd*`·`/dev/disk*` 등 블록 디바이스로의 리다이렉트, 포크밤 `:(){ :\|:& };:`                                        | ⛔ **차단**                                                            |
@@ -110,6 +110,10 @@ bash scripts/setup.sh --dry-run   # 또는 .\scripts\setup.ps1 -DryRun
 `.env`, `id_rsa`/`id_dsa`/`id_ecdsa`/`id_ed25519`, `*.pem`/`*.pfx`/`*.p12`/`*.p8`/`*.ppk`/`*.jks`/`*.keystore`,
 `credentials.json`, `secrets.y(a)ml`, `.npmrc`/`.pypirc`/`.netrc`/`.git-credentials`, `~/.aws/credentials`, `*_secret*`, `*.key` 등을
 **Read / Write / Edit / MultiEdit**로 접근하면 ❓ 확인을 요청한다 (완전 차단이 아닌 확인 게이트).
+
+단, `.env.example`/`.env.sample`/`.env.template`/`.env.dist` 처럼 자리표시자(placeholder)만 담고 커밋을 전제로 하는
+**예시/템플릿 파일은 시크릿이 아니므로 확인 없이 통과**시킨다 (`.env.local.example` 같은 변형도 마지막 확장자로 판정). 실제
+시크릿을 담는 `.env`/`.env.local`/`.env.production` 은 그대로 확인 게이트가 걸린다.
 
 ---
 

@@ -37,7 +37,10 @@ def test_merge_into_empty(tmp_path):
     assert proc.returncode == 0
     assert result["permissions"]["defaultMode"] == "auto"
     assert "Bash" in result["permissions"]["allow"]
-    assert "Bash(git push *)" in result["permissions"]["deny"]
+    # force push / reset --hard 는 여전히 deny, 일반 push 는 ask 로 완화됐다.
+    assert "Bash(git push --force*)" in result["permissions"]["deny"]
+    assert "Bash(git reset --hard *)" in result["permissions"]["deny"]
+    assert "Bash(git push *)" in result["permissions"]["ask"]
 
 
 def test_placeholders_substituted(tmp_path):
@@ -61,7 +64,8 @@ def test_preserves_other_keys(tmp_path):
     proc, result = run_merge(target)
     assert proc.returncode == 0
     assert result["model"] == "sonnet"
-    assert result["env"] == {"X": "1"}
+    assert result["env"]["X"] == "1"                            # 사용자 env 키는 보존
+    assert result["env"]["CLAUDE_CODE_SCROLL_SPEED"] == "3"     # 우리가 관리하는 env 키는 추가
     assert result["statusLine"]["command"] == "foo"
     assert "CustomTool" in result["permissions"]["allow"]   # 사용자 항목 보존
     assert "Bash" in result["permissions"]["allow"]         # 우리 항목 추가
@@ -323,6 +327,71 @@ def test_uninstall_does_not_clobber_user_changed_scalar(tmp_path):
     assert "language" not in result                      # 안 바꾼 것은 정상 제거
 
 
+# --- env 하위 관리 키(CLAUDE_CODE_SCROLL_SPEED) — scalar 와 동일한 '없을 때만 추가' + 정밀 복원 ---
+
+def test_env_scroll_speed_set_when_absent(tmp_path):
+    # env 가 아예 없던 settings 에는 우리의 스크롤 속도 env 키가 설치된다.
+    _, result = run_merge(tmp_path / "settings.json")
+    assert result["env"]["CLAUDE_CODE_SCROLL_SPEED"] == "3"
+
+
+def test_env_preserves_user_value(tmp_path):
+    # 사용자가 이미 값을 갖고 있으면 절대 덮어쓰지 않는다.
+    target = tmp_path / "settings.json"
+    target.write_text(json.dumps({"env": {"CLAUDE_CODE_SCROLL_SPEED": "10"}}), encoding="utf-8")
+    proc, result = run_merge(target)
+    assert proc.returncode == 0
+    assert result["env"]["CLAUDE_CODE_SCROLL_SPEED"] == "10"   # 보존
+
+
+def test_env_preserves_other_env_keys(tmp_path):
+    # 우리 키는 추가하되, 사용자의 다른 env 키는 그대로 둔다 (returncode 0 — env 위반 아님).
+    target = tmp_path / "settings.json"
+    target.write_text(json.dumps({"env": {"MY_VAR": "keep"}}), encoding="utf-8")
+    proc, result = run_merge(target)
+    assert proc.returncode == 0
+    assert result["env"]["MY_VAR"] == "keep"
+    assert result["env"]["CLAUDE_CODE_SCROLL_SPEED"] == "3"
+
+
+def test_install_manifest_records_added_env(tmp_path):
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    target.write_text(json.dumps({"env": {"CLAUDE_CODE_SCROLL_SPEED": "10"}}), encoding="utf-8")
+    run_merge(target, manifest_path=manifest)
+    m = json.loads(manifest.read_text(encoding="utf-8"))
+    # 이미 있던 값은 추가 목록에 없어야 한다 (없을 때만 추가하므로 이번엔 추가한 게 없다).
+    assert "CLAUDE_CODE_SCROLL_SPEED" not in m["added_env"]
+
+
+def test_uninstall_removes_only_added_env(tmp_path):
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    target.write_text(json.dumps({"env": {"MY_VAR": "keep"}}), encoding="utf-8")
+    run_merge(target, manifest_path=manifest)
+    _, result = run_uninstall(target, manifest)
+    assert result["env"] == {"MY_VAR": "keep"}                # 우리가 추가한 스크롤 키만 제거
+
+
+def test_uninstall_deletes_env_object_when_it_only_held_our_key(tmp_path):
+    # env 가 원래 없었고 우리 키만 넣었다면, 되돌린 뒤 env 객체 자체가 사라져야 한다.
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    target.write_text(json.dumps({"model": "x"}), encoding="utf-8")
+    run_merge(target, manifest_path=manifest)
+    assert json.loads(target.read_text(encoding="utf-8"))["env"]["CLAUDE_CODE_SCROLL_SPEED"] == "3"
+    _, result = run_uninstall(target, manifest)
+    assert "env" not in result
+
+
+def test_uninstall_does_not_clobber_user_changed_env(tmp_path):
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    target.write_text(json.dumps({}), encoding="utf-8")
+    run_merge(target, manifest_path=manifest)            # scroll=3 설치 (없던 값)
+    s = json.loads(target.read_text(encoding="utf-8"))
+    s["env"]["CLAUDE_CODE_SCROLL_SPEED"] = "7"            # 설치 후 사용자가 바꿈
+    target.write_text(json.dumps(s), encoding="utf-8")
+    _, result = run_uninstall(target, manifest)
+    assert result["env"]["CLAUDE_CODE_SCROLL_SPEED"] == "7"   # 우리 값이 아니므로 안 건드림
+
+
 # --- 재실행(멱등)이 설치 영수증을 파괴하지 않는다 ---
 #
 # 두 번째 실행의 merge() 는 "추가한 것이 없다"는 빈 영수증을 낸다. 그걸 매니페스트에 그대로
@@ -334,8 +403,9 @@ def test_rerun_keeps_added_allow_in_manifest(tmp_path):
     run_merge(target, manifest_path=manifest)            # 멱등 재실행
     m = json.loads(manifest.read_text(encoding="utf-8"))
     assert "Bash" in m["added_allow"]
-    assert "Bash(git push *)" in m["added_deny"]
+    assert "Bash(git push --force*)" in m["added_deny"]
     assert "Skill(loop)" in m["added_ask"]
+    assert "Bash(git push *)" in m["added_ask"]
 
 
 def test_rerun_keeps_default_mode_before(tmp_path):
@@ -354,6 +424,8 @@ def test_rerun_keeps_added_scalars(tmp_path):
     run_merge(target, manifest_path=manifest)
     m = json.loads(manifest.read_text(encoding="utf-8"))
     assert m["added_scalars"] == {"model": "opus", "effortLevel": "xhigh", "language": "korean"}
+    # env 하위 관리 키도 재실행(멱등) 후에도 영수증에 보존돼야 uninstall 이 되돌릴 수 있다.
+    assert m["added_env"] == {"CLAUDE_CODE_SCROLL_SPEED": "3"}
 
 
 def test_rerun_keeps_settings_existed_before(tmp_path):
