@@ -93,9 +93,11 @@ bash scripts/setup.sh --dry-run   # 또는 .\scripts\setup.ps1 -DryRun
 | `rm`, `del`, `Remove-Item`, `rd`, `rmdir`                                                                               | 🗑️ 휴지통 이동으로 **치환** (macOS `trash` / `trash-put` / send2trash) |
 | ↳ 드라이브·홈 루트 삭제 (`C:\`, `/`, `~`)                                                                               | ⛔ **차단**                                                            |
 | ↳ 휴지통 도구 미설치 / 여러 줄 스크립트에 섞임                                                                          | ⛔ **차단** (fail-closed)                                              |
-| `git push --force`                                                                                                      | ⛔ **차단** (원격 히스토리 파괴 위험)                                  |
-| `git reset --hard`, `git clean -f*`, `git stash drop`/`clear`                                                           | ⛔ **차단** (되돌릴 수 없는 로컬 작업물 손상)                          |
-| `git push` (일반), `git branch -D`, `git checkout -- <경로>`, `git restore`                                             | ❓ **확인** (일반 push 는 로컬 변경을 손상시키지 않아 deny→ask 로 완화) |
+| **git** — 전역 옵션(`-C`/`-c` 등)을 건너뛰고 **실제 서브커맨드**를 판정해 세분화 (`git stash push` 같은 안전 명령 오탐 방지) | ↓ 아래 세분화 |
+| `git push --force`/`-f`, `reset --hard`, `clean -f*`(`-n`/`--dry-run` 제외), `stash drop`/`clear`, `filter-branch`/`filter-repo`, `reflog expire`/`delete` | ⛔ **차단** (되돌릴 수 없는 히스토리/작업물 손상) |
+| `git push`(일반), `branch -D`, `checkout -f`/`switch -f`(강제 전환), `gc --prune=now`/`all`                             | ❓ **확인**                                                            |
+| `git checkout -- <경로>` / `checkout .` / `restore`(워킹트리)                                                            | 🗂️ `git stash`로 보존 후 실행 (**자동치환**, `pop`으로 복구)          |
+| `git stash push`/`pop`/`apply`/`list`, `reset --soft`/`--mixed`, `clean -n`, `branch -d`, `checkout`/`switch <브랜치>`, `restore --staged` | ✅ 통과 (안전) |
 | `format` / `diskpart` / `mkfs*` / `newfs_*` / `fdisk` / `parted` / `wipefs` / `Clear-Disk` / `Format-Volume` / `dd of=` | ⛔ **차단**                                                            |
 | `diskutil` 파괴적 서브커맨드 (`eraseDisk`, `eraseVolume`, `secureErase`, `partitionDisk`, `apfs deleteContainer` 등)    | ⛔ **차단**                                                            |
 | `/dev/sd*`·`/dev/disk*` 등 블록 디바이스로의 리다이렉트, 포크밤 `:(){ :\|:& };:`                                        | ⛔ **차단**                                                            |

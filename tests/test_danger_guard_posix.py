@@ -145,6 +145,85 @@ def test_git_checkout_multiline_asks(run_hook):
     assert d == "ask"
 
 
+# --- git 서브커맨드 세분화: 안전한 명령은 통과, 위험한 것만 게이팅 ---
+
+@pytest.mark.parametrize("cmd", [
+    "git stash push -m wip",          # 회귀: 작업을 저장하는 안전한 명령 (예전엔 push 매칭으로 오탐)
+    "git stash push -- src/a.py",
+    "git stash save wip",
+    "git stash pop",
+    "git stash apply",
+    "git stash list",
+    "git stash show",
+    "git reset --soft HEAD~1",         # 작업 트리 보존
+    "git reset --mixed HEAD",
+    "git reset HEAD file.py",
+    "git clean -n",                    # dry-run: 삭제 안 함
+    "git clean --dry-run",
+    "git clean -nf",                   # dry-run 이 force 를 이긴다
+    "git branch -d merged",            # 안전 삭제 (병합된 것만)
+    "git branch --list",
+    "git checkout main",               # 브랜치 전환 (충돌 시 git 이 거부)
+    "git switch develop",
+    "git restore --staged file.py",    # 인덱스만: 손실 없음
+    "git reflog show",
+    "git gc",
+    "git help push",                   # 서브커맨드는 help
+    "git -C /repo stash push",         # 전역 옵션 뒤 서브커맨드도 정확히 판정
+    "git -c user.name=x commit -m y",
+    "git subtree push --prefix=d origin gh-pages",   # 서브커맨드는 subtree, push 아님
+])
+def test_safe_git_commands_pass(run_hook, cmd):
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d is None, f"expected pass for {cmd}"
+
+
+@pytest.mark.parametrize("cmd", [
+    "git stash drop",
+    "git stash clear",
+    "git reset --hard HEAD~1",
+    "git clean -fd",
+    "git clean -fdx",
+    "git filter-branch --tree-filter x HEAD",
+    "git filter-repo --path x",
+    "git reflog expire --expire=now --all",
+    "git reflog delete HEAD@{0}",
+])
+def test_destructive_git_commands_denied(run_hook, cmd):
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d == "deny", f"expected deny for {cmd}"
+
+
+@pytest.mark.parametrize("cmd", [
+    "git push origin main",            # 일반 push: 원격 반영, 손상 없음 → ask
+    "git -C /repo push origin main",
+    "git branch -D feature",           # 미병합 브랜치 강제 삭제 (reflog 복구)
+    "git checkout -f main",            # 강제 전환: 로컬 변경 폐기
+    "git switch -f main",
+    "git switch --discard-changes main",
+    "git checkout -f clean",           # 회귀: 'clean' 이 인자여도 clean-deny 로 오탐하면 안 됨 → ask
+    "git gc --prune=now",              # 도달 불가 객체 영구 삭제
+    "git gc --prune=all",
+])
+def test_recoverable_or_outward_git_commands_ask(run_hook, cmd):
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d == "ask", f"expected ask for {cmd}"
+
+
+def test_git_checkout_dot_stash_prepended(run_hook):
+    # git checkout . (현재 디렉터리 전체 폐기) 도 stash 로 보존 후 실행.
+    d, payload, _ = run_hook(HOOK, bash("git checkout ."))
+    assert d == "allow"
+    assert payload["hookSpecificOutput"]["updatedInput"]["command"] == \
+        "git stash push -- . && git checkout ."
+
+
+def test_git_stash_push_never_asks_even_chained(run_hook):
+    # 회귀: 체이닝 안의 git stash push 도 안전해야 한다 (push 매칭 오탐 방지).
+    d, *_ = run_hook(HOOK, bash("git add -A && git stash push -m wip"))
+    assert d is None
+
+
 def test_sudo_rm_root_denied(run_hook):
     # sudo 접두어를 벗겨서 실제 명령(rm -rf /)을 검사해야 한다.
     d, *_ = run_hook(HOOK, bash("sudo rm -rf /"))

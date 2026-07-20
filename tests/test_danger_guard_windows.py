@@ -93,6 +93,55 @@ def test_restart_computer_asks(run_hook):
     assert d == "ask"
 
 
+# --- git 서브커맨드 세분화 (Bash + PowerShell 툴 모두 동일 규칙) ---
+
+@pytest.mark.parametrize("cmd", [
+    "git stash push -m wip",          # 회귀: 안전한 저장 명령
+    "git stash pop",
+    "git reset --soft HEAD~1",
+    "git clean -n",
+    "git branch -d merged",
+    "git checkout main",
+    "git switch develop",
+    "git restore --staged file.py",
+    "git gc",
+    "git -C /repo stash push",
+])
+def test_ps_safe_git_commands_pass(run_hook, cmd):
+    d, *_ = run_hook(HOOK, ps(cmd))
+    assert d is None, f"expected pass for {cmd}"
+
+
+def test_bash_git_stash_push_passes(run_hook):
+    # 회귀(핵심): git stash push 가 push 매칭으로 오탐되던 문제.
+    d, *_ = run_hook(HOOK, bash("git stash push -m wip"))
+    assert d is None
+
+
+@pytest.mark.parametrize("cmd", [
+    "git stash drop",
+    "git reset --hard HEAD~1",
+    "git clean -fd",
+    "git filter-branch --tree-filter x HEAD",
+    "git reflog expire --expire=now --all",
+])
+def test_ps_destructive_git_commands_denied(run_hook, cmd):
+    d, *_ = run_hook(HOOK, ps(cmd))
+    assert d == "deny", f"expected deny for {cmd}"
+
+
+@pytest.mark.parametrize("cmd", [
+    "git push origin main",
+    "git branch -D feature",
+    "git checkout -f main",
+    "git switch -f main",
+    "git gc --prune=now",
+])
+def test_ps_recoverable_or_outward_git_commands_ask(run_hook, cmd):
+    d, *_ = run_hook(HOOK, ps(cmd))
+    assert d == "ask", f"expected ask for {cmd}"
+
+
 def test_safe_ls_passes(run_hook):
     d, *_ = run_hook(HOOK, bash("ls -la"))
     assert d is None
