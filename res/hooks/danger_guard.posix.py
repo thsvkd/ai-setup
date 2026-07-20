@@ -9,8 +9,10 @@ danger_guard.py — PreToolUse hook (Claude Code, Bash 툴 대상, 유저 레벨
      단, 루트 경로(/, ~, $HOME, 와일드카드 포함) 삭제 시도는 즉시 deny.
      휴지통 도구가 하나도 없으면 치환할 수 없으므로 fail-closed 로 deny.
      멀티라인 또는 체이닝(&&/;) 스크립트 안에 섞여 있으면 자동 치환 대신 deny.
-  2) git push / git push --force / git reset --hard / git clean -f* / git stash drop|clear → deny
-     git branch -D / git checkout -- <path> / git restore → ask (되돌릴 수 없는 변경 손실 가능성)
+  2) git push --force / git reset --hard / git clean -f* / git stash drop|clear → deny
+     (되돌릴 수 없이 로컬 작업물이나 원격 히스토리를 손상시키는 명령만 deny 한다.)
+     git push (일반) / git branch -D / git checkout -- <path> / git restore → ask
+     (일반 push 는 원격에 반영될 뿐 커밋된/작업중 변경을 손상시키지 않으므로 deny 가 아니라 ask.)
   3) dd of=... / mkfs* / newfs_* / wipefs / fdisk / parted → deny
      diskutil 의 파괴적 서브커맨드(eraseDisk, eraseVolume, secureErase, partitionDisk,
      apfs deleteContainer 등) → deny
@@ -260,7 +262,7 @@ def main() -> None:
                 if "push" in args and any(f in args for f in ("--force", "-f", "--force-with-lease")):
                     emit("deny", "git push --force 류는 원격 히스토리를 파괴할 수 있어 수동 실행이 필요합니다.")
                 if "push" in args:
-                    emit("deny", "git push는 수동으로 실행하세요.")
+                    emit("ask", "git push 는 원격에 반영됩니다 (로컬 변경은 손상되지 않음). 진행할까요?")
                 if "reset" in args and "--hard" in args:
                     emit("deny", "git reset --hard는 커밋되지 않은 변경사항을 되돌릴 수 없이 삭제합니다. (stash/soft 권장)")
                 if "clean" in args and any(f in args for f in ("-f", "-fd", "-fx", "-fdx", "-xdf", "--force")):
