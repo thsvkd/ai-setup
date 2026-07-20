@@ -162,10 +162,12 @@ tests/                      # pytest(훅·병합) + bats(bash) + Pester(PowerShe
 
 ## 개발 · 테스트
 
-가드 훅과 병합 엔진은 블랙박스로 테스트한다 (JSON을 stdin으로 넣고 판정을 검증).
+가드 훅과 병합 엔진은 블랙박스로 테스트한다 (JSON을 stdin으로 넣고 판정을 검증). git 정책은
+판정뿐 아니라 **실제 git 저장소에서 실측**한다 — 자동치환(stash-prepend)이 진짜로 작업을
+보존·복구하는지, 안전 판정한 명령이 정말 안전한지까지 확인한다 ([`tests/test_git_guard_realworld.py`](tests/test_git_guard_realworld.py)).
 
 ```sh
-python -m pytest tests/                 # 훅 정책 + 병합 엔진 + 셋업 스크립트 (Python)
+python -m pytest tests/                 # 훅 정책 + git 실측 + 병합 엔진 + 셋업 스크립트 (Python)
 bats tests/setup.bats                    # 셋업 스크립트 (선택 — bats-core 필요)
 ```
 ```powershell
