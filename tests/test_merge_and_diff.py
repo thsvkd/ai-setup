@@ -37,10 +37,14 @@ def test_merge_into_empty(tmp_path):
     assert proc.returncode == 0
     assert result["permissions"]["defaultMode"] == "auto"
     assert "Bash" in result["permissions"]["allow"]
-    # force push / reset --hard 는 여전히 deny, 일반 push 는 ask 로 완화됐다.
-    assert "Bash(git push --force*)" in result["permissions"]["deny"]
-    assert "Bash(git reset --hard *)" in result["permissions"]["deny"]
-    assert "Bash(git push *)" in result["permissions"]["ask"]
+    # force push/reset --hard 를 permissions.deny 로 막지 않는다 — 훅(danger_guard.py)이 브랜치
+    # 이름 기준 ask/통과와 백업-후-허용을 직접 판단하므로, 여기서 deny/ask 로 선점하면 훅의
+    # 판정(allow)이 permission 규칙에 의해 항상 밀린다(Claude Code 는 deny/ask 규칙이 훅보다
+    # 우선한다). 그래서 settings.json 자체에는 git 관련 deny/ask 항목이 없어야 한다.
+    assert "deny" not in result["permissions"] or not any(
+        "git" in rule for rule in result["permissions"].get("deny", [])
+    )
+    assert not any("git" in rule for rule in result["permissions"].get("ask", []))
 
 
 def test_placeholders_substituted(tmp_path):
@@ -403,9 +407,8 @@ def test_rerun_keeps_added_allow_in_manifest(tmp_path):
     run_merge(target, manifest_path=manifest)            # 멱등 재실행
     m = json.loads(manifest.read_text(encoding="utf-8"))
     assert "Bash" in m["added_allow"]
-    assert "Bash(git push --force*)" in m["added_deny"]
+    assert not m["added_deny"]           # git 관련 deny 규칙은 더 이상 없다(훅이 직접 판단)
     assert "Skill(loop)" in m["added_ask"]
-    assert "Bash(git push *)" in m["added_ask"]
 
 
 def test_rerun_keeps_default_mode_before(tmp_path):

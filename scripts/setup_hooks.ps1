@@ -144,8 +144,9 @@ Write-Host "[4/4] 셀프테스트 실행..." -ForegroundColor Yellow
 
 Invoke-HookSelfTest -HookPath (Join-Path $hooksDir "danger_guard.py") -PyExe $py.Exe -PyArgs $py.Args -Cases @(
     @{ Label = "rm -rf temp/  → 휴지통 치환 기대"; Json = '{"tool_name":"Bash","tool_input":{"command":"rm -rf temp/"}}' },
-    @{ Label = "git push --force → deny 기대";      Json = '{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}' },
-    @{ Label = "PowerShell + git push --force → deny 기대"; Json = '{"tool_name":"PowerShell","tool_input":{"command":"git push --force origin main"}}' },
+    @{ Label = "git push --force origin main → ask 기대 (보호 브랜치)"; Json = '{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}' },
+    @{ Label = "PowerShell + git push origin feature/x → 통과 기대 (곁다리 브랜치)"; Json = '{"tool_name":"PowerShell","tool_input":{"command":"git push origin feature/x"}}' },
+    @{ Label = "git reset --hard → allow+백업 기대"; Json = '{"tool_name":"Bash","tool_input":{"command":"git reset --hard HEAD"}}' },
     @{ Label = "Remove-Item -Recurse -Force C:\ → deny 기대"; Json = '{"tool_name":"PowerShell","tool_input":{"command":"Remove-Item -Recurse -Force C:\\"}}' },
     @{ Label = "ls -la → 통과(무판단) 기대";          Json = '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' }
 )
