@@ -38,86 +38,155 @@ def test_rm_home_denied(run_hook):
     assert d == "deny"
 
 
-def test_git_push_force_denied(run_hook):
-    d, *_ = run_hook(HOOK, bash("git push --force origin main"))
-    assert d == "deny"
+def assert_backup_then(payload, decision, original_suffix):
+    """이제 위험한 git 명령은 대부분 deny/ask 가 아니라 'refs/claude-backups/ 에 백업 후 원본을
+    그대로 실행'하는 allow + updatedInput 으로 처리된다. 백업 스니펫 자체는 date 기반 타임스탬프를
+    포함해 비결정적이므로, 정확한 문자열이 아니라 (a) refs/claude-backups/ 를 쓰는지, (b) 원본
+    명령이 손상 없이 맨 끝에 그대로 남아있는지만 검증한다."""
+    assert decision == "allow"
+    new_command = payload["hookSpecificOutput"]["updatedInput"]["command"]
+    assert "refs/claude-backups/" in new_command
+    assert new_command.endswith(" && " + original_suffix), new_command
 
 
-def test_git_push_asks(run_hook):
-    # 완화: 일반 push 는 로컬 변경을 손상시키지 않으므로 deny 가 아니라 ask 로 게이팅한다.
-    d, *_ = run_hook(HOOK, bash("git push origin main"))
+def test_git_push_force_to_side_branch_passes(run_hook):
+    # feature/*, fix/* 같은 곁다리 브랜치는 force push 여도 그냥 통과한다.
+    d, *_ = run_hook(HOOK, bash("git push --force origin feature/foo"))
+    assert d is None
+
+
+def test_git_push_force_to_protected_branch_asks(run_hook):
+    # '/' 가 없는 브랜치(main 등)는 force push 여도 deny 가 아니라 브랜치 이름을 명시하며 ask.
+    d, payload, _ = run_hook(HOOK, bash("git push --force origin main"))
+    assert d == "ask"
+    assert "main" in payload["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_git_push_to_protected_branch_asks(run_hook):
+    d, payload, _ = run_hook(HOOK, bash("git push origin main"))
+    assert d == "ask"
+    assert "main" in payload["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_git_push_to_side_branch_passes(run_hook):
+    d, *_ = run_hook(HOOK, bash("git push origin feature/foo"))
+    assert d is None
+
+
+def test_git_push_broad_all_asks(run_hook):
+    d, *_ = run_hook(HOOK, bash("git push --all origin"))
     assert d == "ask"
 
 
-def test_git_reset_hard_denied(run_hook):
-    d, *_ = run_hook(HOOK, bash("git reset --hard HEAD~1"))
-    assert d == "deny"
+def test_git_reset_hard_backs_up_then_allows(run_hook):
+    d, payload, _ = run_hook(HOOK, bash("git reset --hard HEAD~1"))
+    assert_backup_then(payload, d, "git reset --hard HEAD~1")
 
 
-def test_git_stash_drop_denied(run_hook):
-    d, *_ = run_hook(HOOK, bash("git stash drop"))
-    assert d == "deny"
+def test_git_stash_drop_backs_up_then_allows(run_hook):
+    d, payload, _ = run_hook(HOOK, bash("git stash drop"))
+    assert_backup_then(payload, d, "git stash drop")
 
 
-def test_git_stash_clear_denied(run_hook):
-    d, *_ = run_hook(HOOK, bash("git stash clear"))
-    assert d == "deny"
+def test_git_stash_clear_backs_up_then_allows(run_hook):
+    d, payload, _ = run_hook(HOOK, bash("git stash clear"))
+    assert_backup_then(payload, d, "git stash clear")
 
 
-def test_git_branch_force_delete_asks(run_hook):
-    d, *_ = run_hook(HOOK, bash("git branch -D feature"))
-    assert d == "ask"
+def test_git_branch_force_delete_backs_up_then_allows(run_hook):
+    d, payload, _ = run_hook(HOOK, bash("git branch -D feature"))
+    assert_backup_then(payload, d, "git branch -D feature")
 
 
-def test_git_restore_substitutes_with_stash(run_hook):
-    # 동작 변경: git restore 는 이제 ask 대신 앞에 git stash push 를 붙여 자동치환한다.
+def test_git_branch_move_force_backs_up_when_target_exists(run_hook):
+    d, payload, _ = run_hook(HOOK, bash("git branch -M other feat"))
+    assert_backup_then(payload, d, "git branch -M other feat")
+
+
+def test_git_tag_delete_backs_up_then_allows(run_hook):
+    d, payload, _ = run_hook(HOOK, bash("git tag -d v1"))
+    assert_backup_then(payload, d, "git tag -d v1")
+
+
+def test_git_tag_force_backs_up_then_allows(run_hook):
+    d, payload, _ = run_hook(HOOK, bash("git tag -f v1"))
+    assert_backup_then(payload, d, "git tag -f v1")
+
+
+def test_git_rebase_backs_up_then_allows(run_hook):
+    d, payload, _ = run_hook(HOOK, bash("git rebase main"))
+    assert_backup_then(payload, d, "git rebase main")
+
+
+def test_git_rebase_continue_passes(run_hook):
+    d, *_ = run_hook(HOOK, bash("git rebase --continue"))
+    assert d is None
+
+
+def test_git_commit_amend_backs_up_then_allows(run_hook):
+    d, payload, _ = run_hook(HOOK, bash("git commit --amend -m fix"))
+    assert_backup_then(payload, d, "git commit --amend -m fix")
+
+
+def test_git_filter_branch_backs_up_then_allows(run_hook):
+    d, payload, _ = run_hook(HOOK, bash("git filter-branch --tree-filter x HEAD"))
+    assert_backup_then(payload, d, "git filter-branch --tree-filter x HEAD")
+
+
+def test_git_reflog_expire_backs_up_then_allows(run_hook):
+    d, payload, _ = run_hook(HOOK, bash("git reflog expire --expire=now --all"))
+    assert_backup_then(payload, d, "git reflog expire --expire=now --all")
+
+
+def test_git_gc_prune_now_backs_up_then_allows(run_hook):
+    d, payload, _ = run_hook(HOOK, bash("git gc --prune=now"))
+    assert_backup_then(payload, d, "git gc --prune=now")
+
+
+def test_git_checkout_force_backs_up_then_allows(run_hook):
+    d, payload, _ = run_hook(HOOK, bash("git checkout -f main"))
+    assert_backup_then(payload, d, "git checkout -f main")
+
+
+def test_git_switch_force_backs_up_then_allows(run_hook):
+    d, payload, _ = run_hook(HOOK, bash("git switch -f main"))
+    assert_backup_then(payload, d, "git switch -f main")
+
+
+def test_git_restore_substitutes_with_backup(run_hook):
+    # 동작 변경: git restore 는 ask 대신 refs/claude-backups/ 에 백업 후 원본을 그대로 실행한다.
     d, payload, _ = run_hook(HOOK, bash("git restore src/main.py"))
-    assert d == "allow"
-    assert payload["hookSpecificOutput"]["updatedInput"]["command"] == \
-        "git stash push -- src/main.py && git restore src/main.py"
+    assert_backup_then(payload, d, "git restore src/main.py")
 
 
-def test_git_checkout_index_stash_prepended(run_hook):
-    # git checkout -- file.txt (인덱스 기준 되돌리기) → stash 로 보존 후 원본 실행.
+def test_git_checkout_index_backup_prepended(run_hook):
+    # git checkout -- file.txt (인덱스 기준 되돌리기) → 백업 후 원본 실행.
     d, payload, _ = run_hook(HOOK, bash("git checkout -- file.txt"))
-    assert d == "allow"
-    assert payload["hookSpecificOutput"]["updatedInput"]["command"] == \
-        "git stash push -- file.txt && git checkout -- file.txt"
+    assert_backup_then(payload, d, "git checkout -- file.txt")
 
 
-def test_git_checkout_head_stash_prepended(run_hook):
+def test_git_checkout_head_backup_prepended(run_hook):
     # 실제 계기가 된 케이스: git checkout HEAD -- <path>.
     d, payload, _ = run_hook(HOOK, bash("git checkout HEAD -- js/dropdown.js"))
-    assert d == "allow"
-    assert payload["hookSpecificOutput"]["updatedInput"]["command"] == \
-        "git stash push -- js/dropdown.js && git checkout HEAD -- js/dropdown.js"
+    assert_backup_then(payload, d, "git checkout HEAD -- js/dropdown.js")
 
 
 def test_git_checkout_other_ref_preserved(run_hook):
     # 다른 ref 에서 파일을 가져오는 케이스: 원본 명령(other-branch 포함)이 그대로 보존돼야 한다.
     d, payload, _ = run_hook(HOOK, bash("git checkout other-branch -- file.txt"))
-    assert d == "allow"
-    new_command = payload["hookSpecificOutput"]["updatedInput"]["command"]
-    assert "git checkout other-branch -- file.txt" in new_command
-    assert new_command == "git stash push -- file.txt && git checkout other-branch -- file.txt"
+    assert_backup_then(payload, d, "git checkout other-branch -- file.txt")
 
 
-def test_git_checkout_multiple_paths_stash_prepended(run_hook):
-    # 다중 경로: stash 부분에 두 경로가 모두 포함돼야 한다.
+def test_git_checkout_multiple_paths_backup_prepended(run_hook):
     d, payload, _ = run_hook(HOOK, bash("git checkout HEAD -- file1.txt file2.txt"))
-    assert d == "allow"
-    new_command = payload["hookSpecificOutput"]["updatedInput"]["command"]
-    assert new_command == \
-        "git stash push -- file1.txt file2.txt && git checkout HEAD -- file1.txt file2.txt"
+    assert_backup_then(payload, d, "git checkout HEAD -- file1.txt file2.txt")
 
 
 def test_git_restore_separated_source_value_not_path(run_hook):
     # `-s HEAD~1` 처럼 값이 분리된 옵션의 값(HEAD~1)이 경로로 오인되면 안 된다.
     # foo.txt 만 pathspec 으로 잡혀야 한다.
     d, payload, _ = run_hook(HOOK, bash("git restore -s HEAD~1 foo.txt"))
-    assert d == "allow"
-    assert payload["hookSpecificOutput"]["updatedInput"]["command"] == \
-        "git stash push -- foo.txt && git restore -s HEAD~1 foo.txt"
+    assert_backup_then(payload, d, "git restore -s HEAD~1 foo.txt")
 
 
 def test_git_checkout_pipe_smuggling_asks(run_hook):
@@ -189,33 +258,41 @@ def test_safe_git_commands_pass(run_hook, cmd):
     "git reflog expire --expire=now --all",
     "git reflog delete HEAD@{0}",
 ])
-def test_destructive_git_commands_denied(run_hook, cmd):
-    d, *_ = run_hook(HOOK, bash(cmd))
-    assert d == "deny", f"expected deny for {cmd}"
+def test_destructive_git_commands_back_up_then_allow(run_hook, cmd):
+    # 정책 변경: 되돌릴 수 없는 git 명령이라도 deny 로 막지 않고, refs/claude-backups/ 에
+    # 백업한 뒤 원본을 그대로 실행한다 — "실제로 허용 안 되는 git 명령은 없어야 한다"는 요구사항.
+    d, payload, _ = run_hook(HOOK, bash(cmd))
+    assert_backup_then(payload, d, cmd)
 
 
 @pytest.mark.parametrize("cmd", [
-    "git push origin main",            # 일반 push: 원격 반영, 손상 없음 → ask
+    "git push origin main",            # '/' 없는 브랜치 → 이름을 명시하며 ask
     "git -C /repo push origin main",
-    "git branch -D feature",           # 미병합 브랜치 강제 삭제 (reflog 복구)
-    "git checkout -f main",            # 강제 전환: 로컬 변경 폐기
-    "git switch -f main",
-    "git switch --discard-changes main",
-    "git checkout -f clean",           # 회귀: 'clean' 이 인자여도 clean-deny 로 오탐하면 안 됨 → ask
-    "git gc --prune=now",              # 도달 불가 객체 영구 삭제
-    "git gc --prune=all",
+    "git push --all origin",           # 특정 브랜치로 좁힐 수 없음 → ask
 ])
-def test_recoverable_or_outward_git_commands_ask(run_hook, cmd):
+def test_push_to_protected_or_broad_target_asks(run_hook, cmd):
     d, *_ = run_hook(HOOK, bash(cmd))
     assert d == "ask", f"expected ask for {cmd}"
 
 
-def test_git_checkout_dot_stash_prepended(run_hook):
-    # git checkout . (현재 디렉터리 전체 폐기) 도 stash 로 보존 후 실행.
+@pytest.mark.parametrize("cmd", [
+    "git branch -D feature",           # 미병합 브랜치 강제 삭제 (백업 후 허용)
+    "git checkout -f main",            # 강제 전환: 로컬 변경 폐기 (백업 후 허용)
+    "git switch -f main",
+    "git switch --discard-changes main",
+    "git checkout -f clean",           # 회귀: 'clean' 이 인자여도 clean-deny 로 오탐하면 안 됨
+    "git gc --prune=now",              # 도달 불가 객체 영구 삭제 (백업 후 허용)
+    "git gc --prune=all",
+])
+def test_recoverable_or_outward_git_commands_back_up_then_allow(run_hook, cmd):
+    d, payload, _ = run_hook(HOOK, bash(cmd))
+    assert_backup_then(payload, d, cmd)
+
+
+def test_git_checkout_dot_backup_prepended(run_hook):
+    # git checkout . (현재 디렉터리 전체 폐기) 도 백업 후 원본 실행.
     d, payload, _ = run_hook(HOOK, bash("git checkout ."))
-    assert d == "allow"
-    assert payload["hookSpecificOutput"]["updatedInput"]["command"] == \
-        "git stash push -- . && git checkout ."
+    assert_backup_then(payload, d, "git checkout .")
 
 
 def test_git_stash_push_never_asks_even_chained(run_hook):

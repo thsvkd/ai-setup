@@ -21,6 +21,18 @@ def bash(cmd):
     return {"tool_name": "Bash", "tool_input": {"command": cmd}}
 
 
+def assert_backup_then(payload, decision, original_suffix, is_bash):
+    """이제 위험한 git 명령은 deny/ask 가 아니라 'refs/claude-backups/ 에 백업 후 원본을 그대로
+    실행'하는 allow + updatedInput 으로 처리된다. 백업 스니펫은 타임스탬프를 포함해 비결정적
+    이므로, (a) refs/claude-backups/ 를 쓰는지, (b) 원본 명령이 맨 끝에 손상 없이 남아있는지만
+    검증한다. bash 는 `&&`, PowerShell(5.1 은 `&&`가 없음)은 `;` 로 원본과 이어붙인다."""
+    assert decision == "allow"
+    new_command = payload["hookSpecificOutput"]["updatedInput"]["command"]
+    assert "refs/claude-backups/" in new_command
+    join = " && " if is_bash else "; "
+    assert new_command.endswith(join + original_suffix), new_command
+
+
 def test_remove_item_drive_root_denied(run_hook):
     d, *_ = run_hook(HOOK, ps("Remove-Item -Recurse -Force C:\\"))
     assert d == "deny"
@@ -32,25 +44,38 @@ def test_remove_item_quoted_drive_root_denied(run_hook):
     assert d == "deny"
 
 
-def test_ps_git_push_force_denied(run_hook):
-    d, *_ = run_hook(HOOK, ps("git push --force origin main"))
-    assert d == "deny"
+def test_ps_git_push_force_to_side_branch_passes(run_hook):
+    # feature/*, fix/* 같은 곁다리 브랜치는 force push 여도 그냥 통과한다.
+    d, *_ = run_hook(HOOK, ps("git push --force origin feature/foo"))
+    assert d is None
 
 
-def test_bash_git_push_asks(run_hook):
-    # 완화: 일반 push 는 로컬 변경을 손상시키지 않으므로 deny 가 아니라 ask 로 게이팅한다.
-    d, *_ = run_hook(HOOK, bash("git push origin main"))
+def test_ps_git_push_force_to_protected_branch_asks(run_hook):
+    # '/' 가 없는 브랜치(main 등)는 force push 여도 deny 가 아니라 브랜치 이름을 명시하며 ask.
+    d, payload, _ = run_hook(HOOK, ps("git push --force origin main"))
     assert d == "ask"
+    assert "main" in payload["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_drop_denied(run_hook):
-    d, *_ = run_hook(HOOK, ps("git stash drop"))
-    assert d == "deny"
-
-
-def test_git_branch_force_delete_asks(run_hook):
-    d, *_ = run_hook(HOOK, ps("git branch -D feature"))
+def test_bash_git_push_to_protected_branch_asks(run_hook):
+    d, payload, _ = run_hook(HOOK, bash("git push origin main"))
     assert d == "ask"
+    assert "main" in payload["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_bash_git_push_to_side_branch_passes(run_hook):
+    d, *_ = run_hook(HOOK, bash("git push origin feature/foo"))
+    assert d is None
+
+
+def test_ps_git_stash_drop_backs_up_then_allows(run_hook):
+    d, payload, _ = run_hook(HOOK, ps("git stash drop"))
+    assert_backup_then(payload, d, "git stash drop", is_bash=False)
+
+
+def test_ps_git_branch_force_delete_backs_up_then_allows(run_hook):
+    d, payload, _ = run_hook(HOOK, ps("git branch -D feature"))
+    assert_backup_then(payload, d, "git branch -D feature", is_bash=False)
 
 
 def test_clear_disk_denied(run_hook):
@@ -125,21 +150,27 @@ def test_bash_git_stash_push_passes(run_hook):
     "git filter-branch --tree-filter x HEAD",
     "git reflog expire --expire=now --all",
 ])
-def test_ps_destructive_git_commands_denied(run_hook, cmd):
-    d, *_ = run_hook(HOOK, ps(cmd))
-    assert d == "deny", f"expected deny for {cmd}"
+def test_ps_destructive_git_commands_back_up_then_allow(run_hook, cmd):
+    # 정책 변경: deny 가 아니라 refs/claude-backups/ 에 백업한 뒤 원본을 그대로 실행한다.
+    d, payload, _ = run_hook(HOOK, ps(cmd))
+    assert_backup_then(payload, d, cmd, is_bash=False)
 
 
 @pytest.mark.parametrize("cmd", [
-    "git push origin main",
     "git branch -D feature",
     "git checkout -f main",
     "git switch -f main",
     "git gc --prune=now",
 ])
-def test_ps_recoverable_or_outward_git_commands_ask(run_hook, cmd):
-    d, *_ = run_hook(HOOK, ps(cmd))
-    assert d == "ask", f"expected ask for {cmd}"
+def test_ps_recoverable_or_outward_git_commands_back_up_then_allow(run_hook, cmd):
+    d, payload, _ = run_hook(HOOK, ps(cmd))
+    assert_backup_then(payload, d, cmd, is_bash=False)
+
+
+def test_ps_git_push_to_protected_branch_still_asks(run_hook):
+    # push 는 별도 정책(브랜치 이름 기준)이라 backup 이 아니라 ask 로 남는다.
+    d, *_ = run_hook(HOOK, ps("git push origin main"))
+    assert d == "ask"
 
 
 def test_safe_ls_passes(run_hook):
@@ -274,37 +305,28 @@ def test_bash_pipe_false_positives_pass(run_hook, cmd):
 
 # --- git checkout/restore: stash-prepend 자동치환 (되돌리기 전 uncommitted 변경 보존) ---
 
-def test_ps_git_checkout_head_stash_prepended(run_hook):
-    # PowerShell: git checkout HEAD -- <path> → stash 로 보존 후 원본 실행 (경로는 PS 따옴표).
+def test_ps_git_checkout_head_backup_prepended(run_hook):
+    # PowerShell: git checkout HEAD -- <path> → refs/claude-backups/ 에 백업 후 원본 실행.
     d, payload, _ = run_hook(HOOK, ps("git checkout HEAD -- file.txt"))
-    assert d == "allow"
-    assert payload["hookSpecificOutput"]["updatedInput"]["command"] == \
-        "git stash push -- 'file.txt' && git checkout HEAD -- file.txt"
+    assert_backup_then(payload, d, "git checkout HEAD -- file.txt", is_bash=False)
 
 
-def test_bash_git_checkout_head_stash_prepended(run_hook):
-    # Bash(Git Bash on Windows): git checkout HEAD -- <path> → 경로는 shlex 따옴표 규칙.
+def test_bash_git_checkout_head_backup_prepended(run_hook):
+    # Bash(Git Bash on Windows): git checkout HEAD -- <path>.
     d, payload, _ = run_hook(HOOK, bash("git checkout HEAD -- file.txt"))
-    assert d == "allow"
-    assert payload["hookSpecificOutput"]["updatedInput"]["command"] == \
-        "git stash push -- file.txt && git checkout HEAD -- file.txt"
+    assert_backup_then(payload, d, "git checkout HEAD -- file.txt", is_bash=True)
 
 
 def test_ps_git_checkout_other_ref_preserved(run_hook):
     # 다른 ref 케이스: 원본 명령(other-branch 포함)이 그대로 보존돼야 한다.
     d, payload, _ = run_hook(HOOK, ps("git checkout other-branch -- file.txt"))
-    assert d == "allow"
-    new_command = payload["hookSpecificOutput"]["updatedInput"]["command"]
-    assert "git checkout other-branch -- file.txt" in new_command
-    assert new_command == "git stash push -- 'file.txt' && git checkout other-branch -- file.txt"
+    assert_backup_then(payload, d, "git checkout other-branch -- file.txt", is_bash=False)
 
 
-def test_ps_git_restore_stash_prepended(run_hook):
-    # PowerShell: git restore <path> → stash 로 보존 후 원본 실행.
+def test_ps_git_restore_backup_prepended(run_hook):
+    # PowerShell: git restore <path> → refs/claude-backups/ 에 백업 후 원본 실행.
     d, payload, _ = run_hook(HOOK, ps("git restore file.txt"))
-    assert d == "allow"
-    assert payload["hookSpecificOutput"]["updatedInput"]["command"] == \
-        "git stash push -- 'file.txt' && git restore file.txt"
+    assert_backup_then(payload, d, "git restore file.txt", is_bash=False)
 
 
 def test_ps_git_checkout_pipe_smuggling_asks(run_hook):

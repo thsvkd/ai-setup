@@ -25,11 +25,12 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def hook_result(command: str) -> tuple:
-    """(decision, substituted_command) 를 반환. 통과면 (None, None)."""
+def hook_result(command: str, cwd: str = "") -> tuple:
+    """(decision, substituted_command) 를 반환. 통과면 (None, None). cwd 를 주면 push 의
+    브랜치 판정(현재 브랜치 조회)이 그 저장소를 기준으로 동작한다."""
     proc = subprocess.run(
         [sys.executable, "-X", "utf8", str(HOOK)],
-        input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
+        input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd}),
         capture_output=True, text=True, encoding="utf-8",
     )
     out = (proc.stdout or "").strip()
@@ -37,6 +38,26 @@ def hook_result(command: str) -> tuple:
         return None, None
     hso = json.loads(out)["hookSpecificOutput"]
     return hso["permissionDecision"], hso.get("updatedInput", {}).get("command")
+
+
+def backup_refs(repo):
+    """(refname, hash) 쌍 목록. _backup_head_and_worktree 는 .../head(HEAD 커밋)와
+    .../worktree(스태시 커밋) 둘 다 만들 수 있어, 복구 테스트는 이름으로 정확히 골라야 한다
+    (아무거나 하나 집으면 head 커밋을 stash apply 하려다 'not a stash-like commit' 로 실패한다)."""
+    r = run_in(repo, "git for-each-ref refs/claude-backups/ --format='%(refname) %(objectname)'")
+    pairs = []
+    for line in r.stdout.splitlines():
+        if line.strip():
+            ref, _, h = line.strip().partition(" ")
+            pairs.append((ref, h))
+    return pairs
+
+
+def worktree_backup_hash(pairs):
+    for ref, h in pairs:
+        if ref.endswith("/worktree") or ref.endswith("/snapshot"):
+            return h
+    return None
 
 
 @pytest.fixture
@@ -84,13 +105,18 @@ def test_plain_checkout_destroys_work_but_substitution_preserves(repo):
     (repo / "tracked.txt").write_text("line1\nPRECIOUS\n", encoding="utf-8")
     decision, new_cmd = hook_result("git checkout -- tracked.txt")
     assert decision == "allow"
-    assert new_cmd == "git stash push -- tracked.txt && git checkout -- tracked.txt"
+    assert "refs/claude-backups/" in new_cmd
+    assert new_cmd.endswith(" && git checkout -- tracked.txt")
+    before = set(backup_refs(repo))
     run_in(repo, new_cmd)
     # checkout 목적(작업트리 HEAD 로 복원)은 달성되고,
     assert run_in(repo, "git diff --quiet").returncode == 0
-    # 잃을 뻔한 변경은 stash 에 보존되어 pop 으로 복구된다 → 데이터 손실 0.
-    assert run_in(repo, "git stash list").stdout.strip() != ""
-    run_in(repo, "git stash pop -q")
+    # 잃을 뻔한 변경은 refs/claude-backups/ 에 stash 커밋으로 보존된다 → 데이터 손실 0.
+    after = set(backup_refs(repo)) - before
+    h = worktree_backup_hash(after)
+    assert h, "새 worktree 백업 ref 가 생겨야 한다"
+    restore = run_in(repo, f"git stash apply {h}")
+    assert restore.returncode == 0, restore.stderr
     assert "PRECIOUS" in (repo / "tracked.txt").read_text(encoding="utf-8")
 
 
@@ -98,10 +124,15 @@ def test_checkout_dot_substitution_preserves(repo):
     (repo / "tracked.txt").write_text("line1\nDOTCHANGE\n", encoding="utf-8")
     decision, new_cmd = hook_result("git checkout .")
     assert decision == "allow"
-    assert new_cmd == "git stash push -- . && git checkout ."
+    assert "refs/claude-backups/" in new_cmd
+    assert new_cmd.endswith(" && git checkout .")
+    before = set(backup_refs(repo))
     run_in(repo, new_cmd)
     assert run_in(repo, "git diff --quiet").returncode == 0
-    run_in(repo, "git stash pop -q")
+    after = set(backup_refs(repo)) - before
+    h = worktree_backup_hash(after)
+    assert h
+    run_in(repo, f"git stash apply {h}")
     assert "DOTCHANGE" in (repo / "tracked.txt").read_text(encoding="utf-8")
 
 
@@ -115,29 +146,53 @@ def test_restore_staged_passes_and_only_unstages(repo):
     assert "staged" in (repo / "tracked.txt").read_text(encoding="utf-8")  # 워킹 변경 보존
 
 
-def test_reset_hard_denied_and_would_destroy(repo):
+def test_reset_hard_backs_up_then_actually_destroys_and_is_recoverable(repo):
+    # 정책 변경: deny 가 아니라 refs/claude-backups/ 에 백업한 뒤 원본을 그대로 실행한다.
     (repo / "tracked.txt").write_text("line1\nuncommitted\n", encoding="utf-8")
-    decision, _ = hook_result("git reset --hard HEAD")
-    assert decision == "deny"
-    # 훅을 우회해 실제로 실행하면 변경이 파괴됨을 확인 → deny 정당성 입증.
-    run_in(repo, "git reset --hard HEAD -q")
+    decision, new_cmd = hook_result("git reset --hard HEAD")
+    assert decision == "allow"
+    assert "refs/claude-backups/" in new_cmd
+    assert new_cmd.endswith(" && git reset --hard HEAD")
+
+    before = set(backup_refs(repo))
+    run_in(repo, new_cmd)
+    # reset --hard 자체는 실제로 파괴적이어야 한다(백업이 그 사실 자체를 바꾸진 않음).
     assert "uncommitted" not in (repo / "tracked.txt").read_text(encoding="utf-8")
+    # 하지만 이제는 백업 ref 로 복구가 가능해야 한다 (head 는 순수 커밋, worktree 가 stash 커밋).
+    after = set(backup_refs(repo)) - before
+    h = worktree_backup_hash(after)
+    assert h, "새 worktree 백업 ref 가 생겨야 한다"
+    restore = run_in(repo, f"git stash apply {h}")
+    assert restore.returncode == 0, restore.stderr
+    assert "uncommitted" in (repo / "tracked.txt").read_text(encoding="utf-8")
 
 
-def test_clean_force_denied_dryrun_passes(repo):
+def test_clean_force_backs_up_then_allows_dryrun_still_passes(repo):
     (repo / "junk.txt").write_text("x", encoding="utf-8")   # untracked
-    assert hook_result("git clean -fd")[0] == "deny"
+    decision, new_cmd = hook_result("git clean -fd")
+    assert decision == "allow"
+    assert "refs/claude-backups/" in new_cmd
+    assert new_cmd.endswith(" && git clean -fd")
+
+    before = set(backup_refs(repo))
+    run_in(repo, new_cmd)
+    assert not (repo / "junk.txt").exists(), "clean 자체는 실제로 파일을 지워야 한다"
+    after = set(backup_refs(repo)) - before
+    h = worktree_backup_hash(after)
+    assert h, "untracked 파일까지 포함한 스냅샷 백업 ref 가 생겨야 한다"
+    assert "junk.txt" in run_in(repo, f"git ls-tree -r {h} --name-only").stdout
+
     assert hook_result("git clean -n")[0] is None
     run_in(repo, "git clean -n")                             # dry-run: 삭제 안 함
-    assert (repo / "junk.txt").exists()
 
 
-def test_checkout_force_to_branch_named_clean_asks_not_deny(repo):
+def test_checkout_force_to_branch_named_clean_backs_up_not_deny(repo):
     # 회귀: 'clean' 이라는 이름의 브랜치로 강제 전환을 clean 삭제로 오인하면 안 된다.
     run_in(repo, "git branch clean")
-    decision, _ = hook_result("git checkout -f clean")
-    assert decision == "ask"
-    run_in(repo, "git checkout -f clean")
+    decision, new_cmd = hook_result("git checkout -f clean")
+    assert decision == "allow"
+    assert "refs/claude-backups/" in new_cmd
+    run_in(repo, new_cmd)
     assert run_in(repo, "git rev-parse --abbrev-ref HEAD").stdout.strip() == "clean"
 
 

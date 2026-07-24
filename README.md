@@ -4,7 +4,7 @@ Claude Code를 **더 안전하게** 쓰기 위한 사용자 레벨(user-level) �
 위험한 명령을 자동으로 막거나 휴지통 이동으로 치환하는 **가드 훅**, 합리적인 **권한(permissions)**,
 그리고 프로젝트용 **AGENTS.md**를 Windows / macOS / Linux에 한 번에 설치한다.
 
-- 🛡️ **가드 훅** — `rm`을 휴지통 이동으로 치환, `git push --force`·`git reset --hard`·디스크 포맷·`curl | bash` 등 되돌릴 수 없는 명령을 차단, 시크릿 파일 접근 시 확인 요청
+- 🛡️ **가드 훅** — `rm`을 휴지통 이동으로 치환, 디스크 포맷·`curl | bash` 등 되돌릴 수 없는 명령을 차단, `git push`는 브랜치 이름으로 판단(곁다리 브랜치는 통과, 보호 브랜치는 확인), `git reset --hard`/`clean`/`stash drop` 등 되돌릴 수 없는 git 명령은 `refs/claude-backups/`에 백업한 뒤 그대로 실행, 시크릿 파일 접근 시 확인 요청
 - 🧩 **외과적 병합** — 권한/훅을 추가하고 `model`·`effortLevel`·`language`는 **없을 때만** 채운다. 사용자가 이미 고른 값과 그 외 키(env, statusLine 등)는 100% 보존
 - 🔁 **멱등성 · dry-run** — 몇 번을 실행해도 안전하고, `--dry-run`으로 실제 적용 전에 바뀔 내용을 미리 확인
 - 🖥️ **크로스 플랫폼** — Windows(PowerShell)와 POSIX(bash) 양쪽을 단일 소스로 관리
@@ -80,7 +80,7 @@ bash scripts/setup.sh --dry-run   # 또는 .\scripts\setup.ps1 -DryRun
 | `~/.claude/settings.json`          | 권한 + PreToolUse 훅 등록 + `model`/`effortLevel`/`language`·`env.CLAUDE_CODE_SCROLL_SPEED` 기본값(없을 때만) |
 | `./AGENTS.md`                      | (`--agentsmd` 시) 현재 폴더에 프로젝트 워크플로 규칙 — 이미 있으면 건너뜀            |
 
-`settings.json`에는 `permissions.defaultMode: "auto"`, 핵심 툴 `allow`(`Bash`, `PowerShell`, `Read(*)`, `Edit(*)`, `Write(*)`, `Agent(*)`, `WebFetch(*)` 등), `deny`(`git push --force`, `git reset --hard`), `ask`(`git push` 일반, 위험 스킬), `hooks.PreToolUse` 등록, 그리고 없을 때만 채우는 `model: "opus"` / `effortLevel: "xhigh"` / `language: "korean"` 과 `env.CLAUDE_CODE_SCROLL_SPEED: "3"`(마우스 휠 스크롤 속도, `/scroll-speed` 대응)이 병합된다. 사용자가 이미 고른 값과 그 외 최상위 키(`statusLine` 등), 그리고 사용자의 기존 `env` 키/값은 건드리지 않는다(우리가 관리하는 `env` 키만 없을 때 추가). 단일 소스는 [`res/settings.json`](res/settings.json)이며, 설치 시 python 실행 명령과 훅 경로만 치환된다.
+`settings.json`에는 `permissions.defaultMode: "auto"`, 핵심 툴 `allow`(`Bash`, `PowerShell`, `Read(*)`, `Edit(*)`, `Write(*)`, `Agent(*)`, `WebFetch(*)` 등), `ask`(위험 스킬만 — git 관련 규칙은 없음), `hooks.PreToolUse` 등록, 그리고 없을 때만 채우는 `model: "opus"` / `effortLevel: "xhigh"` / `language: "korean"` 과 `env.CLAUDE_CODE_SCROLL_SPEED: "3"`(마우스 휠 스크롤 속도, `/scroll-speed` 대응)이 병합된다. git 관련 deny/ask를 `permissions`에 두지 않는 이유는, Claude Code에서 permission의 deny/ask 규칙은 PreToolUse 훅의 판정(allow)보다 항상 우선하기 때문이다 — 여기에 `Bash(git push *)` 같은 규칙을 두면 `danger_guard.py`가 브랜치 이름을 보고 내리는 세밀한 판단(곁다리 브랜치 통과 등)이 전부 무력화된다. 그래서 git 정책은 전적으로 훅이 담당한다. 사용자가 이미 고른 값과 그 외 최상위 키(`statusLine` 등), 그리고 사용자의 기존 `env` 키/값은 건드리지 않는다(우리가 관리하는 `env` 키만 없을 때 추가). 단일 소스는 [`res/settings.json`](res/settings.json)이며, 설치 시 python 실행 명령과 훅 경로만 치환된다.
 
 ---
 
@@ -91,13 +91,13 @@ bash scripts/setup.sh --dry-run   # 또는 .\scripts\setup.ps1 -DryRun
 | 명령                                                                                                                    | 조치                                                                  |
 | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
 | `rm`, `del`, `Remove-Item`, `rd`, `rmdir`                                                                               | 🗑️ 휴지통 이동으로 **치환** (macOS `trash` / `trash-put` / send2trash) |
-| ↳ 드라이브·홈 루트 삭제 (`C:\`, `/`, `~`)                                                                               | ⛔ **차단**                                                            |
+| ↳ 드라이브·홈 루트 삭제 (`C:\`, `/`, `~`, 그리고 `$HOME` 값을 그대로 적은 절대경로)                                     | ⛔ **차단**                                                            |
 | ↳ 휴지통 도구 미설치 / 여러 줄 스크립트에 섞임                                                                          | ⛔ **차단** (fail-closed)                                              |
 | **git** — 전역 옵션(`-C`/`-c` 등)을 건너뛰고 **실제 서브커맨드**를 판정해 세분화 (`git stash push` 같은 안전 명령 오탐 방지) | ↓ 아래 세분화 |
-| `git push --force`/`-f`, `reset --hard`, `clean -f*`(`-n`/`--dry-run` 제외), `stash drop`/`clear`, `filter-branch`/`filter-repo`, `reflog expire`/`delete` | ⛔ **차단** (되돌릴 수 없는 히스토리/작업물 손상) |
-| `git push`(일반), `branch -D`, `checkout -f`/`switch -f`(강제 전환), `gc --prune=now`/`all`                             | ❓ **확인**                                                            |
-| `git checkout -- <경로>` / `checkout .` / `restore`(워킹트리)                                                            | 🗂️ `git stash`로 보존 후 실행 (**자동치환**, `pop`으로 복구)          |
-| `git stash push`/`pop`/`apply`/`list`, `reset --soft`/`--mixed`, `clean -n`, `branch -d`, `checkout`/`switch <브랜치>`, `restore --staged` | ✅ 통과 (안전) |
+| `git push` — 대상 브랜치 이름에 `/`가 있으면(`feature/*`, `fix/*` 등 곁다리 브랜치) 통과. `/`가 없으면(`main`/`master`/`develop` 등) 브랜치 이름을 명시하며 확인. `--all`/`--mirror` 처럼 특정 브랜치로 못 좁히면 확인 (force 여부는 통과/확인 판정에 영향 없음) | ✅ 통과 또는 ❓ **확인** |
+| `reset --hard`, `clean -f*`(`-n`/`--dry-run` 제외), `stash drop`/`clear`, `branch -D`/`-M`(대상 있었으면), `tag -d`/`-f`(대상 있었으면), `rebase`(새로 시작), `commit --amend`, `filter-branch`/`filter-repo`, `reflog expire`/`delete`, `gc --prune=now`/`all`, `checkout`/`switch --force`(강제 전환) | 🗂️ **`refs/claude-backups/<timestamp>/<대상>`에 백업 후 그대로 실행** (자동치환) |
+| `git checkout -- <경로>` / `checkout .` / `restore`(워킹트리)                                                            | 🗂️ 위와 동일하게 백업 후 실행 (**자동치환**)          |
+| `git stash push`/`pop`/`apply`/`list`, `reset --soft`/`--mixed`, `clean -n`, `branch -d`, `checkout`/`switch <브랜치>`, `restore --staged`, `rebase --continue`/`--abort`/`--skip` | ✅ 통과 (안전) |
 | `format` / `diskpart` / `mkfs*` / `newfs_*` / `fdisk` / `parted` / `wipefs` / `Clear-Disk` / `Format-Volume` / `dd of=` | ⛔ **차단**                                                            |
 | `diskutil` 파괴적 서브커맨드 (`eraseDisk`, `eraseVolume`, `secureErase`, `partitionDisk`, `apfs deleteContainer` 등)    | ⛔ **차단**                                                            |
 | `/dev/sd*`·`/dev/disk*` 등 블록 디바이스로의 리다이렉트, 포크밤 `:(){ :\|:& };:`                                        | ⛔ **차단**                                                            |
@@ -106,6 +106,17 @@ bash scripts/setup.sh --dry-run   # 또는 .\scripts\setup.ps1 -DryRun
 | 그 외                                                                                                                   | ✅ 통과 (판단 안 함)                                                   |
 
 `sudo <명령>`은 접두어를 벗겨 실제 명령을 위 규칙으로 검사한다. 모든 판정은 `~/.claude/hooks/guard.log`에 감사 기록으로 남는다.
+
+### 왜 git 명령을 막지 않고 백업 후 실행하는가
+
+되돌릴 수 없는 git 명령이라도 실행 자체를 막으면 에이전트가 정상적인 작업(재작업, 정리, 리베이스 등)을 진행하지 못하고 매번 사용자 승인을 기다리게 된다. 대신 실행 **직전**에 되돌릴 대상(현재 HEAD, uncommitted 변경, 삭제될 브랜치/태그/스태시, 도달 불가능해질 커밋 등)을 `refs/claude-backups/<timestamp>/<대상>` 아래에 커밋 객체로 고정해두고 원본 명령은 그대로 실행한다.
+
+- **조회**: `git for-each-ref refs/claude-backups/`
+- **복구**: 백업 종류에 따라 `git stash apply <hash>`(uncommitted 변경/스냅샷), `git branch <name> <hash>`(브랜치/태그), `git reset --hard <hash>`(HEAD 위치) 중 알맞은 걸 사용
+
+`git clean`처럼 추적 안 된 파일까지 지우는 명령은 `git stash create`가 추적 안 된 파일을 담지 못하는 한계가 있어(실측 확인), 별도 스크래치 인덱스로 추적/미추적 파일 전체를 스냅샷 커밋으로 백업한다. 멀티라인이나 `&&`/`;`로 체이닝된 명령 안에 섞여 있으면 백업 대상을 안전하게 특정할 수 없어 확인을 요청한다.
+
+`git push`만 이 백업 메커니즘 대신 브랜치 이름 기반 정책을 쓴다 — 원격 히스토리는 로컬 백업으로 보호할 수 있는 대상이 아니고, 어떤 브랜치로 반영되는지가 사용자가 알아야 할 핵심 정보이기 때문이다.
 
 ### secrets_guard — 시크릿 파일
 
