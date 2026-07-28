@@ -69,6 +69,10 @@ def fold_receipt(previous: dict, current: dict) -> dict:
     scalars.update(current.get("added_scalars") or {})
     folded["added_scalars"] = scalars
 
+    env = dict(previous.get("added_env") or {})
+    env.update(current.get("added_env") or {})
+    folded["added_env"] = env
+
     # defaultMode 는 '설치 전 원래 값'이 유일하게 중요하다. 한 번이라도 우리가 바꿨다면
     # 그 최초 값을 계속 들고 간다.
     if previous.get("default_mode_changed"):
@@ -150,6 +154,29 @@ def merge_scalars(existing: dict, fragment: dict, changes: list) -> dict:
     return added
 
 
+def merge_env(existing: dict, fragment: dict, changes: list) -> dict:
+    """env 하위의 '우리가 관리하는 키'(예: CLAUDE_CODE_SCROLL_SPEED)를 '없을 때만' 추가한다.
+    scalar 와 동일한 철학을 env 한 단계 아래에 적용한다 — env 객체 자체와 사용자의 기존 env
+    키/값은 절대 건드리지 않고, 조각에 있는 키 중 대상 env 에 없는 것만 채운다.
+    실제로 추가한 {키: 값} 을 반환한다 (uninstall 정밀 복원의 근거)."""
+    frag_env = fragment.get("env") or {}
+    if not frag_env:
+        return {}
+    existing_env = existing.get("env")
+    if not isinstance(existing_env, dict):
+        existing_env = {}
+    added = {}
+    for key, value in frag_env.items():
+        if key in existing_env:
+            continue  # 사용자가 이미 값을 갖고 있으면 보존한다.
+        existing_env[key] = value
+        added[key] = value
+        changes.append(f"env.{key}: (없음) -> {value!r}")
+    if added:
+        existing["env"] = existing_env
+    return added
+
+
 def merge(existing: dict, fragment: dict):
     """(changes, receipt) 를 반환. receipt 는 uninstall 이 정밀 복원에 쓰는 '설치 영수증'."""
     changes = []
@@ -158,12 +185,14 @@ def merge(existing: dict, fragment: dict):
         "added_deny": [],
         "added_ask": [],
         "added_scalars": {},
+        "added_env": {},
         "default_mode_before": None,
         "default_mode_after": None,
         "default_mode_changed": False,
     }
 
     receipt["added_scalars"] = merge_scalars(existing, fragment, changes)
+    receipt["added_env"] = merge_env(existing, fragment, changes)
 
     frag_perms = fragment.get("permissions", {})
     if frag_perms:
@@ -251,6 +280,24 @@ def revert_scalars(existing: dict, receipt: dict) -> list:
     return changes
 
 
+def revert_env(existing: dict, receipt: dict) -> list:
+    """설치가 '없어서 새로 추가한' env 키만 제거한다. 사용자가 원래 갖고 있던 env 키/값이나
+    설치 후 사용자가 다시 바꾼 값은 건드리지 않는다. env 가 비면 env 객체 자체를 제거한다."""
+    changes = []
+    added = receipt.get("added_env") or {}
+    env = existing.get("env")
+    if not added or not isinstance(env, dict):
+        return changes
+    for key, value in added.items():
+        # 설치 이후 사용자가 값을 또 바꿨다면 건드리지 않는다 (여전히 우리 값일 때만 제거).
+        if key in env and env[key] == value:
+            del env[key]
+            changes.append(f"env.{key} 제거 ({value!r})")
+    if not env:
+        del existing["env"]
+    return changes
+
+
 def remove_hooks(existing: dict, targets: list) -> list:
     """PreToolUse 등 hooks.* 에서, 지정한 스크립트 파일명을 참조하는 항목을 제거한다."""
     changes = []
@@ -276,7 +323,9 @@ def remove_hooks(existing: dict, targets: list) -> list:
 def top_level_diff(before: dict, after: dict):
     preserved, violated = [], []
     for k in before:
-        if k in ("permissions", "hooks"):
+        # permissions/hooks/env 는 우리가 의도적으로 병합(merge_env 는 env 하위 관리 키만 추가)하므로
+        # '예상치 못한 변경' 위반 검사에서 제외한다. 사용자의 기존 env 키/값 보존은 merge_env 가 보장한다.
+        if k in ("permissions", "hooks", "env"):
             continue
         (preserved if after.get(k) == before.get(k) else violated).append(k)
     return preserved, violated
@@ -305,6 +354,7 @@ def main_uninstall(argv) -> int:
     changes = remove_hooks(after, hook_files)
     changes += revert_permissions(after, receipt)
     changes += revert_scalars(after, receipt)
+    changes += revert_env(after, receipt)
 
     print("── 되돌리기 계획 ──────────────────────")
     if changes:
