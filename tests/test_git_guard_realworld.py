@@ -259,3 +259,57 @@ def test_clean_without_x_keeps_default_snapshot(repo):
     decision, new_cmd = hook_result("git clean -fd")
     assert decision == "allow"
     assert "git add -A -- ." in new_cmd and "git add -Af" not in new_cmd
+
+
+def test_clean_snapshot_index_does_not_accumulate_in_tmp(repo):
+    """리뷰 잔여 항목: 스크래치 인덱스가 .git/ 안 고정 경로여야 한다. 두 번 돌려도 파일이
+    하나만 남고 /tmp 는 건드리지 않는지 실제 저장소에서 확인한다."""
+    (repo / "junk1.txt").write_text("a", encoding="utf-8")
+    _, first = hook_result("git clean -fd")
+    run_in(repo, first)
+    (repo / "junk2.txt").write_text("b", encoding="utf-8")
+    _, second = hook_result("git clean -fd")
+    run_in(repo, second)
+
+    assert not (repo / "junk1.txt").exists() and not (repo / "junk2.txt").exists()
+    indexes = list((repo / ".git").glob("claude-guard-index*"))
+    assert len(indexes) == 1, f"인덱스가 누적되면 안 된다: {indexes}"
+    # 두 번째 스냅샷이 두 번째 파일을 담고 있어야 한다 (재사용된 인덱스가 오염되지 않았는지).
+    snapshots = [h for ref, h in backup_refs(repo) if ref.endswith("/snapshot")]
+    assert snapshots
+    latest = run_in(repo, f"git ls-tree -r {snapshots[-1]} --name-only").stdout
+    assert "junk2.txt" in latest
+
+
+def test_two_backups_in_the_same_second_do_not_collide(repo):
+    """리뷰 잔여 항목: 초 단위 타임스탬프만 쓰면 같은 초의 두 백업이 ref 네임스페이스를 공유해
+    D/F 충돌(`.../rel` 파일 vs `.../rel/x` 디렉터리)이 난다. 충돌하면 update-ref 가 실패하고
+    fail-closed 로 원본 명령까지 막히므로, 데이터는 안전해도 정상 작업이 난해한 git 에러로 멈춘다.
+
+    태그와 브랜치를 쓴다 — 브랜치끼리는 `rel` 과 `rel/x` 가 애초에 공존할 수 없어(refs/heads
+    안에서 같은 D/F 규칙이 걸린다) 이 상황을 만들 수 없다. 태그와 브랜치는 네임스페이스가
+    달라 공존하지만, 백업 ref 아래에서는 같은 이름 공간으로 합쳐진다.
+
+    `date` 를 고정 출력 스텁으로 가려 '같은 초'를 결정적으로 만든다. 진짜 시계에 맡기면 두 명령
+    사이에 초가 넘어가 충돌이 재현되지 않고, 그러면 회귀를 못 잡는 테스트가 된다(실측 확인)."""
+    run_in(repo, "git tag rel")
+    run_in(repo, "git branch rel/x")
+    assert "rel" in run_in(repo, "git tag -l").stdout
+    assert "rel/x" in run_in(repo, "git branch --list rel/x").stdout
+
+    stub = repo / "stubbin"
+    stub.mkdir()
+    (stub / "date").write_text("#!/bin/sh\necho 20260101_000000\n", encoding="utf-8")
+    (stub / "date").chmod(0o755)
+    pinned = f"export PATH='{stub}:'\"$PATH\"; "
+
+    _, first = hook_result("git tag -d rel")
+    r1 = run_in(repo, pinned + first)
+    _, second = hook_result("git branch -D rel/x")
+    r2 = run_in(repo, pinned + second)
+
+    assert r1.returncode == 0, r1.stderr
+    assert r2.returncode == 0, f"같은 초에 실행된 두 번째 백업이 D/F 충돌로 막혔다:\n{r2.stderr}"
+    refs = [ref for ref, _ in backup_refs(repo)]
+    assert any(ref.endswith("/rel") for ref in refs)
+    assert any(ref.endswith("/rel/x") for ref in refs)

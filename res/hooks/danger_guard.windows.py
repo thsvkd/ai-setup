@@ -323,12 +323,35 @@ def _push_implicit_branch(cwd: str):
     return _current_branch(cwd)
 
 
+# git push 옵션 중 '다음 토큰'을 값으로 소비하는 것들. 이걸 걸러내지 않으면 그 값이 위치
+# 인자로 잡혀 remote 자리로 밀려 들어간다 — `git push -o ci.skip origin feature/x` 가
+# "'origin' 브랜치로 push 하려 합니다" 로 오탐되던 원인.
+PUSH_VALUE_OPTS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
+
+
+def _push_positionals(rest: list) -> list:
+    """git push 인자에서 위치 인자(remote, refspec)만 뽑는다."""
+    out = []
+    skip_next = False
+    for t in rest:
+        if skip_next:
+            skip_next = False
+            continue
+        if t in PUSH_VALUE_OPTS:
+            skip_next = True
+            continue
+        if t.startswith("-"):
+            continue
+        out.append(t)
+    return out
+
+
 def _push_target_branches(rest: list, cwd: str):
     """git push 인자에서 실제로 갱신/삭제될 원격 브랜치 이름들을 뽑는다.
     반환: (branches, broad) — broad 면 --all/--mirror 등으로 특정 브랜치로 좁힐 수 없다."""
     if any(f in rest for f in PUSH_BROAD_FLAGS):
         return [], True
-    positional = [a for a in rest if not a.startswith("-")]
+    positional = _push_positionals(rest)
     if len(positional) <= 1:
         branch = _push_implicit_branch(cwd)
         return ([branch] if branch else []), False
@@ -433,14 +456,14 @@ def _backup_head_and_worktree(reason: str, is_bash: bool) -> str:
         # 실패의 종료 상태를 덮어써서 마지막 `[ -z "$_bk_stash" ]` 가 참이 되어 전체가 성공으로
         # 보고되고, 뒤에 이어붙인 원본 파괴적 명령이 백업 없이 실행됐다(POSIX 판에서 실측 확인).
         return (
-            '_bk_ts=$(date +%Y%m%d_%H%M%S) && '
+            '_bk_ts=$(date +%Y%m%d_%H%M%S)_$$ && '
             '_bk_head=$(git rev-parse HEAD) && '
             'git update-ref "refs/claude-backups/${_bk_ts}/head" "$_bk_head" && '
             '_bk_stash=$(git stash create ' + shlex.quote(reason) + ') && '
             '{ [ -z "$_bk_stash" ] || git update-ref "refs/claude-backups/${_bk_ts}/worktree" "$_bk_stash"; }'
         )
     return (
-        '$bkTs = Get-Date -Format "yyyyMMdd_HHmmss"; '
+        '$bkTs = (Get-Date -Format "yyyyMMdd_HHmmss") + "_$PID"; '
         '$bkHead = git rev-parse HEAD; if ($LASTEXITCODE -ne 0) { exit 1 }; '
         'git update-ref "refs/claude-backups/$bkTs/head" $bkHead; if ($LASTEXITCODE -ne 0) { exit 1 }; '
         '$bkStash = git stash create ' + quote_ps(reason) + '; if ($LASTEXITCODE -ne 0) { exit 1 }; '
@@ -462,16 +485,18 @@ def _backup_full_snapshot(reason: str, is_bash: bool, include_ignored: bool) -> 
     add_cmd = 'git add -Af -- .' if include_ignored else 'git add -A -- .'
     if is_bash:
         return (
-            '_bk_ts=$(date +%Y%m%d_%H%M%S) && '
-            '_bk_idx=$(mktemp -u) && '
+            '_bk_ts=$(date +%Y%m%d_%H%M%S)_$$ && '
+            '_bk_gitdir=$(git rev-parse --git-dir) && '
+            '_bk_idx="$_bk_gitdir/claude-guard-index" && '
             'GIT_INDEX_FILE="$_bk_idx" ' + add_cmd + ' && '
             '_bk_tree=$(GIT_INDEX_FILE="$_bk_idx" git write-tree) && '
             '_bk_h=$(git commit-tree "$_bk_tree" -p HEAD -m ' + shlex.quote(reason) + ') && '
             'git update-ref "refs/claude-backups/${_bk_ts}/snapshot" "$_bk_h"'
         )
     return (
-        '$bkTs = Get-Date -Format "yyyyMMdd_HHmmss"; '
-        '$bkIdx = Join-Path $env:TEMP ("claude-bk-" + [guid]::NewGuid().ToString("N")); '
+        '$bkTs = (Get-Date -Format "yyyyMMdd_HHmmss") + "_$PID"; '
+        '$bkGitDir = git rev-parse --git-dir; if ($LASTEXITCODE -ne 0) { exit 1 }; '
+        '$bkIdx = Join-Path $bkGitDir "claude-guard-index"; '
         '$env:GIT_INDEX_FILE = $bkIdx; '
         + add_cmd + '; '
         'if ($LASTEXITCODE -ne 0) { Remove-Item Env:\\GIT_INDEX_FILE -ErrorAction SilentlyContinue; exit 1 }; '
@@ -492,14 +517,14 @@ def _backup_refs(ref_exprs: list, is_bash: bool) -> str:
     if is_bash:
         quoted = " ".join(shlex.quote(r) for r in ref_exprs)
         return (
-            '_bk_ts=$(date +%Y%m%d_%H%M%S); '
+            '_bk_ts=$(date +%Y%m%d_%H%M%S)_$$; '
             'for _bk_r in ' + quoted + '; do '
             '_bk_h=$(git rev-parse "$_bk_r") && git update-ref "refs/claude-backups/${_bk_ts}/$_bk_r" "$_bk_h" || exit 1; '
             'done'
         )
     quoted_ps = ",".join(quote_ps(r) for r in ref_exprs)
     return (
-        '$bkTs = Get-Date -Format "yyyyMMdd_HHmmss"; '
+        '$bkTs = (Get-Date -Format "yyyyMMdd_HHmmss") + "_$PID"; '
         'foreach ($bkR in @(' + quoted_ps + ')) { '
         '$bkH = git rev-parse $bkR; if ($LASTEXITCODE -ne 0) { exit 1 }; '
         'git update-ref "refs/claude-backups/$bkTs/$bkR" $bkH; if ($LASTEXITCODE -ne 0) { exit 1 } '
@@ -514,7 +539,7 @@ def _backup_refs_if_exist(ref_exprs: list, is_bash: bool) -> str:
     if is_bash:
         quoted = " ".join(shlex.quote(r) for r in ref_exprs)
         return (
-            '_bk_ts=$(date +%Y%m%d_%H%M%S); '
+            '_bk_ts=$(date +%Y%m%d_%H%M%S)_$$; '
             'for _bk_r in ' + quoted + '; do '
             '_bk_h=$(git rev-parse --verify -q "$_bk_r" 2>/dev/null) && '
             'git update-ref "refs/claude-backups/${_bk_ts}/$_bk_r" "$_bk_h"; '
@@ -522,7 +547,7 @@ def _backup_refs_if_exist(ref_exprs: list, is_bash: bool) -> str:
         )
     quoted_ps = ",".join(quote_ps(r) for r in ref_exprs)
     return (
-        '$bkTs = Get-Date -Format "yyyyMMdd_HHmmss"; '
+        '$bkTs = (Get-Date -Format "yyyyMMdd_HHmmss") + "_$PID"; '
         'foreach ($bkR in @(' + quoted_ps + ')) { '
         '$bkH = git rev-parse --verify -q $bkR 2>$null; '
         'if ($LASTEXITCODE -eq 0 -and $bkH) { git update-ref "refs/claude-backups/$bkTs/$bkR" $bkH } '
@@ -535,13 +560,13 @@ def _backup_all_branch_tips(is_bash: bool) -> str:
     모든 로컬 브랜치의 커밋 위치를 전부 백업한다."""
     if is_bash:
         return (
-            '_bk_ts=$(date +%Y%m%d_%H%M%S); '
+            '_bk_ts=$(date +%Y%m%d_%H%M%S)_$$; '
             "for _bk_r in $(git for-each-ref refs/heads --format='%(refname:short)'); do "
             '_bk_h=$(git rev-parse "$_bk_r") && git update-ref "refs/claude-backups/${_bk_ts}/$_bk_r" "$_bk_h" || exit 1; '
             'done'
         )
     return (
-        '$bkTs = Get-Date -Format "yyyyMMdd_HHmmss"; '
+        '$bkTs = (Get-Date -Format "yyyyMMdd_HHmmss") + "_$PID"; '
         '$bkList = git for-each-ref refs/heads --format="%(refname:short)"; '
         'foreach ($bkR in $bkList) { '
         '$bkH = git rev-parse $bkR; if ($LASTEXITCODE -ne 0) { exit 1 }; '
@@ -554,14 +579,14 @@ def _backup_stash_entries(is_bash: bool) -> str:
     """git stash clear 전에, 현재 존재하는 모든 스태시 항목의 커밋을 각각 백업한다."""
     if is_bash:
         return (
-            '_bk_ts=$(date +%Y%m%d_%H%M%S); '
+            '_bk_ts=$(date +%Y%m%d_%H%M%S)_$$; '
             '_bk_i=0; '
             'for _bk_h in $(git stash list --format=%H); do '
             'git update-ref "refs/claude-backups/${_bk_ts}/stash${_bk_i}" "$_bk_h"; _bk_i=$((_bk_i+1)); '
             'done'
         )
     return (
-        '$bkTs = Get-Date -Format "yyyyMMdd_HHmmss"; '
+        '$bkTs = (Get-Date -Format "yyyyMMdd_HHmmss") + "_$PID"; '
         '$bkI = 0; '
         '$bkList = git stash list --format=%H; '
         'foreach ($bkH in $bkList) { '
@@ -574,14 +599,14 @@ def _backup_reflog_reachable(is_bash: bool) -> str:
     """git reflog expire/delete 전에, 현재 reflog 로만 도달 가능한 커밋들을 전부 고정한다."""
     if is_bash:
         return (
-            '_bk_ts=$(date +%Y%m%d_%H%M%S); '
+            '_bk_ts=$(date +%Y%m%d_%H%M%S)_$$; '
             '_bk_i=0; '
             "for _bk_h in $(git reflog show --all --format=%H 2>/dev/null | sort -u); do "
             'git update-ref "refs/claude-backups/${_bk_ts}/reflog${_bk_i}" "$_bk_h" 2>/dev/null; _bk_i=$((_bk_i+1)); '
             'done'
         )
     return (
-        '$bkTs = Get-Date -Format "yyyyMMdd_HHmmss"; '
+        '$bkTs = (Get-Date -Format "yyyyMMdd_HHmmss") + "_$PID"; '
         '$bkI = 0; '
         '$bkList = git reflog show --all --format=%H 2>$null | Sort-Object -Unique; '
         'foreach ($bkH in $bkList) { '
@@ -594,14 +619,14 @@ def _backup_dangling_commits(is_bash: bool) -> str:
     """git gc --prune=now/all 전에, reflog 로도 안 잡히는 커밋들을 전부 고정한다."""
     if is_bash:
         return (
-            '_bk_ts=$(date +%Y%m%d_%H%M%S); '
+            '_bk_ts=$(date +%Y%m%d_%H%M%S)_$$; '
             '_bk_i=0; '
             "for _bk_h in $(git fsck --no-reflog --unreachable 2>/dev/null | awk '$1==\"unreachable\" && $2==\"commit\"{print $3}'); do "
             'git update-ref "refs/claude-backups/${_bk_ts}/dangling${_bk_i}" "$_bk_h" 2>/dev/null; _bk_i=$((_bk_i+1)); '
             'done'
         )
     return (
-        '$bkTs = Get-Date -Format "yyyyMMdd_HHmmss"; '
+        '$bkTs = (Get-Date -Format "yyyyMMdd_HHmmss") + "_$PID"; '
         '$bkI = 0; '
         '$bkList = git fsck --no-reflog --unreachable 2>$null | '
         "Where-Object { $_ -match '^unreachable commit (\\S+)' } | ForEach-Object { $matches[1] }; "
@@ -796,7 +821,7 @@ def main() -> None:
                             backup = f'_bk_ts=$(date +%Y%m%d_%H%M%S); _bk_h=$(git rev-parse {shlex.quote(ref)}) && git update-ref "refs/claude-backups/${{_bk_ts}}/stash" "$_bk_h"'
                         else:
                             # 마지막 update-ref 실패도 잡아야 뒤의 stash drop 이 막힌다 (bash 는 _fail_closed 담당).
-                            backup = ('$bkTs = Get-Date -Format "yyyyMMdd_HHmmss"; '
+                            backup = ('$bkTs = (Get-Date -Format "yyyyMMdd_HHmmss") + "_$PID"; '
                                       '$bkH = git rev-parse ' + quote_ps(ref) + '; if ($LASTEXITCODE -ne 0) { exit 1 }; '
                                       'git update-ref "refs/claude-backups/$bkTs/stash" $bkH; if ($LASTEXITCODE -ne 0) { exit 1 }')
                         _emit_with_backup_or_ask(
