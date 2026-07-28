@@ -346,3 +346,83 @@ def test_bash_git_checkout_multiline_asks(run_hook):
     # 멀티라인 안에 섞여 있으면 자동치환 불가 → ask.
     d, *_ = run_hook(HOOK, bash("echo start\ngit checkout HEAD -- file.txt"))
     assert d == "ask"
+
+
+# --- 회귀: 백업이 보장되지 않는 경로는 자동치환하지 않는다 (리뷰 지적 #2) ---
+
+@pytest.mark.parametrize("event", [
+    ps("git -C C:\\other reset --hard HEAD~5"),
+    ps("git --git-dir=C:\\other\\.git clean -fd"),
+    bash("git -C /other/repo branch -D feature"),
+    bash("git --work-tree=/other checkout -- file.txt"),
+])
+def test_other_repo_target_falls_back_to_ask(run_hook, event):
+    """백업 스니펫은 -C/--git-dir 를 물려받지 않고 cwd 에서 실행된다. 그대로 자동치환하면
+    '현재 저장소를 백업하고 다른 저장소를 파괴'하게 되므로, 이 경우는 반드시 ask 로 폴백한다."""
+    d, payload, _ = run_hook(HOOK, event)
+    assert d == "ask", event
+    assert "updatedInput" not in payload["hookSpecificOutput"]
+
+
+# --- 회귀: 원격 브랜치 삭제는 '/' 가 있어도 확인받는다 (리뷰 지적 #6) ---
+
+@pytest.mark.parametrize("event", [
+    ps("git push --delete origin feature/x"),
+    ps("git push origin :feature/x"),
+    bash("git push -d origin feature/x"),
+])
+def test_remote_branch_delete_asks_even_for_side_branch(run_hook, event):
+    d, payload, _ = run_hook(HOOK, event)
+    assert d == "ask", event
+    assert "삭제" in payload["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_normal_push_to_side_branch_still_passes(run_hook):
+    d, *_ = run_hook(HOOK, ps("git push origin feature/x"))
+    assert d is None
+
+
+# --- 회귀: clean -x/-X 는 .gitignore 대상까지 스냅샷해야 한다 (리뷰 지적 #3) ---
+
+@pytest.mark.parametrize("event,expected_add", [
+    (ps("git clean -fd"), "git add -A -- ."),
+    (ps("git clean -fdx"), "git add -Af -- ."),
+    (bash("git clean -fdX"), "git add -Af -- ."),
+])
+def test_clean_snapshot_covers_ignored_files_only_when_needed(run_hook, event, expected_add):
+    d, payload, _ = run_hook(HOOK, event)
+    assert d == "allow"
+    assert expected_add in payload["hookSpecificOutput"]["updatedInput"]["command"]
+
+
+# --- 회귀: 백업 스니펫은 fail-closed 여야 한다 (리뷰 지적 #1) ---
+
+def test_bash_backup_snippet_is_fully_and_chained(run_hook):
+    """bash 경로: 백업 단계가 `;` 로 이어지면 앞 단계 실패의 종료 상태가 덮여 뒤의 파괴적
+    원본이 실행된다(fail-open). `&&` 로만 이어지고 실패 시 메시지와 함께 끊겨야 한다."""
+    d, payload, _ = run_hook(HOOK, bash("git reset --hard HEAD~1"))
+    assert d == "allow"
+    backup_part = payload["hookSpecificOutput"]["updatedInput"]["command"] \
+        .rsplit(" && git reset --hard HEAD~1", 1)[0]
+    assert "백업에 실패해 원본 명령을 실행하지 않았습니다" in backup_part
+    assert ";" not in backup_part.replace("; }", "").replace("; exit 1", "")
+
+
+def test_ps_backup_snippet_checks_every_step(run_hook):
+    """PowerShell 5.1 은 `&&` 가 없어 `;` 로 잇는 대신 단계마다 $LASTEXITCODE 를 확인해
+    `exit 1` 로 끊는다. 마지막 worktree update-ref 의 실패도 반드시 잡아야 한다 — 놓치면
+    스태시 커밋이 ref 로 고정되지 않은 채(=GC 대상) 원본이 실행된다."""
+    d, payload, _ = run_hook(HOOK, ps("git reset --hard HEAD~1"))
+    assert d == "allow"
+    backup_part = payload["hookSpecificOutput"]["updatedInput"]["command"] \
+        .rsplit("; git reset --hard HEAD~1", 1)[0]
+    worktree_step = backup_part.split("/worktree")[1]
+    assert "$LASTEXITCODE -ne 0" in worktree_step and "exit 1" in worktree_step
+
+
+# --- 회귀: 훅 내부 오류는 조용히 통과시키지 않는다 (리뷰 지적 #7) ---
+
+def test_internal_error_falls_back_to_ask(run_hook):
+    d, payload, _ = run_hook(HOOK, {"tool_name": "PowerShell", "tool_input": "Get-ChildItem"})
+    assert d == "ask"
+    assert "가드 훅 내부 오류" in payload["hookSpecificOutput"]["permissionDecisionReason"]

@@ -154,6 +154,9 @@
 
 유저 레벨 가드 훅이 `reset --hard`/`clean -f`/`stash drop`/`branch -D`/`rebase` 등 되돌릴 수 없는 git 명령 실행 전 대상을 `refs/claude-backups/<timestamp>/...`에 자동 백업한다(막지 않고 그대로 진행). 조회: `git for-each-ref refs/claude-backups/`. 복구: `git stash apply <hash>` 또는 `git branch <name> <hash>`.
 
+- 백업이 실패하면 원본 명령도 실행되지 않는다(fail-closed). `claude-guard: 백업에 실패해...` 메시지가 보이면 명령은 아무 일도 하지 않은 것이니, 원인을 먼저 해결한다.
+- `-C`/`--git-dir`로 다른 저장소를 가리키거나 여러 줄·체이닝에 섞인 파괴적 git 명령은 백업 대상을 특정할 수 없어 사용자 확인을 요청한다 — 단독 명령으로 분리해 실행하면 자동 백업 경로를 탄다.
+
 - 커밋 메시지는 항상 **영어**. Conventional Commits 준수.
 - 제목: `<type>(<scope>): <subject>`. 본문(필요 시): `- [내용]`.
 - 사용자 이름·이메일은 `git config user.name` / `git config user.email` 출력 사용.

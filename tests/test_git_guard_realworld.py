@@ -202,3 +202,60 @@ def test_reset_soft_passes_and_preserves(repo):
     assert hook_result("git reset --soft HEAD~1")[0] is None
     run_in(repo, "git reset --soft HEAD~1")
     assert "c2" in (repo / "tracked.txt").read_text(encoding="utf-8")   # 워킹트리 보존
+
+
+def test_backup_failure_blocks_destructive_original(repo):
+    """리뷰 지적 #1 회귀: 백업이 실패하면 원본 파괴적 명령이 '절대' 실행되면 안 된다.
+
+    예전 스니펫은 stash create 앞이 `;` 라 앞 단계 실패의 종료 상태가 덮여 전체가 성공으로
+    보고됐고, 뒤에 `&&` 로 붙은 reset --hard 가 백업 없이 실행됐다. 여기서는 refs/claude-backups
+    '자체'를 ref 로 만들어 하위 ref 생성이 D/F 충돌로 실패하게 만들어(=백업 실패) 재현한다.
+    """
+    run_in(repo, "git update-ref refs/claude-backups HEAD")   # 하위 ref 생성 불가 상태로 만든다
+    (repo / "tracked.txt").write_text("line1\nPRECIOUS\n", encoding="utf-8")
+
+    decision, new_cmd = hook_result("git reset --hard HEAD")
+    assert decision == "allow"
+    result = run_in(repo, new_cmd)
+
+    assert result.returncode != 0, "백업 실패 시 명령 전체가 실패해야 한다"
+    assert "백업에 실패" in result.stderr, result.stderr
+    assert "PRECIOUS" in (repo / "tracked.txt").read_text(encoding="utf-8"), \
+        "백업이 실패했는데 reset --hard 가 실행되어 작업이 사라졌다 (fail-open 회귀)"
+
+
+def test_clean_x_backs_up_gitignored_files(repo):
+    """리뷰 지적 #3 회귀: `git clean -fdx` 는 .gitignore 대상까지 지운다. 기본 `git add -A`
+    스냅샷은 그것들을 담지 못해 .env/node_modules 가 백업 없이 영구 소실됐다."""
+    (repo / ".gitignore").write_text(".env\nbuild/\n", encoding="utf-8")
+    run_in(repo, "git add .gitignore && git commit -qm ignore")
+    (repo / ".env").write_text("SECRET=1\n", encoding="utf-8")
+    (repo / "build").mkdir()
+    (repo / "build" / "out.js").write_text("compiled\n", encoding="utf-8")
+    (repo / "untracked.txt").write_text("junk\n", encoding="utf-8")
+
+    decision, new_cmd = hook_result("git clean -fdx")
+    assert decision == "allow"
+    before = set(backup_refs(repo))
+    run_in(repo, new_cmd)
+
+    # clean 자체는 실제로 지운다 (백업이 그 사실을 바꾸진 않는다).
+    assert not (repo / ".env").exists()
+    assert not (repo / "build").exists()
+
+    snapshot = worktree_backup_hash(set(backup_refs(repo)) - before)
+    assert snapshot, "스냅샷 백업 ref 가 생겨야 한다"
+    files = run_in(repo, f"git ls-tree -r {snapshot} --name-only").stdout.split()
+    assert ".env" in files, "무시된 파일도 백업에 담겨야 한다"
+    assert "build/out.js" in files
+    assert "untracked.txt" in files
+    # 실제로 내용까지 복구 가능해야 한다.
+    assert "SECRET=1" in run_in(repo, f"git cat-file -p {snapshot}:.env").stdout
+
+
+def test_clean_without_x_keeps_default_snapshot(repo):
+    """반대 방향 회귀: -x 가 없으면 무시된 파일은 clean 도 안 지우므로, 굳이 담아
+    node_modules 전체를 커밋하는 느린 경로로 가면 안 된다."""
+    decision, new_cmd = hook_result("git clean -fd")
+    assert decision == "allow"
+    assert "git add -A -- ." in new_cmd and "git add -Af" not in new_cmd

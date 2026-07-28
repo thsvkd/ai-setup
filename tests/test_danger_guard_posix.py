@@ -526,3 +526,77 @@ def test_rm_falls_back_to_macos_trash(tmp_path):
 def test_rm_root_denied_even_with_trash_available(tmp_path):
     payload = run_with_path("rm -rf /", _stub(tmp_path, "trash-put"))
     assert payload["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+# --- 회귀: 백업이 보장되지 않는 경로는 자동치환하지 않는다 (리뷰 지적 #2) ---
+
+@pytest.mark.parametrize("cmd", [
+    "git -C /other/repo reset --hard HEAD~5",
+    "git --git-dir=/other/.git clean -fd",
+    "git --work-tree=/other checkout -- file.txt",
+    "git -C /other/repo branch -D feature",
+])
+def test_other_repo_target_falls_back_to_ask(run_hook, cmd):
+    """백업 스니펫은 -C/--git-dir 를 물려받지 않고 cwd 에서 실행된다. 그대로 자동치환하면
+    '현재 저장소를 백업하고 다른 저장소를 파괴'하게 되므로, 이 경우는 반드시 ask 로 폴백한다."""
+    d, payload, _ = run_hook(HOOK, bash(cmd))
+    assert d == "ask", f"expected ask for {cmd}"
+    assert "updatedInput" not in payload["hookSpecificOutput"]
+
+
+# --- 회귀: 원격 브랜치 삭제는 '/' 가 있어도 확인받는다 (리뷰 지적 #6) ---
+
+@pytest.mark.parametrize("cmd", [
+    "git push --delete origin feature/x",
+    "git push -d origin feature/x",
+    "git push origin :feature/x",
+])
+def test_remote_branch_delete_asks_even_for_side_branch(run_hook, cmd):
+    """원격 히스토리는 refs/claude-backups/ 로 되돌릴 수 없다 — 로컬 백업이 닿지 않는 유일한
+    영역이라, 곁다리 브랜치(이름에 '/' 있음)여도 삭제는 통과시키지 않는다."""
+    d, payload, _ = run_hook(HOOK, bash(cmd))
+    assert d == "ask", f"expected ask for {cmd}"
+    assert "삭제" in payload["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_normal_push_to_side_branch_still_passes(run_hook):
+    # 회귀 방지: 삭제 판정이 평범한 곁다리 브랜치 push 까지 잡으면 안 된다.
+    d, *_ = run_hook(HOOK, bash("git push origin feature/x"))
+    assert d is None
+
+
+# --- 회귀: clean -x/-X 는 .gitignore 대상까지 스냅샷해야 한다 (리뷰 지적 #3) ---
+
+@pytest.mark.parametrize("cmd,expected_add", [
+    ("git clean -fd", "git add -A -- ."),      # 무시된 파일은 clean 도 안 지움 → 담을 필요 없음
+    ("git clean -fdx", "git add -Af -- ."),    # -x 는 무시된 파일도 지움 → -f 로 담아야 함
+    ("git clean -fdX", "git add -Af -- ."),    # -X 는 무시된 파일'만' 지움
+])
+def test_clean_snapshot_covers_ignored_files_only_when_needed(run_hook, cmd, expected_add):
+    d, payload, _ = run_hook(HOOK, bash(cmd))
+    assert d == "allow"
+    assert expected_add in payload["hookSpecificOutput"]["updatedInput"]["command"]
+
+
+# --- 회귀: 백업 스니펫은 fail-closed 여야 한다 (리뷰 지적 #1) ---
+
+def test_backup_snippet_is_fully_and_chained(run_hook):
+    """백업 스니펫 안에 `;` 로 이어진 단계가 있으면, 앞 단계가 실패해도 종료 상태가 0 으로
+    덮여 뒤의 파괴적 원본이 실행된다(fail-open). 백업 부분은 `&&` 로만 이어져야 한다."""
+    d, payload, _ = run_hook(HOOK, bash("git reset --hard HEAD~1"))
+    assert d == "allow"
+    new_command = payload["hookSpecificOutput"]["updatedInput"]["command"]
+    backup_part = new_command.rsplit(" && git reset --hard HEAD~1", 1)[0]
+    assert "백업에 실패해 원본 명령을 실행하지 않았습니다" in backup_part
+    # 실패를 삼키는 `;` 구분자가 백업 체인 안에 남아있으면 안 된다 (블록 종료 `; }` 는 예외).
+    assert ";" not in backup_part.replace("; }", "").replace("; exit 1", "")
+
+
+# --- 회귀: 훅 내부 오류는 조용히 통과시키지 않는다 (리뷰 지적 #7) ---
+
+def test_internal_error_falls_back_to_ask(run_hook):
+    """permissions.deny 에서 git 규칙을 뺀 뒤로 이 훅이 유일한 방어선이다. 예상 못 한 예외로
+    훅이 죽으면 Claude Code 가 가드 없이 명령을 실행하므로(fail-open), ask 로 승격한다."""
+    d, payload, _ = run_hook(HOOK, {"tool_name": "Bash", "tool_input": "ls -la"})
+    assert d == "ask"
+    assert "가드 훅 내부 오류" in payload["hookSpecificOutput"]["permissionDecisionReason"]
