@@ -175,6 +175,7 @@ scripts/
   setup.{ps1,sh}            # CLI 디스패처 (엔트리포인트)
   setup_hooks.{ps1,sh}      # 가드 훅 + 권한 설치 / uninstall 워커
   setup_agentsmd.{ps1,sh}   # AGENTS.md 설치 워커
+  test.{ps1,sh}             # 테스트 러너 (pytest + bats + Pester 통합 실행)
   lib/                      # 공용 오케스트레이션 함수
 install.{ps1,sh}            # 원격 설치 부트스트랩 (curl | sh / irm | iex)
 docs/                       # 인증 등 부가 문서
@@ -189,13 +190,39 @@ tests/                      # pytest(훅·병합) + bats(bash) + Pester(PowerShe
 판정뿐 아니라 **실제 git 저장소에서 실측**한다 — 자동치환(stash-prepend)이 진짜로 작업을
 보존·복구하는지, 안전 판정한 명령이 정말 안전한지까지 확인한다 ([`tests/test_git_guard_realworld.py`](tests/test_git_guard_realworld.py)).
 
+러너가 세 개(pytest / bats / Pester)라 하나씩 기억해 돌리기 번거롭다. `scripts/test.sh`(POSIX)와
+`scripts/test.ps1`(Windows)이 **설치된 러너를 찾아 전부 실행하고 통과·실패·건너뜀을 구분해 보고**한다.
+
 ```sh
-python -m pytest tests/                 # 훅 정책 + git 실측 + 병합 엔진 + 셋업 스크립트 (Python)
+bash scripts/test.sh                     # 있는 러너로 전부
+bash scripts/test.sh --python-only       # pytest 만
+bash scripts/test.sh --strict            # 러너 미설치로 건너뛴 것도 실패 취급 (CI용)
+bash scripts/test.sh -k git_guard        # 남은 인자는 pytest 로 전달
+```
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\test.ps1
+```
+
+첫 실패에서 멈추지 않고 가능한 스위트를 전부 돌린 뒤 마지막에 한 번에 보고한다. 종료 코드는
+**실행된 스위트가 하나라도 실패하면 1, 하나도 실행하지 못했어도 1**이다 — 러너가 없어서 아무것도
+검증되지 않은 상태를 "통과"로 읽으면 안 되기 때문이다. `--strict`는 그보다 더 엄격하게, 건너뛴
+스위트가 하나라도 있으면 실패로 만든다. 이 종료 코드 계약 자체를
+[`tests/test_test_scripts.py`](tests/test_test_scripts.py)가 고정한다.
+
+개별 러너를 직접 부를 수도 있다.
+
+```sh
+python -m pytest tests/ -rs              # 훅 정책 + git 실측 + 병합 엔진 + 셋업 스크립트
 bats tests/setup.bats                    # 셋업 스크립트 (선택 — bats-core 필요)
 ```
 ```powershell
 Invoke-Pester tests/Setup.Tests.ps1 -Output Detailed   # 셋업 스크립트 (PowerShell)
 ```
+
+`-rs`를 붙이면 **스킵된 테스트의 사유**까지 보인다(러너 스크립트는 항상 붙인다). 이 저장소의
+스킵은 전부 환경 조건부다 — macOS 전용 경로(`/usr/bin/trash` 폴백)와, 3.9.x python3가 PATH에
+있을 때만 도는 구버전 인터프리터 실행 테스트. 후자는 OS가 아니라 **인터프리터 유무** 조건이라
+Linux에 python3.9를 설치하면 그쪽에서도 돈다.
 
 `pytest`만으로도 셋업 스크립트의 실제 설치 경로(`--dry-run`이 아닌 쪽)까지 커버한다
 ([`tests/test_setup_scripts.py`](tests/test_setup_scripts.py)). [`tests/test_hook_compat.py`](tests/test_hook_compat.py)는
