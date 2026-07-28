@@ -479,7 +479,10 @@ def _backup_full_snapshot(reason: str, is_bash: bool, include_ignored: bool) -> 
         'Remove-Item Env:\\GIT_INDEX_FILE -ErrorAction SilentlyContinue; '
         'if ($LASTEXITCODE -ne 0) { exit 1 }; '
         '$bkH = git commit-tree $bkTree -p HEAD -m ' + quote_ps(reason) + '; if ($LASTEXITCODE -ne 0) { exit 1 }; '
-        'git update-ref "refs/claude-backups/$bkTs/snapshot" $bkH'
+        # 마지막 update-ref 의 실패도 반드시 잡아야 한다 — 여기서 놓치면 스냅샷 커밋이 ref 로
+        # 고정되지 않은 채(=GC 대상) 뒤이어 git clean 이 실행된다. bash 경로는 _fail_closed 가
+        # 같은 역할을 하므로, 이 검사가 빠지면 PowerShell 만 fail-open 인 비대칭이 생긴다.
+        'git update-ref "refs/claude-backups/$bkTs/snapshot" $bkH; if ($LASTEXITCODE -ne 0) { exit 1 }'
     )
 
 
@@ -792,7 +795,10 @@ def main() -> None:
                         if is_bash:
                             backup = f'_bk_ts=$(date +%Y%m%d_%H%M%S); _bk_h=$(git rev-parse {shlex.quote(ref)}) && git update-ref "refs/claude-backups/${{_bk_ts}}/stash" "$_bk_h"'
                         else:
-                            backup = '$bkTs = Get-Date -Format "yyyyMMdd_HHmmss"; $bkH = git rev-parse ' + quote_ps(ref) + '; if ($LASTEXITCODE -ne 0) { exit 1 }; git update-ref "refs/claude-backups/$bkTs/stash" $bkH'
+                            # 마지막 update-ref 실패도 잡아야 뒤의 stash drop 이 막힌다 (bash 는 _fail_closed 담당).
+                            backup = ('$bkTs = Get-Date -Format "yyyyMMdd_HHmmss"; '
+                                      '$bkH = git rev-parse ' + quote_ps(ref) + '; if ($LASTEXITCODE -ne 0) { exit 1 }; '
+                                      'git update-ref "refs/claude-backups/$bkTs/stash" $bkH; if ($LASTEXITCODE -ne 0) { exit 1 }')
                         _emit_with_backup_or_ask(
                             backup, line,
                             f"삭제될 스태시를 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git stash apply <hash> 로 복구).",

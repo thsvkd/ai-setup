@@ -426,3 +426,36 @@ def test_internal_error_falls_back_to_ask(run_hook):
     d, payload, _ = run_hook(HOOK, {"tool_name": "PowerShell", "tool_input": "Get-ChildItem"})
     assert d == "ask"
     assert "가드 훅 내부 오류" in payload["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+# --- 회귀: PowerShell 백업 스니펫도 bash 와 동일하게 fail-closed 여야 한다 (리뷰 지적 #1) ---
+
+@pytest.mark.parametrize("cmd", [
+    "git reset --hard HEAD~1",
+    "git clean -fd",
+    "git clean -fdx",
+    "git stash drop",
+    "git branch -D feature",
+    "git tag -d v1.0",
+    "git commit --amend --no-edit",
+    "git rebase main",
+    "git filter-branch --tree-filter x HEAD",
+    "git checkout -f main",
+    "git switch -f main",
+    "git checkout HEAD -- file.txt",
+    "git restore file.txt",
+])
+def test_ps_backup_guards_its_last_update_ref(run_hook, cmd):
+    """PowerShell 5.1 은 `&&` 가 없어 `;` 로 잇는다. 그래서 bash 처럼 `_fail_closed` 로 감쌀 수
+    없고, 단계마다 $LASTEXITCODE 를 확인해 `exit 1` 로 끊는 방식으로 같은 보장을 만든다.
+    특히 '마지막' update-ref 뒤에 검사가 빠지면, 백업 커밋이 ref 로 고정되지 않은 채(=GC 대상)
+    파괴적 원본이 이어서 실행된다 — bash 는 막고 PowerShell 만 새는 비대칭이 된다.
+
+    (stash clear / reflog expire / gc --prune 은 '고정 가능한 것만 최선을 다해 고정'하는
+     best-effort 스니펫이라 의도적으로 제외한다 — bash 쪽도 동일하게 best-effort 다.)"""
+    d, payload, _ = run_hook(HOOK, ps(cmd))
+    assert d == "allow", cmd
+    backup_part = payload["hookSpecificOutput"]["updatedInput"]["command"].rsplit("; " + cmd, 1)[0]
+    after_last_update_ref = backup_part.rsplit("git update-ref", 1)[-1]
+    assert "$LASTEXITCODE -ne 0" in after_last_update_ref and "exit 1" in after_last_update_ref, \
+        f"{cmd}: 마지막 update-ref 뒤에 실패 검사가 없다 (fail-open)\n{backup_part}"
