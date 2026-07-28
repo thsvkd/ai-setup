@@ -198,6 +198,8 @@ bash scripts/test.sh                     # 있는 러너로 전부
 bash scripts/test.sh --python-only       # pytest 만
 bash scripts/test.sh --strict            # 러너 미설치로 건너뛴 것도 실패 취급 (CI용)
 bash scripts/test.sh -k git_guard        # 남은 인자는 pytest 로 전달
+
+CLAUDE_TEST_PYTHON=.venv/bin/python bash scripts/test.sh   # 인터프리터 직접 지정
 ```
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\test.ps1
@@ -206,7 +208,10 @@ powershell -ExecutionPolicy Bypass -File scripts\test.ps1
 첫 실패에서 멈추지 않고 가능한 스위트를 전부 돌린 뒤 마지막에 한 번에 보고한다. 종료 코드는
 **실행된 스위트가 하나라도 실패하면 1, 하나도 실행하지 못했어도 1**이다 — 러너가 없어서 아무것도
 검증되지 않은 상태를 "통과"로 읽으면 안 되기 때문이다. `--strict`는 그보다 더 엄격하게, 건너뛴
-스위트가 하나라도 있으면 실패로 만든다. 이 종료 코드 계약 자체를
+스위트가 하나라도 있으면 실패로 만든다. 러너는 `python3`/`python` 순으로 **pytest 가 실제로
+import 되는** 인터프리터를 찾는데, venv 안이거나 pytest 가 그 이름으로 잡히지 않으면
+`CLAUDE_TEST_PYTHON` 으로 못박을 수 있다 — 지정한 인터프리터로 pytest 를 import 하지 못하면
+건너뛰지 않고 실패로 보고한다. 이 종료 코드 계약 자체를
 [`tests/test_test_scripts.py`](tests/test_test_scripts.py)가 고정한다.
 
 개별 러너를 직접 부를 수도 있다.

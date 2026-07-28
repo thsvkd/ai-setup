@@ -15,6 +15,9 @@
     powershell -ExecutionPolicy Bypass -File scripts\test.ps1 -PythonOnly      # pytest 만
     powershell -ExecutionPolicy Bypass -File scripts\test.ps1 -Strict          # 건너뜀도 실패 취급
     powershell -ExecutionPolicy Bypass -File scripts\test.ps1 -PytestArgs '-k','git_guard'
+
+    $env:CLAUDE_TEST_PYTHON = 'C:\path\to\python.exe'   # pytest 를 돌릴 인터프리터 지정
+        venv 안이거나 pytest 가 python/python3/py 라는 이름으로 잡히지 않는 환경에서 쓴다.
 #>
 
 param(
@@ -29,6 +32,9 @@ $ErrorActionPreference = "Stop"
 # PS 7.4+ 는 네이티브 명령의 0이 아닌 종료 코드를 종료 오류로 승격시킬 수 있다. 이 스크립트는
 # 각 러너의 실패를 $LASTEXITCODE 로 직접 판정하고 계속 진행해야 하므로 명시적으로 끈다.
 $PSNativeCommandUseErrorActionPreference = $false
+# 이 스크립트의 출력은 한글과 박스 문자를 쓴다. 콘솔 코드페이지(예: CP949)로 인코딩되면
+# '—' 처럼 그 코드페이지에 없는 글자가 '?' 로 뭉개지고, 파이프로 받는 쪽도 UTF-8 로 읽지 못한다.
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 if ($Help) {
     Write-Host @"
@@ -40,6 +46,9 @@ claude-code-setup — 테스트 스위트 실행
   -Strict        러너 미설치로 건너뛴 스위트도 실패로 취급 (종료 코드 1)
   -PytestArgs    pytest 에 그대로 전달할 인자 배열 (예: -PytestArgs '-k','git_guard')
   -Help          이 도움말
+
+환경 변수:
+  CLAUDE_TEST_PYTHON   pytest 를 돌릴 인터프리터 경로 (지정하면 자동 탐색을 건너뛴다)
 "@
     exit 0
 }
@@ -85,23 +94,47 @@ function Test-AnyPython {
 }
 
 # --- pytest: 이 저장소의 핵심 스위트 ---
-Write-Section "pytest"
-$py = Resolve-PytestPython
-if ($null -eq $py) {
-    if (Test-AnyPython) {
-        Write-Host "python 은 있으나 pytest 가 설치돼 있지 않습니다. (python -m pip install pytest)"
-        Add-Result "pytest" "skip" "pytest 미설치"
+function Invoke-PytestSuite {
+    $override = $env:CLAUDE_TEST_PYTHON
+    if ($override) {
+        # 명시적으로 지정한 인터프리터를 쓸 수 없는 것은 '러너가 없어 건너뜀' 이 아니라 오류다.
+        # 조용히 skip 하면 pytest 를 돌리라고 지정해 놓고 아무것도 안 돈 상태가 통과처럼 보인다.
+        $ok = $false
+        try {
+            & $override -c "import pytest" *> $null
+            $ok = ($LASTEXITCODE -eq 0)
+        } catch { $ok = $false }
+        if (-not $ok) {
+            Write-Host "CLAUDE_TEST_PYTHON=$override 로 pytest 를 import 하지 못했습니다."
+            Add-Result "pytest" "fail" "지정한 인터프리터에 pytest 없음"
+            return
+        }
+        $py = @{ Exe = $override; Args = @() }
     } else {
-        Write-Host "python 을 찾지 못했습니다."
-        Add-Result "pytest" "skip" "python 없음"
+        $py = Resolve-PytestPython
     }
-} else {
+
+    if ($null -eq $py) {
+        if (Test-AnyPython) {
+            Write-Host "python 은 있으나 pytest 가 설치돼 있지 않습니다. (python -m pip install pytest)"
+            Write-Host "  (pytest 가 다른 인터프리터에 있다면 CLAUDE_TEST_PYTHON 으로 지정할 수 있습니다.)"
+            Add-Result "pytest" "skip" "pytest 미설치"
+        } else {
+            Write-Host "python 을 찾지 못했습니다."
+            Add-Result "pytest" "skip" "python 없음"
+        }
+        return
+    }
+
     Write-Host "인터프리터: $($py.Exe) $($py.Args -join ' ')"
     # -rs: 스킵된 테스트의 '사유'까지 출력한다. 이 저장소의 스킵은 환경 조건부라
     # (macOS 전용 경로, 3.9.x 인터프리터 유무) 무엇이 검증되지 '않았는지' 보이는 게 중요하다.
     & $py.Exe @($py.Args) -m pytest (Join-Path $repoRoot "tests") -rs @PytestArgs
     if ($LASTEXITCODE -eq 0) { Add-Result "pytest" "pass" "" } else { Add-Result "pytest" "fail" "" }
 }
+
+Write-Section "pytest"
+Invoke-PytestSuite
 
 if ($PythonOnly) {
     # -PythonOnly 는 '요청하지 않은' 것이므로 아예 기록하지 않는다 — 러너가 없어서 못 돌린
