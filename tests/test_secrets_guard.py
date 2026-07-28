@@ -59,6 +59,38 @@ def test_benign_files_pass(run_hook, fp):
     assert d is None, f"expected pass for {fp}"
 
 
+# .env.example 류(자리표시자만 담은 예시/템플릿)는 시크릿이 아니므로 확인 게이트에서 제외한다.
+ENV_TEMPLATES = [
+    "/proj/.env.example",
+    "/proj/.env.sample",
+    "/proj/.env.template",
+    "/proj/.env.dist",
+    "/proj/.env.local.example",     # 중간 세그먼트가 껴도 마지막 확장자로 판정
+    "/proj/.env.dev.template",
+    "C:\\Users\\u\\project\\.env.example",
+    ".env.example",                 # 경로 없이 basename 만 와도 통과
+]
+
+
+@pytest.mark.parametrize("fp", ENV_TEMPLATES)
+def test_env_template_files_pass(run_hook, fp):
+    d, *_ = run_hook(HOOK, read(fp))
+    assert d is None, f"expected pass for env template {fp}"
+
+
+# 반대로 실제 시크릿을 담는 .env / .env.local / .env.production 은 계속 ask 여야 한다 (회귀 방지).
+@pytest.mark.parametrize("fp", ["/proj/.env", "/proj/.env.local", "/proj/.env.production"])
+def test_real_env_files_still_ask(run_hook, fp):
+    d, *_ = run_hook(HOOK, read(fp))
+    assert d == "ask", f"expected ask for real env file {fp}"
+
+
+def test_write_to_env_example_passes(run_hook):
+    # .env.example 을 '수정'하는 것도 블로킹되면 안 된다 (Write/Edit).
+    d, *_ = run_hook(HOOK, {"tool_name": "Write", "tool_input": {"file_path": "/x/.env.example"}})
+    assert d is None
+
+
 def test_write_to_env_asks(run_hook):
     d, *_ = run_hook(HOOK, {"tool_name": "Write", "tool_input": {"file_path": "/x/.env"}})
     assert d == "ask"

@@ -6,6 +6,10 @@ secrets_guard.py — PreToolUse hook (Claude Code, 유저 레벨, Windows/POSIX 
 파일에 대한 Read / Write / Edit / MultiEdit 시도를 감지하면 "ask" 로 사용자 확인을 요구한다.
 (완전 차단이 아니라 확인 요청인 이유: 정당하게 .env 를 편집해야 하는 경우가 많기 때문.
  더 엄격한 정책을 원하면 permissionDecision 을 "deny" 로 바꾸면 된다.)
+
+단, .env.example / .env.sample / .env.template / .env.dist 처럼 자리표시자(placeholder)만
+담고 커밋을 전제로 하는 "예시" 파일은 실제 시크릿이 아니므로 확인 게이트에서 제외한다
+(ENV_TEMPLATE_RE). 이 예외는 SENSITIVE 검사보다 먼저 적용된다.
 """
 import sys
 import json
@@ -44,6 +48,14 @@ SENSITIVE_PATH_RE = re.compile(
     re.IGNORECASE,
 )
 
+# .env 계열이지만 시크릿이 아닌 "예시/템플릿" 파일. 마지막 확장자가 example/sample/template/
+# dist 이면 예시로 판정한다 (.env.example 뿐 아니라 .env.local.example, .env.dev.template 처럼
+# 중간 세그먼트가 낀 형태도 커버). 이 검사가 SENSITIVE_RE 보다 먼저 통과시킨다.
+ENV_TEMPLATE_RE = re.compile(
+    r'(^|[\\/])\.env(\.[^\\/]+)*\.(example|sample|template|dist)$',
+    re.IGNORECASE,
+)
+
 
 def main() -> None:
     try:
@@ -56,6 +68,9 @@ def main() -> None:
         sys.exit(0)
 
     file_path = data.get("tool_input", {}).get("file_path", "") or ""
+    # .env.example 등 예시/템플릿 파일은 시크릿이 아니므로 확인 없이 통과시킨다.
+    if file_path and ENV_TEMPLATE_RE.search(file_path):
+        sys.exit(0)
     if file_path and (SENSITIVE_RE.search(file_path) or SENSITIVE_PATH_RE.search(file_path)):
         print(json.dumps({
             "hookSpecificOutput": {
