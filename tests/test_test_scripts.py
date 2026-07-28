@@ -23,8 +23,16 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TEST_SH = REPO_ROOT / "scripts" / "test.sh"
 TEST_PS1 = REPO_ROOT / "scripts" / "test.ps1"
+
+# bash 에 넘기는 스크립트 경로는 '리포 루트 기준 상대 POSIX 경로' 로 고정한다. Windows 절대
+# 경로를 그대로 넘기면 Git Bash 가 백슬래시를 이스케이프로 먹어 경로가 뭉개진다 — 실제로
+# C:\Users\...\test.sh 가 `C:Usersthsxo...test.sh` 가 되어 exit 127 로 전부 실패했다.
+TEST_SH_REL = "scripts/test.sh"
+
+# bash 는 절대 경로로 직접 호출한다. argv[0] 을 PATH 로 해석시키면, PATH 를 비워 '아무것도
+# 실행할 수 없는 상태' 를 만드는 테스트에서 bash 자체를 못 찾게 된다.
+BASH = shutil.which("bash")
 
 CHILD_ENV_FLAG = "CLAUDE_TEST_RUNNER_CHILD"
 
@@ -41,14 +49,14 @@ def run_test_sh(*args, env_overrides=None):
     if env_overrides:
         env.update(env_overrides)
     return subprocess.run(
-        ["bash", str(TEST_SH), *args],
+        [BASH, TEST_SH_REL, *args],
         cwd=REPO_ROOT, env=env, capture_output=True, text=True, encoding="utf-8",
     )
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash 필요")
 def test_test_sh_syntax_is_valid():
-    proc = subprocess.run(["bash", "-n", str(TEST_SH)], capture_output=True, text=True)
+    proc = subprocess.run([BASH, "-n", TEST_SH_REL], cwd=REPO_ROOT, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
 
 
@@ -72,10 +80,11 @@ def test_failing_suite_makes_the_runner_fail():
 def test_nothing_runnable_is_not_success(tmp_path):
     """러너를 하나도 못 찾은 상황. python 조차 없으면 검증된 것이 0개이므로 0 으로 끝나면
     안 된다 — 이게 첫 구현의 실제 버그였다(전부 건너뛰고 '모두 통과')."""
+    # bash 는 절대 경로로 부르므로 PATH 에 아무것도 없어도 스크립트 자체는 돈다. 예전에는
+    # bash 를 심볼릭 링크로 남겼는데, Windows 에서는 심볼릭 링크 생성에 별도 권한이 필요해
+    # 테스트가 환경 탓으로 깨진다 — 링크 없이 빈 디렉터리만 주는 편이 이식성이 높다.
     empty_bin = tmp_path / "bin"
     empty_bin.mkdir()
-    # bash 자체는 있어야 스크립트가 돌므로, bash 만 심볼릭 링크로 남기고 나머지는 비운다.
-    (empty_bin / "bash").symlink_to(shutil.which("bash"))
     proc = run_test_sh(env_overrides={"PATH": str(empty_bin)})
     assert proc.returncode == 1, proc.stdout[-2000:]
     assert "실행된 스위트가 없습니다" in proc.stdout
@@ -116,3 +125,32 @@ def test_test_ps1_help_exits_zero():
     )
     assert proc.returncode == 0, proc.stderr
     assert "사용법" in (proc.stdout or "")
+
+
+# --- 배포되는 셸 스크립트의 실행 권한 ---
+
+def test_shell_scripts_are_executable():
+    """`.sh` 파일은 전부 git 에 실행 권한(100755)으로 기록돼야 한다.
+
+    `bash script.sh` 로만 부르면 권한이 없어도 동작해서, 빠져 있어도 한동안 아무도 모른다.
+    그러다 `./scripts/setup.sh` 처럼 직접 실행하는 순간 'Permission denied' 로 막힌다.
+    모드는 커밋에 박히는 값이라 실수로 되돌아가기도 쉬우니 여기서 고정한다.
+
+    `.ps1` 은 제외한다 — Windows 는 실행 비트를 쓰지 않고, PowerShell 스크립트는
+    `powershell -File` 로 호출되므로 비트를 세워도 의미가 없다."""
+    listing = subprocess.run(
+        ["git", "ls-files", "-s", "--", "*.sh"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    assert listing.returncode == 0, listing.stderr
+    not_executable = []
+    for line in listing.stdout.splitlines():
+        if not line.strip():
+            continue
+        mode, _, _, path = line.split(maxsplit=3)
+        if mode != "100755":
+            not_executable.append(f"{path} ({mode})")
+    assert not not_executable, (
+        "실행 권한이 없는 셸 스크립트: " + ", ".join(not_executable) +
+        "  → git update-index --chmod=+x <path>"
+    )
