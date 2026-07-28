@@ -9,6 +9,12 @@
   - 실행된 스위트 중 하나라도 실패 → 1
   - 실행된 스위트가 하나도 없음 → 1 (통과 아님)
 
+인터프리터 선택 계약도 같이 고정한다:
+
+  - CLAUDE_TEST_PYTHON 미지정 → 러너가 스스로 pytest 가 import 되는 python 을 찾는다
+  - CLAUDE_TEST_PYTHON 지정, 그런데 그걸로 pytest 를 못 쓴다 → '건너뜀' 이 아니라 실패
+    (지정해 놓고 아무것도 안 돈 상태를 --strict 없는 CI 가 통과로 읽으면 안 되므로)
+
 재귀 주의: 이 테스트가 부르는 scripts/test.sh 는 pytest 를 다시 띄운다. 안쪽 pytest 가
 이 테스트 함수를 '실행' 하면 무한 재귀가 된다. 그래서 (a) 안쪽 실행은 아무 테스트도 매칭되지
 않는 -k 로 수집만 시키고, (b) 그래도 실행되면 멈추도록 CLAUDE_TEST_RUNNER_CHILD 가 설정된
@@ -117,6 +123,21 @@ def test_unusable_explicit_interpreter_fails_instead_of_skipping():
     assert "건너뜀" not in proc.stdout
 
 
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash 필요")
+def test_auto_discovery_finds_pytest_when_not_pinned():
+    """CLAUDE_TEST_PYTHON 없이도 러너가 스스로 pytest 가 도는 인터프리터를 찾아야 한다.
+
+    run_test_sh 는 이제 항상 인터프리터를 못박으므로, 이 테스트가 없으면 자동 탐색
+    (resolve_pytest_python)을 성공적으로 타는 경로가 하나도 남지 않는다. 실제로 그 함수를
+    통째로 `return 1` 로 망가뜨려도 이 모듈의 나머지 테스트는 전부 통과했다 — 정작 사람이
+    `bash scripts/test.sh` 를 그냥 치면 pytest 가 멀쩡히 깔려 있는데도 'pytest 미설치' 로
+    스위트 전체를 건너뛴다."""
+    proc = run_test_sh("--python-only", "-k", "test_rm_root_denied",
+                       env_overrides={"CLAUDE_TEST_PYTHON": ""})
+    assert proc.returncode == 0, proc.stdout[-2000:]
+    assert "인터프리터:" in proc.stdout, proc.stdout[-2000:]
+
+
 PWSH = shutil.which("pwsh") or shutil.which("powershell")
 
 
@@ -144,6 +165,27 @@ def test_test_ps1_help_exits_zero():
     )
     assert proc.returncode == 0, proc.stderr
     assert "사용법" in (proc.stdout or "")
+
+
+@pytest.mark.skipif(PWSH is None, reason="pwsh/powershell 을 찾지 못함")
+def test_ps_unusable_explicit_interpreter_fails_instead_of_skipping():
+    """PowerShell 러너도 bash 러너와 같은 계약을 지켜야 한다 — 지정한 인터프리터를 못 쓰면
+    '건너뜀' 이 아니라 실패.
+
+    두 러너는 같은 정책을 각자의 방언으로 따로 구현하고 있어서 한쪽만 고쳐도 티가 안 난다.
+    이번 세션에서 PowerShell 경로만 조용히 어긋난 사례가 이미 두 번 있었다(설치 셀프테스트가
+    PS 백업 스니펫을 한 번도 생성하지 않던 것, clean/stash drop 의 마지막 update-ref 가
+    검사 없이 지나가던 것). -PythonOnly 로 부르므로 안쪽 pytest 는 시작조차 하지 않아
+    재귀 걱정이 없다."""
+    env = dict(os.environ)
+    env[CHILD_ENV_FLAG] = "1"
+    env["CLAUDE_TEST_PYTHON"] = "X:/no/such/python.exe"
+    proc = subprocess.run(
+        [PWSH, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(TEST_PS1), "-PythonOnly"],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True, encoding="utf-8",
+    )
+    assert proc.returncode == 1, (proc.stdout or "") + (proc.stderr or "")
+    assert "실패" in (proc.stdout or "")
 
 
 # --- 배포되는 셸 스크립트의 실행 권한 ---
