@@ -609,11 +609,14 @@ def test_internal_error_falls_back_to_ask(run_hook):
     "git push --push-option=ci.skip origin feature/x",
     "git push --push-option ci.skip origin feature/x",
     "git push --receive-pack /usr/bin/git-receive-pack origin feature/x",
-    "git push --repo origin feature/x",
 ])
 def test_push_value_options_do_not_shift_the_positional_args(run_hook, cmd):
     """`-o <값>` 처럼 값이 다음 토큰에 오는 옵션의 값을 걸러내지 않으면, 그 값이 remote 자리로
-    잡히고 remote 가 브랜치 자리로 밀려 '/'가 없는 이름('origin')을 보호 브랜치로 오인한다."""
+    잡히고 remote 가 브랜치 자리로 밀려 '/'가 없는 이름('origin')을 보호 브랜치로 오인한다.
+
+    `--repo` 는 PUSH_VALUE_OPTS 에 들어있지만 여기서 단정하지 않는다. 위치 인자가 하나만
+    남으면 훅은 '대상 브랜치 생략' 으로 보고 현재 브랜치를 조회하는데, 그 결과는 테스트를
+    돌리는 저장소의 브랜치/업스트림에 따라 달라진다 — 판정이 아니라 환경을 재게 된다."""
     d, payload, _ = run_hook(HOOK, bash(cmd))
     assert d is None, f"{cmd} → {payload}"
 
