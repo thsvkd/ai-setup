@@ -467,11 +467,14 @@ def test_ps_backup_guards_its_last_update_ref(run_hook, cmd):
 @pytest.mark.parametrize("event", [
     ps("git push -o ci.skip origin feature/x"),
     bash("git push --push-option ci.skip origin feature/x"),
-    ps("git push --repo origin feature/x"),
+    ps("git push --receive-pack /usr/bin/git-receive-pack origin feature/x"),
 ])
 def test_push_value_options_do_not_shift_the_positional_args(run_hook, event):
     """`-o <값>` 의 값을 걸러내지 않으면 그 값이 remote 자리로 잡히고 remote 가 브랜치 자리로
-    밀려, '/'가 없는 이름('origin')을 보호 브랜치로 오인해 불필요한 확인을 띄운다."""
+    밀려, '/'가 없는 이름('origin')을 보호 브랜치로 오인해 불필요한 확인을 띄운다.
+
+    `--repo` 는 여기서 단정하지 않는다 — 위치 인자가 하나만 남아 '대상 브랜치 생략' 경로로
+    가는데, 그 결과는 테스트를 돌리는 저장소의 브랜치/업스트림에 좌우된다."""
     d, payload, _ = run_hook(HOOK, event)
     assert d is None, f"{event} → {payload}"
 

@@ -306,6 +306,11 @@ def _push_implicit_branch(cwd: str):
 # git push 옵션 중 '다음 토큰'을 값으로 소비하는 것들. 이걸 걸러내지 않으면 그 값이 위치
 # 인자로 잡혀 remote 자리로 밀려 들어간다 — `git push -o ci.skip origin feature/x` 가
 # "'origin' 브랜치로 push 하려 합니다" 로 오탐되던 원인.
+#
+# --repo 는 남겨둘 것: `git push --repo origin feature/x` 를 git 은 "repository=feature/x,
+# refspec 없음(=현재 브랜치를 push)" 으로 읽는다(실측 — 'current branch has no upstream'
+# 오류가 난다). --repo 를 여기서 빼면 origin 이 remote, feature/x 가 refspec 으로 잡혀
+# '곁다리 브랜치 push' 로 통과시켜 버린다 — 실제로는 main 이 나갈 수 있는데도.
 PUSH_VALUE_OPTS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
 
 
