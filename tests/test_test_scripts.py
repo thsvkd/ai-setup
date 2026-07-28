@@ -46,6 +46,12 @@ def run_test_sh(*args, env_overrides=None):
     """scripts/test.sh 를 자식으로 실행한다. 자식이 띄우는 pytest 는 이 모듈을 skip 한다."""
     env = dict(os.environ)
     env[CHILD_ENV_FLAG] = "1"
+    # 자식 러너가 '지금 이 pytest' 를 쓰도록 인터프리터를 못박는다. 러너의 자동 탐색은
+    # python3/python 만 뒤지므로, 바깥 pytest 가 venv 나 그 이름으로 안 잡히는 인터프리터에서
+    # 돌고 있으면 자식은 pytest 를 못 찾아 스위트를 통째로 건너뛴다 — 그러면 '실행된 스위트
+    # 없음' 이 되어, 여기서 검증하려는 실패/성공 계약이 아니라 환경을 측정하게 된다.
+    # 백슬래시는 슬래시로 바꾼다: Git Bash 에 Windows 절대 경로를 넘기면 경로가 뭉개진다.
+    env["CLAUDE_TEST_PYTHON"] = sys.executable.replace("\\", "/")
     if env_overrides:
         env.update(env_overrides)
     return subprocess.run(
@@ -85,7 +91,9 @@ def test_nothing_runnable_is_not_success(tmp_path):
     # 테스트가 환경 탓으로 깨진다 — 링크 없이 빈 디렉터리만 주는 편이 이식성이 높다.
     empty_bin = tmp_path / "bin"
     empty_bin.mkdir()
-    proc = run_test_sh(env_overrides={"PATH": str(empty_bin)})
+    # CLAUDE_TEST_PYTHON 도 비운다 — 절대 경로로 인터프리터를 못박아 두면 PATH 를 비워도
+    # pytest 가 돌아버려서, 정작 재현하려는 '아무 러너도 못 찾은 상황' 이 만들어지지 않는다.
+    proc = run_test_sh(env_overrides={"PATH": str(empty_bin), "CLAUDE_TEST_PYTHON": ""})
     assert proc.returncode == 1, proc.stdout[-2000:]
     assert "실행된 스위트가 없습니다" in proc.stdout
 
@@ -96,6 +104,17 @@ def test_python_only_skips_are_not_counted_by_strict():
     사용자가 직접 고른 선택을 --strict 가 실패로 만들면 안 된다."""
     proc = run_test_sh("--python-only", "--strict", "-k", "test_rm_root_denied")
     assert proc.returncode == 0, proc.stdout[-2000:]
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash 필요")
+def test_unusable_explicit_interpreter_fails_instead_of_skipping():
+    """CLAUDE_TEST_PYTHON 으로 지정한 인터프리터를 못 쓰면 '건너뜀' 이 아니라 실패여야 한다.
+    지정한 인터프리터가 안 돈다는 것은 아무것도 검증되지 않았다는 뜻이라, skip 으로 삼키면
+    --strict 없이 돌리는 CI 에서 통과로 읽힌다."""
+    proc = run_test_sh("--python-only", env_overrides={"CLAUDE_TEST_PYTHON": "/no/such/python"})
+    assert proc.returncode == 1, proc.stdout[-2000:]
+    assert "실패" in proc.stdout
+    assert "건너뜀" not in proc.stdout
 
 
 PWSH = shutil.which("pwsh") or shutil.which("powershell")
