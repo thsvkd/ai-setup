@@ -3,6 +3,7 @@
 이 훅은 Windows 에 설치되지만 순수 파이썬이라 어느 OS 에서도 정책을 검증할 수 있다.
 """
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -459,3 +460,41 @@ def test_ps_backup_guards_its_last_update_ref(run_hook, cmd):
     after_last_update_ref = backup_part.rsplit("git update-ref", 1)[-1]
     assert "$LASTEXITCODE -ne 0" in after_last_update_ref and "exit 1" in after_last_update_ref, \
         f"{cmd}: 마지막 update-ref 뒤에 실패 검사가 없다 (fail-open)\n{backup_part}"
+
+
+# --- 설치 셀프테스트가 PowerShell 백업 경로를 실제로 한 번 생성하는지 ---
+
+def test_installer_self_test_covers_the_powershell_backup_snippet(run_hook):
+    """setup_hooks.ps1 의 셀프테스트 케이스를 그대로 훅에 먹여, PowerShell '방언'의 백업
+    스니펫이 최소 한 번 생성되는지 확인한다.
+
+    파괴적 git 케이스가 Bash 툴로만 들어 있으면 셀프테스트는 bash 문법 스니펫만 보고 통과한다.
+    그러면 정작 Windows 설치본에서 실제로 쓰일 PowerShell 경로($LASTEXITCODE 가드 포함)가
+    설치 시점에 한 번도 생성되지 않은 채 "초기화 완료"가 찍힌다 — 실제로 그 상태였고,
+    Windows 설치 로그의 reset --hard 결과가 bash 문법인 것으로 드러났다.
+
+    케이스 목록을 텍스트로 훑는 대신 훅에 실제로 통과시키는 이유는, 문구를 바꿔도 깨지지 않고
+    '커버리지가 있는가'라는 의도만 검사하기 위해서다."""
+    ps1 = (Path(__file__).resolve().parent.parent / "scripts" / "setup_hooks.ps1").read_text(encoding="utf-8")
+    case_jsons = re.findall(r"Json\s*=\s*'([^']*)'", ps1)
+    assert case_jsons, "setup_hooks.ps1 에서 셀프테스트 케이스를 찾지 못했다"
+
+    ps_backup_snippets = []
+    for raw in case_jsons:
+        event = json.loads(raw)
+        if event.get("tool_name") != "PowerShell":
+            continue
+        _, payload, _ = run_hook(HOOK, event)
+        if not payload:
+            continue
+        command = payload["hookSpecificOutput"].get("updatedInput", {}).get("command", "")
+        if "refs/claude-backups/" in command:
+            ps_backup_snippets.append(command)
+
+    assert ps_backup_snippets, (
+        "PowerShell 툴로 백업 스니펫을 생성하는 셀프테스트 케이스가 없다 — "
+        "Windows 설치 시 PS 백업 경로가 한 번도 검증되지 않는다"
+    )
+    for command in ps_backup_snippets:
+        assert "$LASTEXITCODE" in command, f"PS 방언이 아니거나 실패 가드가 없다: {command}"
+        assert "$(date " not in command, f"bash 문법이 섞여 있다: {command}"
