@@ -73,6 +73,16 @@ def fold_receipt(previous: dict, current: dict) -> dict:
     env.update(current.get("added_env") or {})
     folded["added_env"] = env
 
+    # 구버전 규칙 제거는 '첫 설치'에서만 일어난다 — 두 번째 실행은 이미 지워진 상태라 제거할
+    # 것이 없어 빈 dict 를 낸다. 덮어쓰면 uninstall 이 무엇을 되돌려야 하는지 잊어버린다.
+    legacy = {k: list(v) for k, v in (previous.get("removed_legacy") or {}).items()}
+    for key, rules in (current.get("removed_legacy") or {}).items():
+        merged = legacy.setdefault(key, [])
+        for rule in rules:
+            if rule not in merged:
+                merged.append(rule)
+    folded["removed_legacy"] = legacy
+
     # defaultMode 는 '설치 전 원래 값'이 유일하게 중요하다. 한 번이라도 우리가 바꿨다면
     # 그 최초 값을 계속 들고 간다.
     if previous.get("default_mode_changed"):
@@ -142,6 +152,62 @@ def merge_list(perms, key, incoming, changes):
     return added
 
 
+# 예전 버전의 res/settings.json 이 배포했던 permissions 규칙. 지금은 조각에서 빠졌지만 merge 는
+# '추가만' 하므로 기존 설치본에는 그대로 남는다. Claude Code 는 permissions 의 deny/ask 를
+# PreToolUse 훅의 판정보다 우선 적용하므로, 이게 남아 있으면 danger_guard 의 git 정책(곁다리
+# 브랜치 push 통과, reset --hard 백업 후 실행)이 통째로 무력화된다 — 새로 설치한 사용자에게는
+# 동작하고 업그레이드한 사용자에게는 조용히 죽어 있는, 가장 알아채기 어려운 형태의 고장이다.
+# 그래서 '우리가 배포했던 문자열과 정확히 일치하는 것'만 설치 중에 제거한다. 사용자가 직접
+# 적어 넣은 규칙은 문자열이 조금이라도 다르면 남으므로, 남의 설정을 임의로 지우지 않는다.
+# (legacy 키 permissions.mode 를 제거하는 아래 로직과 같은 성격의 마이그레이션이다.)
+LEGACY_PERMISSION_RULES = {
+    "deny": [
+        "Bash(git push *)",
+        "Bash(git reset --hard *)",
+        "PowerShell(git push *)",
+        "PowerShell(git reset --hard *)",
+    ],
+}
+
+
+def prune_legacy_rules(perms: dict, frag_perms: dict, changes: list) -> dict:
+    """예전 버전이 심어둔 permissions 규칙 중 지금 조각에 더 이상 없는 것을 제거한다.
+    반환: {키: [제거된 규칙]} — uninstall 이 설치 전 상태로 되돌리는 근거."""
+    removed_map = {}
+    for key, legacy_rules in LEGACY_PERMISSION_RULES.items():
+        current = perms.get(key)
+        if not current:
+            continue
+        # 조각이 그 규칙을 다시 넣기로 했다면 제거 대상이 아니다 (정책이 되돌아온 경우 방어).
+        incoming = set(frag_perms.get(key) or [])
+        targets = [r for r in legacy_rules if r in current and r not in incoming]
+        if not targets:
+            continue
+        perms[key] = [x for x in current if x not in targets]
+        removed_map[key] = targets
+        changes.append(f"permissions.{key}: -{targets} (구버전 규칙 — 훅의 git 정책을 무력화하므로 제거)")
+        if not perms[key]:
+            del perms[key]
+    return removed_map
+
+
+def restore_legacy_rules(perms: dict, receipt: dict) -> list:
+    """uninstall: 설치가 제거했던 구버전 규칙을 되돌려 놓는다. '설치가 바꾼 것만 원복한다'는
+    영수증 철학을 그대로 따른 것 — 이 설치가 없었다면 그 규칙들은 그대로 남아 있었을 것이다."""
+    changes = []
+    removed_map = receipt.get("removed_legacy") or {}
+    for key, rules in removed_map.items():
+        if not rules:
+            continue
+        current = list(perms.get(key, []))
+        restored = [r for r in rules if r not in current]
+        if not restored:
+            continue
+        perms[key] = current + restored
+        changes.append(f"permissions.{key}: +{restored} (설치가 제거했던 구버전 규칙 복원)")
+    return changes
+
+
 def merge_scalars(existing: dict, fragment: dict, changes: list) -> dict:
     """model/effortLevel/language 를 '없을 때만' 추가한다(기존 값 보존). 실제로 추가한 {키: 값} 을 반환."""
     added = {}
@@ -186,6 +252,7 @@ def merge(existing: dict, fragment: dict):
         "added_ask": [],
         "added_scalars": {},
         "added_env": {},
+        "removed_legacy": {},
         "default_mode_before": None,
         "default_mode_after": None,
         "default_mode_changed": False,
@@ -200,6 +267,8 @@ def merge(existing: dict, fragment: dict):
         receipt["added_allow"] = merge_list(perms, "allow", frag_perms.get("allow", []), changes)
         receipt["added_deny"] = merge_list(perms, "deny", frag_perms.get("deny", []), changes)
         receipt["added_ask"] = merge_list(perms, "ask", frag_perms.get("ask", []), changes)
+        # 합집합 병합 '뒤'에 돌려야 한다 — 조각이 다시 넣은 규칙까지 지워버리지 않도록.
+        receipt["removed_legacy"] = prune_legacy_rules(perms, frag_perms, changes)
         if "defaultMode" in frag_perms:
             old_mode = perms.get("defaultMode")
             new_mode = frag_perms["defaultMode"]
@@ -237,6 +306,10 @@ def revert_permissions(existing: dict, receipt: dict) -> list:
     perms = existing.get("permissions")
     if not perms:
         return changes
+
+    # 설치가 제거했던 구버전 규칙을 먼저 복원한다 (아래 added_* 제거와 대상이 겹치지 않는다 —
+    # 구버전 규칙은 이번 조각에 없으므로 added_deny 에 들어갈 수 없다).
+    changes += restore_legacy_rules(perms, receipt)
 
     for key in ("allow", "deny", "ask"):
         added = receipt.get("added_" + key) or []
