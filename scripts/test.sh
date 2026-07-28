@@ -16,6 +16,10 @@
 #   bash scripts/test.sh --strict           # 러너가 없어 건너뛴 것도 실패로 취급 (CI용)
 #   bash scripts/test.sh -k git_guard       # 남은 인자는 pytest 로 그대로 전달
 #
+#   CLAUDE_TEST_PYTHON=/path/to/python bash scripts/test.sh
+#       pytest 를 돌릴 인터프리터를 직접 지정한다. venv 안이거나 pytest 가 python3/python
+#       이라는 이름으로 잡히지 않는 환경에서 필요하다.
+#
 # set -e 는 쓰지 않는다: 스위트 하나가 실패해도 나머지를 계속 돌려야 한다.
 set -uo pipefail
 
@@ -36,6 +40,9 @@ claude-code-setup — 테스트 스위트 실행
   --help, -h      이 도움말
 
 옵션이 아닌 나머지 인자는 pytest 에 그대로 전달된다 (예: -k, -x, --lf).
+
+환경 변수:
+  CLAUDE_TEST_PYTHON   pytest 를 돌릴 인터프리터 경로 (지정하면 자동 탐색을 건너뛴다)
 EOF
 }
 
@@ -84,23 +91,42 @@ resolve_pytest_python() {
 }
 
 # --- pytest: 이 저장소의 핵심 스위트 (훅 정책 + git 실측 + 병합 엔진 + 셋업 스크립트) ---
-section "pytest"
-PY="$(resolve_pytest_python)" || PY=""
-if [[ -z "$PY" ]]; then
-    if resolve_python_command >/dev/null 2>&1; then
-        echo "python 은 있으나 pytest 가 설치돼 있지 않습니다. ($(resolve_python_command) -m pip install pytest)"
-        record "pytest" "skip" "pytest 미설치"
+run_pytest_suite() {
+    local py
+    if [[ -n "${CLAUDE_TEST_PYTHON:-}" ]]; then
+        # 명시적으로 지정한 인터프리터를 쓸 수 없는 것은 '러너가 없어 건너뜀' 이 아니라 오류다.
+        # 조용히 skip 하면 pytest 를 돌리라고 지정해 놓고 아무것도 안 돈 상태가 통과처럼 보인다.
+        py="$CLAUDE_TEST_PYTHON"
+        if ! "$py" -c "import pytest" 2>/dev/null; then
+            echo "CLAUDE_TEST_PYTHON=$py 로 pytest 를 import 하지 못했습니다."
+            record "pytest" "fail" "지정한 인터프리터에 pytest 없음"
+            return
+        fi
     else
-        echo "python3/python 을 찾지 못했습니다."
-        record "pytest" "skip" "python 없음"
+        py="$(resolve_pytest_python)" || py=""
     fi
-else
-    echo "인터프리터: $PY ($("$PY" -V 2>&1))"
+
+    if [[ -z "$py" ]]; then
+        if resolve_python_command >/dev/null 2>&1; then
+            echo "python 은 있으나 pytest 가 설치돼 있지 않습니다. ($(resolve_python_command) -m pip install pytest)"
+            echo "  (pytest 가 다른 인터프리터에 있다면 CLAUDE_TEST_PYTHON 으로 지정할 수 있습니다.)"
+            record "pytest" "skip" "pytest 미설치"
+        else
+            echo "python3/python 을 찾지 못했습니다."
+            record "pytest" "skip" "python 없음"
+        fi
+        return
+    fi
+
+    echo "인터프리터: $py ($("$py" -V 2>&1))"
     # -rs: 스킵된 테스트의 '사유'까지 출력한다. 이 저장소의 스킵은 대부분 환경 조건부라
     # (macOS 전용 경로, 3.9.x 인터프리터 유무) 무엇이 검증되지 '않았는지' 보이는 게 중요하다.
-    "$PY" -m pytest "$REPO_ROOT/tests" -rs ${PYTEST_ARGS[@]+"${PYTEST_ARGS[@]}"}
+    "$py" -m pytest "$REPO_ROOT/tests" -rs ${PYTEST_ARGS[@]+"${PYTEST_ARGS[@]}"}
     if [[ $? -eq 0 ]]; then record "pytest" "pass" ""; else record "pytest" "fail" ""; fi
-fi
+}
+
+section "pytest"
+run_pytest_suite
 
 # --python-only 는 '요청하지 않은' 것이므로 아예 기록하지 않는다 — 러너가 없어서 못 돌린
 # skip 과 섞이면 --strict 가 사용자가 직접 고른 선택까지 실패로 만든다.
