@@ -469,3 +469,90 @@ def test_reinstall_after_uninstall_starts_fresh_receipt(tmp_path):
     run_merge(target, manifest_path=manifest)
     m = json.loads(manifest.read_text(encoding="utf-8"))
     assert m["default_mode_before"] == "plan"
+
+
+# --- 구버전 git deny 규칙 마이그레이션 ---
+# 배경: 예전 res/settings.json 은 Bash(git push *) 등을 permissions.deny 로 막았다. 지금은
+# 훅이 브랜치 이름을 보고 판단하지만, Claude Code 는 deny 를 훅 판정보다 우선 적용하므로
+# 기존 설치본에 그 규칙이 남아 있으면 새 git 정책이 통째로 죽는다. merge 는 원래 '추가만'
+# 하므로, 이 규칙만은 설치 중에 제거해야 업그레이드한 사용자에게도 기능이 살아난다.
+
+LEGACY_DENY = [
+    "Bash(git push *)",
+    "Bash(git reset --hard *)",
+    "PowerShell(git push *)",
+    "PowerShell(git reset --hard *)",
+]
+
+
+def test_legacy_git_deny_rules_are_removed_on_install(tmp_path):
+    target = tmp_path / "settings.json"
+    target.write_text(json.dumps({"permissions": {"deny": list(LEGACY_DENY)}}), encoding="utf-8")
+    proc, result = run_merge(target)
+    assert proc.returncode == 0
+    assert not any("git" in rule for rule in result["permissions"].get("deny", [])), \
+        "구버전 git deny 규칙이 남아 있으면 훅의 git 정책이 무력화된다"
+
+
+def test_legacy_removal_leaves_user_own_deny_rules(tmp_path):
+    """정확히 일치하는 문자열만 지운다. 사용자가 직접 넣은 규칙은 비슷해도 남아야 한다."""
+    target = tmp_path / "settings.json"
+    target.write_text(json.dumps({"permissions": {"deny": [
+        "Bash(git push *)",            # 우리가 배포했던 것 → 제거
+        "Bash(git push --force *)",     # 사용자가 직접 넣은 것 → 보존
+        "Bash(rm -rf /*)",              # 무관 → 보존
+    ]}}), encoding="utf-8")
+    _, result = run_merge(target)
+    deny = result["permissions"]["deny"]
+    assert "Bash(git push *)" not in deny
+    assert "Bash(git push --force *)" in deny
+    assert "Bash(rm -rf /*)" in deny
+
+
+def test_legacy_removal_when_no_such_rules_is_a_noop(tmp_path):
+    target = tmp_path / "settings.json"
+    target.write_text(json.dumps({"permissions": {"deny": ["Bash(curl *)"]}}), encoding="utf-8")
+    proc, result = run_merge(target)
+    assert proc.returncode == 0
+    assert result["permissions"]["deny"] == ["Bash(curl *)"]
+
+
+def test_legacy_removal_is_recorded_in_manifest(tmp_path):
+    target = tmp_path / "settings.json"
+    manifest = tmp_path / "manifest.json"
+    target.write_text(json.dumps({"permissions": {"deny": list(LEGACY_DENY)}}), encoding="utf-8")
+    run_merge(target, manifest_path=manifest)
+    recorded = json.loads(manifest.read_text(encoding="utf-8"))["removed_legacy"]["deny"]
+    assert sorted(recorded) == sorted(LEGACY_DENY)
+
+
+def test_legacy_removal_survives_reinstall_in_manifest(tmp_path):
+    """멱등 재실행은 제거할 것이 없어 빈 결과를 낸다. 영수증이 덮어쓰이면 uninstall 이
+    무엇을 되돌려야 하는지 잊는다 — added_* 와 동일하게 누적돼야 한다."""
+    target = tmp_path / "settings.json"
+    manifest = tmp_path / "manifest.json"
+    target.write_text(json.dumps({"permissions": {"deny": list(LEGACY_DENY)}}), encoding="utf-8")
+    run_merge(target, manifest_path=manifest)
+    run_merge(target, manifest_path=manifest)
+    recorded = json.loads(manifest.read_text(encoding="utf-8"))["removed_legacy"]["deny"]
+    assert sorted(recorded) == sorted(LEGACY_DENY)
+
+
+def test_uninstall_restores_removed_legacy_rules(tmp_path):
+    """uninstall 은 '설치가 바꾼 것'을 되돌린다. 설치가 지운 규칙이라면 복원까지가 그 계약이다."""
+    target = tmp_path / "settings.json"
+    manifest = tmp_path / "manifest.json"
+    target.write_text(json.dumps({"permissions": {"deny": list(LEGACY_DENY)}}), encoding="utf-8")
+    run_merge(target, manifest_path=manifest)
+    _, result = run_uninstall(target, manifest)
+    assert sorted(result["permissions"]["deny"]) == sorted(LEGACY_DENY)
+
+
+def test_dry_run_reports_legacy_removal_without_writing(tmp_path):
+    target = tmp_path / "settings.json"
+    original = json.dumps({"permissions": {"deny": list(LEGACY_DENY)}})
+    target.write_text(original, encoding="utf-8")
+    proc, _ = run_merge(target, dry="1")
+    assert proc.returncode == 0
+    assert "구버전 규칙" in proc.stdout, proc.stdout
+    assert target.read_text(encoding="utf-8") == original, "dry-run 은 파일을 바꾸면 안 된다"
