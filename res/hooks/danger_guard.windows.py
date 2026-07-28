@@ -18,6 +18,8 @@ Bash 툴(Git Bash)과 PowerShell 툴(네이티브, Git for Windows 미설치 시
                '/' 가 없으면(main/master/develop 등 보호 브랜치로 간주) 브랜치 이름을 명시하며
                ask. --all/--mirror 처럼 특정 브랜치로 좁힐 수 없으면 ask. force 여부는 통과/ask
                판정에 영향 없음(브랜치 이름만 기준) — ask 사유 문구에만 force 여부를 표시한다.
+               단 원격 브랜치 '삭제'(--delete/-d, 빈 src refspec `origin :branch`)는 브랜치
+               이름과 무관하게 ask — 원격 히스토리는 로컬 백업으로 되돌릴 수 없다.
        backup 후 allow : reset --hard, clean -f*(단 -n/--dry-run 제외), stash drop|clear,
                branch -D, branch -M(대상 이름이 이미 있었으면), tag -d, tag -f(대상이 이미
                있었으면), rebase(새로 시작하는 경우), commit --amend, filter-branch/filter-repo,
@@ -25,8 +27,12 @@ Bash 툴(Git Bash)과 PowerShell 툴(네이티브, Git for Windows 미설치 시
                checkout -- <path>/checkout ./restore(워킹트리) → 실행 전 refs/claude-backups/
                <timestamp>/<대상> 에 되돌릴 대상을 백업한 뒤 원본 명령을 그대로 이어서 실행한다
                (자동치환). git stash create 는 추적 안 된 파일을 담지 못하는 한계가 있어(검증됨)
-               clean 은 별도 스크래치 인덱스로 추적 안 된 파일까지 스냅샷한다. 멀티라인/체이닝된
-               경우 백업 대상을 안전하게 특정할 수 없어 ask 로 폴백한다.
+               clean 은 별도 스크래치 인덱스로 추적 안 된 파일까지 스냅샷하며, -x/-X 로 무시된
+               파일까지 지우는 경우엔 `git add -Af` 로 .gitignore 대상까지 담는다.
+               백업 스니펫은 bash 에선 전부 `&&` 로, PowerShell 에선 단계마다 $LASTEXITCODE 를
+               확인해 실패 시 `exit 1` 로 끊어, 한 단계라도 실패하면 뒤의 원본 파괴적 명령이
+               실행되지 않는다(fail-closed). 멀티라인/체이닝이거나 -C/--git-dir/--work-tree 로
+               '다른 저장소'를 대상으로 삼아 백업 대상을 안전하게 특정할 수 없으면 ask 로 폴백한다.
        pass  : stash push/pop/apply/list, reset --soft/--mixed, clean -n, branch -d,
                checkout/switch <branch>, restore --staged, rebase --continue/--abort/--skip,
                commit(amend 아님), 그 외 안전한 서브커맨드
@@ -257,7 +263,33 @@ PUSH_BROAD_FLAGS = {"--all", "--mirror"}
 REBASE_SAFE_ACTIONS = {"--continue", "--abort", "--skip", "--quit", "--edit-todo", "--show-current-patch"}
 BACKUP_REF_PREFIX = "refs/claude-backups/"
 BACKUP_HINT = f"{BACKUP_REF_PREFIX} 는 git for-each-ref {BACKUP_REF_PREFIX} 로 조회 가능합니다."
-CHAINED_BACKUP_ASK = "여러 줄 또는 체이닝된 명령이라 되돌릴 대상을 안전하게 특정해 백업할 수 없습니다. 계속할까요?"
+CHAINED_BACKUP_ASK = "여러 줄·체이닝된 명령이거나 다른 저장소(-C/--git-dir)를 대상으로 해서, 되돌릴 대상을 안전하게 특정해 백업할 수 없습니다. 계속할까요?"
+
+# 명령의 대상 저장소를 현재 디렉터리 밖으로 바꾸는 git 전역 옵션. 백업 스니펫은 이 옵션을
+# 물려받지 않고 cwd 에서 실행되므로, 이게 붙으면 '엉뚱한 저장소를 백업하고 진짜 대상은 무방비로
+# 파괴'하는 상황이 된다. 그래서 백업 경로에서는 자동치환 대신 ask 로 폴백한다.
+GIT_REPO_REDIRECT_OPTS = {"-C", "--git-dir", "--work-tree", "--namespace"}
+GIT_REPO_REDIRECT_PREFIXES = ("--git-dir=", "--work-tree=", "--namespace=")
+
+
+def _git_repo_redirected(own_args: list) -> bool:
+    """git 명령이 cwd 가 아닌 다른 저장소/워크트리를 대상으로 삼는지."""
+    for a in own_args:
+        if a in GIT_REPO_REDIRECT_OPTS or a.startswith(GIT_REPO_REDIRECT_PREFIXES):
+            return True
+    return False
+
+
+def _push_is_delete(rest: list) -> bool:
+    """원격 브랜치를 '삭제'하는 push 인지. `--delete`/`-d` 플래그 또는 src 가 빈 refspec
+    (`git push origin :branch`). 원격 히스토리는 refs/claude-backups/ 로 되돌릴 수 없으므로,
+    브랜치 이름에 '/' 가 있어도(곁다리 브랜치여도) 통과시키지 않는다."""
+    for t in rest:
+        if t == "--delete" or "d" in _short_flag_chars(t):
+            return True
+        if not t.startswith("-") and t.startswith(":") and len(t) > 1:
+            return True
+    return False
 
 
 def _current_branch(cwd: str):
@@ -323,6 +355,12 @@ def _clean_is_destructive(rest: list) -> bool:
     if dry:
         return False
     return any(t == "--force" or "f" in _short_flag_chars(t) for t in rest)
+
+
+def _clean_removes_ignored(rest: list) -> bool:
+    """git clean 이 .gitignore 대상까지 지우는지(-x: 무시된 파일도 함께, -X: 무시된 파일만).
+    이 경우 기본 `git add -A` 스냅샷으로는 .env/node_modules/빌드 산출물이 백업에서 빠진다."""
+    return any("x" in _short_flag_chars(t) or "X" in _short_flag_chars(t) for t in rest)
 
 
 def _restore_touches_worktree(rest: list) -> bool:
@@ -391,30 +429,42 @@ def _backup_head_and_worktree(reason: str, is_bash: bool) -> str:
     <path>/restore 는 추적 안 된 파일을 지우지 않으므로 이걸로 충분하다(git clean 은
     _backup_full_snapshot 을 따로 쓴다)."""
     if is_bash:
+        # 모든 단계를 `&&` 로만 잇는다. 예전엔 stash create 앞에 `;` 가 있었는데, `;` 는 앞선
+        # 실패의 종료 상태를 덮어써서 마지막 `[ -z "$_bk_stash" ]` 가 참이 되어 전체가 성공으로
+        # 보고되고, 뒤에 이어붙인 원본 파괴적 명령이 백업 없이 실행됐다(POSIX 판에서 실측 확인).
         return (
-            '_bk_ts=$(date +%Y%m%d_%H%M%S); '
-            '_bk_head=$(git rev-parse HEAD) && git update-ref "refs/claude-backups/${_bk_ts}/head" "$_bk_head" && '
-            '_bk_stash=$(git stash create ' + shlex.quote(reason) + '); '
-            '[ -z "$_bk_stash" ] || git update-ref "refs/claude-backups/${_bk_ts}/worktree" "$_bk_stash"'
+            '_bk_ts=$(date +%Y%m%d_%H%M%S) && '
+            '_bk_head=$(git rev-parse HEAD) && '
+            'git update-ref "refs/claude-backups/${_bk_ts}/head" "$_bk_head" && '
+            '_bk_stash=$(git stash create ' + shlex.quote(reason) + ') && '
+            '{ [ -z "$_bk_stash" ] || git update-ref "refs/claude-backups/${_bk_ts}/worktree" "$_bk_stash"; }'
         )
     return (
         '$bkTs = Get-Date -Format "yyyyMMdd_HHmmss"; '
         '$bkHead = git rev-parse HEAD; if ($LASTEXITCODE -ne 0) { exit 1 }; '
         'git update-ref "refs/claude-backups/$bkTs/head" $bkHead; if ($LASTEXITCODE -ne 0) { exit 1 }; '
-        '$bkStash = git stash create ' + quote_ps(reason) + '; '
-        'if ($bkStash) { git update-ref "refs/claude-backups/$bkTs/worktree" $bkStash }'
+        '$bkStash = git stash create ' + quote_ps(reason) + '; if ($LASTEXITCODE -ne 0) { exit 1 }; '
+        # 마지막 update-ref 의 실패도 반드시 잡아야 한다 — 여기서 놓치면 스태시 커밋이 ref 로
+        # 고정되지 않은 채(=GC 대상) 원본 파괴적 명령이 이어서 실행된다.
+        'if ($bkStash) { git update-ref "refs/claude-backups/$bkTs/worktree" $bkStash; if ($LASTEXITCODE -ne 0) { exit 1 } }'
     )
 
 
-def _backup_full_snapshot(reason: str, is_bash: bool) -> str:
-    """추적 + 추적 안 된 파일(gitignore 대상 제외) 전체를 스냅샷 커밋으로 백업한다. git clean
-    전용 — git stash create 는 추적 안 된 파일을 담지 못하는 한계가 실측으로 확인되어, 별도
-    인덱스로 실제 인덱스/워킹트리를 전혀 건드리지 않고 전체 스냅샷을 만든다."""
+def _backup_full_snapshot(reason: str, is_bash: bool, include_ignored: bool) -> str:
+    """추적 + 추적 안 된 파일 전체를 스냅샷 커밋으로 백업한다. git clean 전용 — git stash create
+    는 추적 안 된 파일을 담지 못하는 한계가 실측으로 확인되어, 별도 인덱스로 실제 인덱스/워킹트리를
+    전혀 건드리지 않고 전체 스냅샷을 만든다.
+
+    include_ignored 는 `git clean -x/-X`(무시된 파일까지 삭제) 전용이다. 기본 `git add -A` 는
+    .gitignore 대상을 담지 않아, -x 로 지워질 .env/node_modules/빌드 산출물이 백업에서 통째로
+    빠진 채 영구 소실됐다(실측 확인). 이 경우에만 `-f` 를 붙인다 — 항상 붙이면 -x 없는 평범한
+    clean 에서도 node_modules 전체를 커밋해 느려지기 때문이다."""
+    add_cmd = 'git add -Af -- .' if include_ignored else 'git add -A -- .'
     if is_bash:
         return (
-            '_bk_ts=$(date +%Y%m%d_%H%M%S); '
+            '_bk_ts=$(date +%Y%m%d_%H%M%S) && '
             '_bk_idx=$(mktemp -u) && '
-            'GIT_INDEX_FILE="$_bk_idx" git add -A -- . && '
+            'GIT_INDEX_FILE="$_bk_idx" ' + add_cmd + ' && '
             '_bk_tree=$(GIT_INDEX_FILE="$_bk_idx" git write-tree) && '
             '_bk_h=$(git commit-tree "$_bk_tree" -p HEAD -m ' + shlex.quote(reason) + ') && '
             'git update-ref "refs/claude-backups/${_bk_ts}/snapshot" "$_bk_h"'
@@ -423,7 +473,7 @@ def _backup_full_snapshot(reason: str, is_bash: bool) -> str:
         '$bkTs = Get-Date -Format "yyyyMMdd_HHmmss"; '
         '$bkIdx = Join-Path $env:TEMP ("claude-bk-" + [guid]::NewGuid().ToString("N")); '
         '$env:GIT_INDEX_FILE = $bkIdx; '
-        'git add -A -- .; '
+        + add_cmd + '; '
         'if ($LASTEXITCODE -ne 0) { Remove-Item Env:\\GIT_INDEX_FILE -ErrorAction SilentlyContinue; exit 1 }; '
         '$bkTree = git write-tree; '
         'Remove-Item Env:\\GIT_INDEX_FILE -ErrorAction SilentlyContinue; '
@@ -558,24 +608,37 @@ def _backup_dangling_commits(is_bash: bool) -> str:
     )
 
 
+def _fail_closed(backup_snippet: str, is_bash: bool) -> str:
+    """bash 경로에서 백업 스니펫을 `{ ... } || { 메시지; exit 1; }` 로 감싼다. 스니펫 안의 어떤
+    단계가 실패하든 셸이 즉시 끊겨, 뒤에 `&&` 로 이어붙인 원본 파괴적 명령이 실행되지 않는다.
+    PowerShell 경로는 스니펫 자체가 단계마다 $LASTEXITCODE 를 보고 `exit 1` 하므로 감싸지 않는다."""
+    if not is_bash:
+        return backup_snippet
+    return (
+        "{ " + backup_snippet + "; } || "
+        '{ echo "claude-guard: 백업에 실패해 원본 명령을 실행하지 않았습니다." >&2; exit 1; }'
+    )
+
+
 def _emit_with_backup(backup_snippet: str, line: str, reason: str, command: str, is_bash: bool) -> None:
-    new_command = backup_snippet + _join(is_bash) + line.strip()
+    new_command = _fail_closed(backup_snippet, is_bash) + _join(is_bash) + line.strip()
     log({"command": command, "decision": "prepend-backup", "new_command": new_command})
     emit("allow", reason, updated_input={"command": new_command})
 
 
-def _emit_with_backup_or_ask(backup_snippet, line, allow_reason, is_multiline, is_chained, command, is_bash) -> None:
-    if is_multiline or is_chained:
+def _emit_with_backup_or_ask(backup_snippet, line, allow_reason, no_safe_backup, command, is_bash) -> None:
+    """no_safe_backup 이면(멀티라인·체이닝·다른 저장소 대상) 백업 대상을 특정할 수 없어 ask."""
+    if no_safe_backup:
         emit("ask", CHAINED_BACKUP_ASK)
     _emit_with_backup(backup_snippet, line, allow_reason, command, is_bash)
 
 
-def _emit_backup_prepend(paths, cmd_parts, line, is_multiline, is_chained, command, quote, is_bash) -> None:
+def _emit_backup_prepend(paths, cmd_parts, line, no_safe_backup, command, is_bash) -> None:
     """되돌리기 전 uncommitted 변경을 refs/claude-backups/ 에 백업한 뒤 원본을 그대로 실행하도록
-    자동 치환한다. 원본 명령을 안전하게 특정할 수 없으면(멀티라인/체이닝/파이프/리다이렉트/경로
-    추출 실패) ask 로 폴백."""
+    자동 치환한다. 원본 명령을 안전하게 특정할 수 없으면(멀티라인/체이닝/다른 저장소/파이프/
+    리다이렉트/경로 추출 실패) ask 로 폴백."""
     has_pipe_or_redirect = "|" in cmd_parts or any(t in (">", ">>") for t in cmd_parts)
-    if is_multiline or is_chained or not paths or has_pipe_or_redirect:
+    if no_safe_backup or not paths or has_pipe_or_redirect:
         emit("ask", "커밋되지 않은 로컬 변경사항을 버릴 수 있는 명령입니다. 계속할까요?")
     backup = _backup_head_and_worktree(f"claude-auto-backup: before {line.strip()}", is_bash)
     _emit_with_backup(
@@ -583,8 +646,6 @@ def _emit_backup_prepend(paths, cmd_parts, line, is_multiline, is_chained, comma
         f"되돌리기 전 uncommitted 변경사항을 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git stash apply <hash> 로 복구).",
         command, is_bash,
     )
-    emit("allow", "되돌리기 전 uncommitted 변경사항을 git stash로 보존했습니다 (git stash pop으로 복구 가능).",
-         updated_input={"command": new_command})
 
 
 def main() -> None:
@@ -680,9 +741,13 @@ def main() -> None:
 
             if base == "git":
                 # 서브커맨드를 정확히 판정한다 (순진한 "push in args" 는 `git stash push` 를 오탐).
-                sub, rest = git_subcommand(_git_own_args(args))
+                own_args = _git_own_args(args)
+                sub, rest = git_subcommand(own_args)
                 subl = sub.lower() if sub else ""
-                quote = quote_bash if is_bash else quote_ps
+                # 백업 자동치환을 포기하고 ask 로 폴백해야 하는 조건들. -C/--git-dir/--work-tree 는
+                # 명령의 대상 저장소를 cwd 밖으로 옮기는데 백업 스니펫은 cwd 에서 돌기 때문에,
+                # 그대로 두면 엉뚱한 저장소를 백업하고 진짜 대상은 무방비로 파괴된다.
+                no_safe_backup = is_multiline or is_chained or _git_repo_redirected(own_args)
 
                 if subl == "push":
                     cwd = data.get("cwd") or os.getcwd()
@@ -691,6 +756,10 @@ def main() -> None:
                         emit("ask", "git push --all/--mirror 는 여러 브랜치(보호 브랜치 포함 가능)를 한 번에 원격에 반영합니다. 계속할까요?")
                     if not branches:
                         emit("ask", "푸시 대상 브랜치를 확인할 수 없습니다. 계속할까요?")
+                    if _push_is_delete(rest):
+                        # 원격 브랜치 삭제는 refs/claude-backups/ 로 되돌릴 수 없다 — 로컬 백업이
+                        # 닿지 않는 유일한 영역이라, 곁다리 브랜치여도 확인을 받는다.
+                        emit("ask", f"원격 브랜치({', '.join(branches)})를 삭제하려고 합니다. 원격 히스토리는 로컬 백업으로 되돌릴 수 없습니다. 계속할까요?")
                     protected = [b for b in branches if "/" not in b]
                     if protected:
                         kind = "force push" if _push_is_force(rest) else "push"
@@ -702,15 +771,17 @@ def main() -> None:
                     _emit_with_backup_or_ask(
                         backup, line,
                         f"되돌리기 전 HEAD 위치와 uncommitted 변경을 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git reset --hard <hash> 또는 git stash apply <hash> 로 복구).",
-                        is_multiline, is_chained, command, is_bash,
+                        no_safe_backup, command, is_bash,
                     )
 
                 if subl == "clean" and _clean_is_destructive(rest):
-                    backup = _backup_full_snapshot("claude-auto-backup: pre git clean", is_bash)
+                    with_ignored = _clean_removes_ignored(rest)
+                    backup = _backup_full_snapshot("claude-auto-backup: pre git clean", is_bash, with_ignored)
+                    scope = "추적/미추적 파일 전체(.gitignore 대상 포함)" if with_ignored else "삭제될 추적/미추적 파일"
                     _emit_with_backup_or_ask(
                         backup, line,
-                        f"삭제될 추적/미추적 파일 전체를 스냅샷으로 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git checkout <hash> -- . 로 복구).",
-                        is_multiline, is_chained, command, is_bash,
+                        f"{scope}를 스냅샷으로 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git checkout <hash> -- . 로 복구).",
+                        no_safe_backup, command, is_bash,
                     )
 
                 if subl == "stash":
@@ -725,14 +796,14 @@ def main() -> None:
                         _emit_with_backup_or_ask(
                             backup, line,
                             f"삭제될 스태시를 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git stash apply <hash> 로 복구).",
-                            is_multiline, is_chained, command, is_bash,
+                            no_safe_backup, command, is_bash,
                         )
                     if stash_action == "clear":
                         backup = _backup_stash_entries(is_bash)
                         _emit_with_backup_or_ask(
                             backup, line,
                             f"삭제될 모든 스태시를 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git stash apply <hash> 로 복구).",
-                            is_multiline, is_chained, command, is_bash,
+                            no_safe_backup, command, is_bash,
                         )
 
                 if subl == "branch" and ("-D" in rest or ("--delete" in rest and _has_force_flag(rest))):
@@ -743,7 +814,7 @@ def main() -> None:
                     _emit_with_backup_or_ask(
                         backup, line,
                         f"삭제될 브랜치({', '.join(names)})의 커밋 위치를 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git branch <name> <hash> 로 복구).",
-                        is_multiline, is_chained, command, is_bash,
+                        no_safe_backup, command, is_bash,
                     )
 
                 if subl == "branch" and ("-M" in rest or ("--move" in rest and _has_force_flag(rest))):
@@ -753,7 +824,7 @@ def main() -> None:
                         _emit_with_backup_or_ask(
                             backup, line,
                             f"'{names[-1]}' 이름이 이미 있었다면 덮어쓰이기 전 위치를 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git branch <name> <hash> 로 복구).",
-                            is_multiline, is_chained, command, is_bash,
+                            no_safe_backup, command, is_bash,
                         )
 
                 if subl == "tag" and ("-d" in rest or "--delete" in rest):
@@ -763,7 +834,7 @@ def main() -> None:
                         _emit_with_backup_or_ask(
                             backup, line,
                             f"삭제될 태그({', '.join(names)})의 커밋 위치를 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git tag <name> <hash> 로 복구).",
-                            is_multiline, is_chained, command, is_bash,
+                            no_safe_backup, command, is_bash,
                         )
 
                 if subl == "tag" and ("-f" in rest or "--force" in rest):
@@ -773,7 +844,7 @@ def main() -> None:
                         _emit_with_backup_or_ask(
                             backup, line,
                             f"'{names[0]}' 태그가 이미 있었다면 덮어쓰이기 전 위치를 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git tag <name> <hash> 로 복구).",
-                            is_multiline, is_chained, command, is_bash,
+                            no_safe_backup, command, is_bash,
                         )
 
                 if subl == "rebase" and not any(a in rest for a in REBASE_SAFE_ACTIONS):
@@ -781,7 +852,7 @@ def main() -> None:
                     _emit_with_backup_or_ask(
                         backup, line,
                         f"rebase 시작 전 HEAD 위치와 uncommitted 변경을 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git reset --hard <hash> 로 복구).",
-                        is_multiline, is_chained, command, is_bash,
+                        no_safe_backup, command, is_bash,
                     )
 
                 if subl == "commit" and "--amend" in rest:
@@ -789,7 +860,7 @@ def main() -> None:
                     _emit_with_backup_or_ask(
                         backup, line,
                         f"amend 전 이전 커밋 위치를 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git reset --soft <hash> 로 복구).",
-                        is_multiline, is_chained, command, is_bash,
+                        no_safe_backup, command, is_bash,
                     )
 
                 if subl in ("filter-branch", "filter-repo"):
@@ -797,7 +868,7 @@ def main() -> None:
                     _emit_with_backup_or_ask(
                         backup, line,
                         f"저장소 히스토리 재작성 전 모든 로컬 브랜치 위치를 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git branch <name> <hash> 로 복구).",
-                        is_multiline, is_chained, command, is_bash,
+                        no_safe_backup, command, is_bash,
                     )
 
                 if subl == "reflog" and _first_non_option(rest) in ("expire", "delete"):
@@ -805,7 +876,7 @@ def main() -> None:
                     _emit_with_backup_or_ask(
                         backup, line,
                         f"reflog 로만 도달 가능하던 커밋들을 refs/claude-backups/ 에 고정했습니다 ({BACKUP_HINT} git stash apply <hash> 또는 git branch <name> <hash> 로 복구).",
-                        is_multiline, is_chained, command, is_bash,
+                        no_safe_backup, command, is_bash,
                     )
 
                 if subl == "gc" and any(t in ("--prune=now", "--prune=all") for t in rest):
@@ -813,7 +884,7 @@ def main() -> None:
                     _emit_with_backup_or_ask(
                         backup, line,
                         f"즉시 삭제될 도달 불가능한 커밋들을 refs/claude-backups/ 에 고정했습니다 ({BACKUP_HINT} git branch <name> <hash> 로 복구).",
-                        is_multiline, is_chained, command, is_bash,
+                        no_safe_backup, command, is_bash,
                     )
 
                 if subl == "switch" and _has_force_flag(rest):
@@ -821,7 +892,7 @@ def main() -> None:
                     _emit_with_backup_or_ask(
                         backup, line,
                         f"전환 전 HEAD 위치와 uncommitted 변경을 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git stash apply <hash> 로 복구).",
-                        is_multiline, is_chained, command, is_bash,
+                        no_safe_backup, command, is_bash,
                     )
 
                 if subl == "checkout":
@@ -830,13 +901,13 @@ def main() -> None:
                         _emit_with_backup_or_ask(
                             backup, line,
                             f"전환 전 HEAD 위치와 uncommitted 변경을 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git stash apply <hash> 로 복구).",
-                            is_multiline, is_chained, command, is_bash,
+                            no_safe_backup, command, is_bash,
                         )
                     if "--" in rest or "." in rest:
-                        _emit_backup_prepend(_checkout_paths(rest), cmd_parts, line, is_multiline, is_chained, command, quote, is_bash)
+                        _emit_backup_prepend(_checkout_paths(rest), cmd_parts, line, no_safe_backup, command, is_bash)
 
                 if subl == "restore" and _restore_touches_worktree(rest):
-                    _emit_backup_prepend(_restore_paths(rest), cmd_parts, line, is_multiline, is_chained, command, quote, is_bash)
+                    _emit_backup_prepend(_restore_paths(rest), cmd_parts, line, no_safe_backup, command, is_bash)
 
             if base in {"format", "diskpart", "mkfs", "fdisk", "clear-disk", "format-volume"}:
                 emit("deny", f"디스크 레벨 명령({base})은 되돌릴 수 없어 자동 실행을 차단합니다.")
@@ -863,4 +934,14 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # settings.json 의 permissions.deny 에서 git 규칙을 뺀 뒤로는 이 훅이 유일한 방어선이다.
+    # 훅이 예외로 죽으면 Claude Code 는 판정 없이 명령을 그대로 실행하므로(fail-open), 예상 못 한
+    # 내부 오류는 조용히 흘려보내지 않고 ask 로 승격해 사용자에게 판단을 넘긴다. emit() 이 내는
+    # SystemExit 은 정상 종료 경로이므로 다시 잡지 않는다.
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as exc:
+        log({"decision": "ask-guard-error", "error": repr(exc)})
+        emit("ask", f"가드 훅 내부 오류로 이 명령의 안전성을 판정하지 못했습니다 ({type(exc).__name__}). 계속할까요?")
