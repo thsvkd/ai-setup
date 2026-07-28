@@ -146,7 +146,11 @@ Invoke-HookSelfTest -HookPath (Join-Path $hooksDir "danger_guard.py") -PyExe $py
     @{ Label = "rm -rf temp/  → 휴지통 치환 기대"; Json = '{"tool_name":"Bash","tool_input":{"command":"rm -rf temp/"}}' },
     @{ Label = "git push --force origin main → ask 기대 (보호 브랜치)"; Json = '{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}' },
     @{ Label = "PowerShell + git push origin feature/x → 통과 기대 (곁다리 브랜치)"; Json = '{"tool_name":"PowerShell","tool_input":{"command":"git push origin feature/x"}}' },
-    @{ Label = "git reset --hard → allow+백업 기대"; Json = '{"tool_name":"Bash","tool_input":{"command":"git reset --hard HEAD"}}' },
+    @{ Label = "git reset --hard (Bash 툴) → allow+bash 백업 스니펫 기대"; Json = '{"tool_name":"Bash","tool_input":{"command":"git reset --hard HEAD"}}' },
+    # PowerShell 툴로도 반드시 한 번 돌린다. 위 Bash 케이스는 bash 문법 스니펫을 내므로,
+    # 이게 없으면 Windows 설치본에서 PowerShell 방언 백업 스니펫($LASTEXITCODE 가드 포함)이
+    # 한 번도 생성되지 않은 채로 통과한다 — 정작 이 머신에서 실제로 쓰일 경로가 미검증으로 남는다.
+    @{ Label = "PowerShell + git reset --hard → allow+PS 백업 스니펫 기대"; Json = '{"tool_name":"PowerShell","tool_input":{"command":"git reset --hard HEAD"}}' },
     @{ Label = "Remove-Item -Recurse -Force C:\ → deny 기대"; Json = '{"tool_name":"PowerShell","tool_input":{"command":"Remove-Item -Recurse -Force C:\\"}}' },
     @{ Label = "ls -la → 통과(무판단) 기대";          Json = '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' }
 )
