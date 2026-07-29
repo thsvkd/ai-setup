@@ -303,12 +303,40 @@ def _push_implicit_branch(cwd: str):
     return _current_branch(cwd)
 
 
+# git push 옵션 중 '다음 토큰'을 값으로 소비하는 것들. 이걸 걸러내지 않으면 그 값이 위치
+# 인자로 잡혀 remote 자리로 밀려 들어간다 — `git push -o ci.skip origin feature/x` 가
+# "'origin' 브랜치로 push 하려 합니다" 로 오탐되던 원인.
+#
+# --repo 는 남겨둘 것: `git push --repo origin feature/x` 를 git 은 "repository=feature/x,
+# refspec 없음(=현재 브랜치를 push)" 으로 읽는다(실측 — 'current branch has no upstream'
+# 오류가 난다). --repo 를 여기서 빼면 origin 이 remote, feature/x 가 refspec 으로 잡혀
+# '곁다리 브랜치 push' 로 통과시켜 버린다 — 실제로는 main 이 나갈 수 있는데도.
+PUSH_VALUE_OPTS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
+
+
+def _push_positionals(rest: list) -> list:
+    """git push 인자에서 위치 인자(remote, refspec)만 뽑는다."""
+    out = []
+    skip_next = False
+    for t in rest:
+        if skip_next:
+            skip_next = False
+            continue
+        if t in PUSH_VALUE_OPTS:
+            skip_next = True
+            continue
+        if t.startswith("-"):
+            continue
+        out.append(t)
+    return out
+
+
 def _push_target_branches(rest: list, cwd: str):
     """git push 인자에서 실제로 갱신/삭제될 원격 브랜치 이름들을 뽑는다.
     반환: (branches, broad) — broad 면 --all/--mirror 등으로 특정 브랜치로 좁힐 수 없다."""
     if any(f in rest for f in PUSH_BROAD_FLAGS):
         return [], True
-    positional = [a for a in rest if not a.startswith("-")]
+    positional = _push_positionals(rest)
     if len(positional) <= 1:
         # remote 생략, 혹은 remote 만 있고 refspec 생략 → 현재 브랜치를 그대로 push
         branch = _push_implicit_branch(cwd)
@@ -331,7 +359,12 @@ def _push_target_branches(rest: list, cwd: str):
 
 
 def _backup_ts_snippet() -> str:
-    return '_bk_ts=$(date +%Y%m%d_%H%M%S)'
+    """백업 ref 의 네임스페이스. 초 단위 타임스탬프만 쓰면 같은 초에 실행된 두 백업이 같은
+    네임스페이스를 공유해, `feat`(파일)와 `feat/x`(디렉터리)처럼 D/F 충돌이 나는 ref 쌍이
+    생긴다. 충돌 시 update-ref 가 실패하고 fail-closed 로 원본까지 막히므로(데이터는 안전하나
+    사용자는 난해한 git 에러를 본다), 셸 PID 를 붙여 실행마다 네임스페이스를 분리한다.
+    date 의 %N(나노초)은 BSD date(macOS)에 없어 쓰지 않는다."""
+    return '_bk_ts=$(date +%Y%m%d_%H%M%S)_$$'
 
 
 def _backup_head_and_worktree(reason: str) -> str:
@@ -365,9 +398,14 @@ def _backup_full_snapshot(reason: str, include_ignored: bool) -> str:
     빠진 채 영구 소실됐다(실측 확인). 이 경우에만 `-f` 를 붙여 무시된 파일까지 담는다 — 항상
     붙이면 -x 없는 평범한 clean 에서도 node_modules 전체를 커밋해 느려지기 때문이다."""
     add_cmd = 'git add -Af -- .' if include_ignored else 'git add -A -- .'
+    # 스크래치 인덱스는 .git/ 안의 고정 경로에 만든다. mktemp 로 매번 새 이름을 쓰면 clean 을
+    # 돌릴 때마다 /tmp 에 인덱스 파일이 하나씩 쌓이고, 지우려면 생성 명령에 rm 을 넣어야 한다
+    # (가드가 rm 을 다루는 마당에 스스로 rm 을 생성하는 건 피하고 싶다). .git/ 안의 한 파일을
+    # 계속 덮어쓰면 누적도 없고 삭제도 필요 없으며, git 이 원래 인덱스를 두는 자리이기도 하다.
     return (
         f'{_backup_ts_snippet()} && '
-        '_bk_idx=$(mktemp -u) && '
+        '_bk_gitdir=$(git rev-parse --git-dir) && '
+        '_bk_idx="$_bk_gitdir/claude-guard-index" && '
         f'GIT_INDEX_FILE="$_bk_idx" {add_cmd} && '
         '_bk_tree=$(GIT_INDEX_FILE="$_bk_idx" git write-tree) && '
         f'_bk_h=$(git commit-tree "$_bk_tree" -p HEAD -m {shlex.quote(reason)}) && '

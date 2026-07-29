@@ -462,6 +462,53 @@ def test_ps_backup_guards_its_last_update_ref(run_hook, cmd):
         f"{cmd}: 마지막 update-ref 뒤에 실패 검사가 없다 (fail-open)\n{backup_part}"
 
 
+# --- 리뷰 잔여 항목: push 값-옵션 오탐 / 백업 네임스페이스 / 스크래치 인덱스 ---
+
+@pytest.mark.parametrize("event", [
+    ps("git push -o ci.skip origin feature/x"),
+    bash("git push --push-option ci.skip origin feature/x"),
+    ps("git push --receive-pack /usr/bin/git-receive-pack origin feature/x"),
+])
+def test_push_value_options_do_not_shift_the_positional_args(run_hook, event):
+    """`-o <값>` 의 값을 걸러내지 않으면 그 값이 remote 자리로 잡히고 remote 가 브랜치 자리로
+    밀려, '/'가 없는 이름('origin')을 보호 브랜치로 오인해 불필요한 확인을 띄운다.
+
+    `--repo` 는 여기서 단정하지 않는다 — 위치 인자가 하나만 남아 '대상 브랜치 생략' 경로로
+    가는데, 그 결과는 테스트를 돌리는 저장소의 브랜치/업스트림에 좌우된다."""
+    d, payload, _ = run_hook(HOOK, event)
+    assert d is None, f"{event} → {payload}"
+
+
+def test_push_value_option_still_detects_protected_branch(run_hook):
+    d, payload, _ = run_hook(HOOK, ps("git push -o ci.skip origin main"))
+    assert d == "ask"
+    assert "main" in payload["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize("event,marker", [
+    (bash("git reset --hard HEAD~1"), "_$$"),
+    (ps("git reset --hard HEAD~1"), "$PID"),
+])
+def test_backup_namespace_is_unique_per_process(run_hook, event, marker):
+    """초 단위 타임스탬프만으로는 같은 초의 두 백업이 ref 네임스페이스를 공유해 D/F 충돌이
+    난다(태그 rel + 브랜치 rel/x 처럼 한쪽 이름이 다른 쪽의 접두어일 때). 방언별 PID 로 분리한다."""
+    d, payload, _ = run_hook(HOOK, event)
+    assert d == "allow"
+    assert marker in payload["hookSpecificOutput"]["updatedInput"]["command"]
+
+
+@pytest.mark.parametrize("event", [bash("git clean -fd"), ps("git clean -fd")])
+def test_clean_snapshot_index_lives_in_git_dir(run_hook, event):
+    """스크래치 인덱스를 임시 디렉터리에 매번 새로 만들면 clean 마다 파일이 쌓인다.
+    .git/ 안 고정 경로면 덮어쓰기라 누적도 삭제도 필요 없다."""
+    d, payload, _ = run_hook(HOOK, event)
+    assert d == "allow"
+    command = payload["hookSpecificOutput"]["updatedInput"]["command"]
+    assert "mktemp" not in command and "NewGuid" not in command
+    assert "claude-guard-index" in command
+    assert "git rev-parse --git-dir" in command
+
+
 # --- 설치 셀프테스트가 PowerShell 백업 경로를 실제로 한 번 생성하는지 ---
 
 def test_installer_self_test_covers_the_powershell_backup_snippet(run_hook):

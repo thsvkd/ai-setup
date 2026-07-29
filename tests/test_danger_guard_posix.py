@@ -600,3 +600,48 @@ def test_internal_error_falls_back_to_ask(run_hook):
     d, payload, _ = run_hook(HOOK, {"tool_name": "Bash", "tool_input": "ls -la"})
     assert d == "ask"
     assert "가드 훅 내부 오류" in payload["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+# --- 리뷰 잔여 항목: 오탐/충돌/누수 정리 ---
+
+@pytest.mark.parametrize("cmd", [
+    "git push -o ci.skip origin feature/x",
+    "git push --push-option=ci.skip origin feature/x",
+    "git push --push-option ci.skip origin feature/x",
+    "git push --receive-pack /usr/bin/git-receive-pack origin feature/x",
+])
+def test_push_value_options_do_not_shift_the_positional_args(run_hook, cmd):
+    """`-o <값>` 처럼 값이 다음 토큰에 오는 옵션의 값을 걸러내지 않으면, 그 값이 remote 자리로
+    잡히고 remote 가 브랜치 자리로 밀려 '/'가 없는 이름('origin')을 보호 브랜치로 오인한다.
+
+    `--repo` 는 PUSH_VALUE_OPTS 에 들어있지만 여기서 단정하지 않는다. 위치 인자가 하나만
+    남으면 훅은 '대상 브랜치 생략' 으로 보고 현재 브랜치를 조회하는데, 그 결과는 테스트를
+    돌리는 저장소의 브랜치/업스트림에 따라 달라진다 — 판정이 아니라 환경을 재게 된다."""
+    d, payload, _ = run_hook(HOOK, bash(cmd))
+    assert d is None, f"{cmd} → {payload}"
+
+
+def test_push_value_option_still_detects_protected_branch(run_hook):
+    # 반대 방향 회귀: 값 옵션을 건너뛰다가 진짜 보호 브랜치까지 놓치면 안 된다.
+    d, payload, _ = run_hook(HOOK, bash("git push -o ci.skip origin main"))
+    assert d == "ask"
+    assert "main" in payload["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_backup_namespace_includes_pid(run_hook):
+    """백업 ref 네임스페이스가 초 단위 타임스탬프뿐이면, 같은 초에 실행된 두 백업이
+    같은 네임스페이스를 공유해 `feat`/`feat/x` 같은 D/F 충돌을 만든다. PID 로 분리한다."""
+    d, payload, _ = run_hook(HOOK, bash("git reset --hard HEAD~1"))
+    assert d == "allow"
+    assert "_$$" in payload["hookSpecificOutput"]["updatedInput"]["command"]
+
+
+def test_clean_snapshot_index_lives_in_git_dir(run_hook):
+    """스크래치 인덱스를 mktemp 로 만들면 clean 을 돌릴 때마다 /tmp 에 파일이 쌓이고,
+    치우려면 생성 명령에 rm 을 넣어야 한다. .git/ 안 고정 경로면 누적도 삭제도 없다."""
+    d, payload, _ = run_hook(HOOK, bash("git clean -fd"))
+    assert d == "allow"
+    command = payload["hookSpecificOutput"]["updatedInput"]["command"]
+    assert "mktemp" not in command
+    assert "claude-guard-index" in command
+    assert "git rev-parse --git-dir" in command
