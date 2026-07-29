@@ -36,11 +36,62 @@ TEST_PS1 = REPO_ROOT / "scripts" / "test.ps1"
 # C:\Users\...\test.sh 가 `C:Usersuser...test.sh` 가 되어 exit 127 로 전부 실패했다.
 TEST_SH_REL = "scripts/test.sh"
 
+CHILD_ENV_FLAG = "CLAUDE_TEST_RUNNER_CHILD"
+
+# bash 후보를 고르는 유일한 기준은 '우리가 넘긴 환경 변수를 그대로 받는가' 다. 이 모듈의 모든
+# 테스트는 env 로 상황을 만들어 낸다 — PATH 를 비워 '러너가 하나도 없는 상태' 를,
+# CLAUDE_TEST_PYTHON 으로 인터프리터를, CLAUDE_TEST_RUNNER_CHILD 로 재귀 방지를 건다.
+# 환경이 전달되지 않는 bash 에서는 그 셋업이 통째로 사라지고, 테스트는 의도한 계약 대신
+# 그 bash 가 사는 환경을 측정한다.
+#
+# Windows 의 PATH 위 `bash` 는 대개 WSL 런처(System32\bash.exe)다. WSL 은 별개의 리눅스
+# 환경으로 넘어가면서 WSLENV 에 등재되지 않은 변수를 전부 버린다 — 실제로 PATH 를 비운
+# 테스트가 WSL 안의 python3 으로 pytest 를 돌려 버렸고, 재귀 방지 플래그까지 사라져 안쪽
+# pytest 가 이 모듈을 다시 실행했다. 그래서 PATH 를 믿지 않고 실측으로 고른다.
+PROBE_VAR = "CLAUDE_TEST_BASH_PROBE"
+
+
+def _bash_candidates():
+    """우선순위대로 bash 후보 경로. Windows 에서는 Git Bash 를 PATH 보다 앞에 둔다."""
+    if sys.platform == "win32":
+        git = shutil.which("git")
+        if git:
+            # ...\Git\cmd\git.exe → ...\Git, ...\Git\bin\bash.exe 가 같은 설치본이다.
+            git_root = Path(git).resolve().parent.parent
+            yield git_root / "bin" / "bash.exe"
+            yield git_root / "usr" / "bin" / "bash.exe"
+        yield Path(r"C:\Program Files\Git\bin\bash.exe")
+    found = shutil.which("bash")
+    if found:
+        yield Path(found)
+
+
+def _passes_env_probe(bash):
+    try:
+        proc = subprocess.run(
+            [str(bash), "-c", f'printf %s "${PROBE_VAR}"'],
+            env={**os.environ, PROBE_VAR: "1"},
+            capture_output=True, text=True, timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0 and proc.stdout.strip() == "1"
+
+
+def _resolve_bash():
+    for candidate in _bash_candidates():
+        if candidate.exists() and _passes_env_probe(candidate):
+            return str(candidate)
+    return None
+
+
 # bash 는 절대 경로로 직접 호출한다. argv[0] 을 PATH 로 해석시키면, PATH 를 비워 '아무것도
 # 실행할 수 없는 상태' 를 만드는 테스트에서 bash 자체를 못 찾게 된다.
-BASH = shutil.which("bash")
+BASH = _resolve_bash()
 
-CHILD_ENV_FLAG = "CLAUDE_TEST_RUNNER_CHILD"
+requires_bash = pytest.mark.skipif(
+    BASH is None, reason="환경 변수를 전달받는 bash 를 찾지 못함 (Windows: Git Bash 필요)"
+)
 
 pytestmark = pytest.mark.skipif(
     os.environ.get(CHILD_ENV_FLAG) == "1",
@@ -66,20 +117,20 @@ def run_test_sh(*args, env_overrides=None):
     )
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash 필요")
+@requires_bash
 def test_test_sh_syntax_is_valid():
     proc = subprocess.run([BASH, "-n", TEST_SH_REL], cwd=REPO_ROOT, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash 필요")
+@requires_bash
 def test_help_exits_zero_without_running_anything():
     proc = run_test_sh("--help")
     assert proc.returncode == 0
     assert "사용법" in proc.stdout
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash 필요")
+@requires_bash
 def test_failing_suite_makes_the_runner_fail():
     """pytest 가 실패하면(여기서는 매칭되는 테스트가 없어 exit 5) 러너도 1 이어야 한다.
     -k 가 아무것도 매칭하지 않으므로 안쪽 pytest 는 수집만 하고 테스트를 실행하지 않는다."""
@@ -88,7 +139,7 @@ def test_failing_suite_makes_the_runner_fail():
     assert "실패" in proc.stdout
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash 필요")
+@requires_bash
 def test_nothing_runnable_is_not_success(tmp_path):
     """러너를 하나도 못 찾은 상황. python 조차 없으면 검증된 것이 0개이므로 0 으로 끝나면
     안 된다 — 이게 첫 구현의 실제 버그였다(전부 건너뛰고 '모두 통과')."""
@@ -104,7 +155,7 @@ def test_nothing_runnable_is_not_success(tmp_path):
     assert "실행된 스위트가 없습니다" in proc.stdout
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash 필요")
+@requires_bash
 def test_python_only_skips_are_not_counted_by_strict():
     """--python-only 로 '요청하지 않은' 스위트는 러너 미설치로 '못 돌린' 스위트와 다르다.
     사용자가 직접 고른 선택을 --strict 가 실패로 만들면 안 된다."""
@@ -112,7 +163,7 @@ def test_python_only_skips_are_not_counted_by_strict():
     assert proc.returncode == 0, proc.stdout[-2000:]
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash 필요")
+@requires_bash
 def test_unusable_explicit_interpreter_fails_instead_of_skipping():
     """CLAUDE_TEST_PYTHON 으로 지정한 인터프리터를 못 쓰면 '건너뜀' 이 아니라 실패여야 한다.
     지정한 인터프리터가 안 돈다는 것은 아무것도 검증되지 않았다는 뜻이라, skip 으로 삼키면
@@ -123,7 +174,7 @@ def test_unusable_explicit_interpreter_fails_instead_of_skipping():
     assert "건너뜀" not in proc.stdout
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash 필요")
+@requires_bash
 def test_auto_discovery_finds_pytest_when_not_pinned():
     """CLAUDE_TEST_PYTHON 없이도 러너가 스스로 pytest 가 도는 인터프리터를 찾아야 한다.
 
