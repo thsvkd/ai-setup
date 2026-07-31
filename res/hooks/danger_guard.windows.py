@@ -8,9 +8,18 @@ Bash 툴(Git Bash)과 PowerShell 툴(네이티브, Git for Windows 미설치 시
 
 정책:
   1) rm / del / erase / Remove-Item / rd / rmdir  → send_to_trash.py 로 치환 (allow + updatedInput)
-     단, 드라이브 루트(C 드라이브 전체, / 또는 ~) 삭제 시도는 치환하지 않고 즉시 deny.
+     핵심 원칙: **치환된 명령이 원래 명령보다 더 많이 지울 수 있으면 안 된다.** rm 은
+     `rm -rf .` 을 거부하지만 휴지통 이동 도구는 거부하지 않으므로, 그대로 치환하면 아무 일도
+     없었을 명령이 현재 디렉터리를 통째로 휴지통에 넣는다. 그래서 아래를 모두 검사한다:
+       - 드라이브 루트(C 드라이브 전체, / 또는 ~) → deny
+       - 말단이 `.`/`..` 인 경로(`.`, `./`, `..`, `sub/.`) → deny (rm 과 동일)
+       - cwd 기준으로 풀면 루트/홈이 되는 상대경로 → deny
+       - 와일드카드는 cwd 기준으로 직접 확장해 절대경로로 고정하고, 확장된 경로 각각에
+         위 검사를 다시 적용한다. 매칭 0개/중괄호 확장이면 deny, 100개 초과면 ask.
+       - `rm -f` / `del /f` 의 force 의미는 send_to_trash.py 의 -f 로 넘긴다.
      send2trash 가 설치되어 있지 않으면 치환할 수 없으므로 fail-closed 로 deny.
      멀티라인 또는 체이닝(&&/;) 스크립트 안에 섞여 있으면 자동 치환 대신 deny.
+     sudo/command/env/exec/… 래퍼 접두어와 /bin/rm, rm.exe 같은 표기는 벗겨서 동일하게 검사한다.
   2) git: 서브커맨드를 정확히 판정해 세분화한다(git_subcommand). 순진하게 "push in args" 로
      매칭하면 `git stash push`(작업을 저장하는 안전한 명령)까지 막히므로, 전역 옵션(-C/-c/…)을
      건너뛰고 실제 서브커맨드를 뽑아 아래 규칙을 적용한다.
@@ -57,6 +66,7 @@ from __future__ import annotations
 import sys
 import json
 import shlex
+import glob
 import re
 import os
 import datetime
@@ -111,6 +121,87 @@ def _is_root_or_home_literal(path: str) -> bool:
         return False
     stripped = path.rstrip("/\\*") if path not in ("/", "\\", "") else path
     return os.path.normcase(os.path.normpath(stripped)) == os.path.normcase(os.path.normpath(_HOME_DIR))
+
+
+def _is_dot_target(path: str) -> bool:
+    """rm 이 거부하는 형태인가 — 경로의 말단 성분이 `.` 또는 `..` 인지.
+
+    GNU rm 은 `.`, `./`, `..`, `sub/.` 를 모두 거부하지만(실측 확인) 휴지통 이동
+    도구는 거부하지 않는다. 이 검사가 없으면 치환이 원래 명령보다 위험해진다 —
+    `rm -rf .` 가 휴지통 치환을 타면서 현재 디렉터리가 통째로 사라진다.
+    """
+    stripped = path.rstrip("/\\") or path
+    return os.path.basename(stripped.replace("\\", "/")) in (".", "..")
+
+
+def _resolves_to_root_or_home(path: str, cwd: str) -> bool:
+    """cwd 기준으로 해석했을 때 드라이브 루트나 홈을 가리키는가.
+
+    _is_root_or_home_literal 은 문자열만 보므로 `..\\..\\..\\Users\\pi` 처럼
+    해석해야 홈이 되는 경로를 놓친다.
+    """
+    try:
+        resolved = os.path.realpath(os.path.join(cwd, os.path.expanduser(path)))
+    except (OSError, ValueError):
+        return False
+    tail = os.path.splitdrive(resolved)[1]
+    if tail in ("", "/", "\\", os.sep):
+        return True
+    if not _HOME_DIR or _HOME_DIR in ("/", "\\"):
+        return False
+    return os.path.normcase(resolved) == os.path.normcase(os.path.realpath(_HOME_DIR))
+
+
+# 와일드카드는 셸이 확장하는데 훅이 인용해 버리면 확장이 죽어 명령이 조용히 실패한다.
+# 인용을 빼면 반대로 무엇이 지워질지 모른 채 통과시키게 된다. 그래서 훅이 cwd 기준으로
+# 직접 확장해 구체 경로로 바꾼 뒤, 확장된 경로 각각에 안전 검사를 적용한다.
+GLOB_META_RE = re.compile(r"[*?\[]")
+BRACE_RE = re.compile(r"[{}]")
+MAX_TRASH_TARGETS = 100
+
+
+def expand_delete_targets(args: list, cwd: str) -> tuple:
+    """와일드카드를 cwd 기준으로 확장한다. 반환: (확장된 경로 리스트, 실패 사유 또는 None)."""
+    expanded = []
+    for a in args:
+        if BRACE_RE.search(a):
+            return [], f"중괄호 확장이 포함된 대상('{a}')은 훅이 해석할 수 없어 차단합니다."
+        if not GLOB_META_RE.search(a):
+            expanded.append(a)
+            continue
+        # 확장 결과는 절대경로로 고정한다 — 훅이 본 cwd 와 실제 실행 cwd 가 어긋나도
+        # 엉뚱한 디렉터리의 파일이 지워지지 않는다.
+        pattern = a if os.path.isabs(a) else os.path.join(cwd, a)
+        matches = sorted(glob.glob(pattern))
+        if not matches:
+            return [], f"'{a}' 와 일치하는 파일이 없습니다."
+        expanded.extend(matches)
+    return expanded, None
+
+
+def _is_force_flag(arg: str) -> bool:
+    """force 플래그인가. rm 계열의 `-f`/`-rf` 와 del/rd 계열의 `/f` 를 모두 본다."""
+    lowered = arg.lower()
+    if lowered in ("-f", "--force", "/f"):
+        return True
+    return lowered.startswith("-") and not lowered.startswith("--") and "f" in lowered[1:]
+
+
+# 실제 명령 앞에 붙어 가드를 빠져나가게 하는 래퍼들. 이걸 벗기지 않으면
+# `command rm -rf x`, `env rm -rf x` 가 아무 판정 없이 통과한다(실측 확인).
+# 인자를 먼저 받는 래퍼(timeout 5 rm …)는 여기서 다루지 않는다.
+COMMAND_WRAPPERS = {"sudo", "doas", "command", "exec", "builtin", "env", "nohup", "time", "busybox"}
+ENV_ASSIGN_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
+
+def _command_base(token: str) -> str:
+    """실행 파일 토큰에서 명령 이름을 뽑는다 — 경로와 `.exe` 확장자를 벗긴다.
+
+    `/bin/rm`, `C:\\tools\\rm.exe` 처럼 적어 가드를 빠져나가지 못하게 한다.
+    Windows 경로 구분자는 os.path 가 POSIX 에서 인식하지 못하므로 먼저 통일한다.
+    """
+    name = os.path.basename(token.replace("\\", "/")).lower()
+    return name[:-4] if name.endswith(".exe") else name
+
 
 REMOTE_EXEC_TOKENS = {"bash", "sh", "zsh", "iex", "invoke-expression", "powershell", "pwsh"}
 
@@ -729,9 +820,28 @@ def main() -> None:
             if not cmd_parts:
                 continue
 
-            base = os.path.basename(cmd_parts[0]).lower()
+            base = _command_base(cmd_parts[0])
             args = cmd_parts[1:]
             lower_args = [a.lower() for a in args]
+
+            # 래퍼 접두어(sudo/command/env/exec/…)는 벗겨서 실제 명령을 검사한다.
+            # 벗기지 않으면 `command rm -rf x` 가 아무 판정 없이 통과한다.
+            # 중첩(`sudo env rm …`)을 위해 반복하되, 비정상 입력에 대비해 횟수를 제한한다.
+            for _ in range(8):
+                if base not in COMMAND_WRAPPERS or not args:
+                    break
+                idx = 0
+                if base == "env":
+                    while idx < len(args) and ENV_ASSIGN_RE.match(args[idx]):
+                        idx += 1
+                # 플래그가 오면 실제 명령을 특정할 수 없으므로 멈춘다. PowerShell 모드에서는
+                # `/f` 도 플래그지만 bash 모드에서 `/bin/rm` 은 경로이므로 구분한다.
+                flag_prefixes = ("-",) if is_bash else ("-", "/")
+                if idx >= len(args) or args[idx].startswith(flag_prefixes):
+                    break
+                base = _command_base(args[idx])
+                args = args[idx + 1:]
+                lower_args = [a.lower() for a in args]
 
             # bash/sh -c "inner" 패턴: 내부 명령을 처리 큐에 추가해 동일 규칙으로 검사한다
             # (예: sudo bash -c "rm -rf /" 우회 차단).
@@ -749,10 +859,34 @@ def main() -> None:
                 if not clean_args:
                     emit("deny", "삭제 대상 경로가 지정되지 않았습니다.")
 
+                # rm 이 거부하는 형태(`.`/`..`)는 훅도 거부한다 — 치환이 원래 명령보다
+                # 위험해지면 안 된다. 확장 전에 검사해야 사용자가 적은 그대로를 보여줄 수 있다.
+                for a in clean_args:
+                    if _is_dot_target(a.strip()):
+                        log({"tool": tool_name, "command": command, "decision": "deny-dot-delete"})
+                        emit("deny", f"'{a}' 는 rm 이 거부하는 형태입니다(`.` 또는 `..`). "
+                                     "지울 대상을 명시적으로 지정하세요.")
+
                 for a in clean_args:
                     if _is_root_or_home_literal(a.strip()):
                         log({"tool": tool_name, "command": command, "decision": "deny-root-delete"})
                         emit("deny", f"드라이브/파일시스템 루트({a})를 삭제하려는 시도는 차단됩니다.")
+
+                cwd = data.get("cwd") or os.getcwd()
+                targets, glob_reason = expand_delete_targets(clean_args, cwd)
+                if glob_reason:
+                    log({"tool": tool_name, "command": command, "decision": "deny-unexpandable-target"})
+                    emit("deny", glob_reason)
+
+                # 확장 결과에도 같은 검사를 적용한다 — 와일드카드가 홈이나 루트를 가리키는
+                # 경로로 펼쳐질 수 있다.
+                for a in targets:
+                    if _is_root_or_home_literal(a.strip()) or _resolves_to_root_or_home(a.strip(), cwd):
+                        log({"tool": tool_name, "command": command, "decision": "deny-root-delete"})
+                        emit("deny", f"드라이브/파일시스템 루트({a})를 삭제하려는 시도는 차단됩니다.")
+
+                if len(targets) > MAX_TRASH_TARGETS:
+                    emit("ask", f"삭제 대상이 {len(targets)}개입니다. 한 번에 이만큼 휴지통으로 옮길까요?")
 
                 if is_multiline or is_chained:
                     emit("deny", "여러 줄 또는 체이닝된 명령 안에 삭제 명령이 섞여 있어 안전하게 자동 치환할 수 없습니다. 삭제 명령은 단독으로 실행하세요.")
@@ -765,7 +899,11 @@ def main() -> None:
 
                 quote = quote_bash if is_bash else quote_ps
                 py_exe = sys.executable
-                new_command = f'{py_exe} -X utf8 {quote(SEND_TO_TRASH)} ' + " ".join(quote(a) for a in clean_args)
+                # `rm -f` / `del /f` 는 없는 파일을 조용히 넘긴다. 이 의미를 버리면
+                # 없는 파일을 지우려는 명령이 실패해 호출자를 혼란스럽게 하므로 그대로 넘긴다.
+                force_flag = "-f " if any(_is_force_flag(a) for a in args) else ""
+                new_command = (f'{py_exe} -X utf8 {quote(SEND_TO_TRASH)} {force_flag}'
+                               + " ".join(quote(a) for a in targets))
 
                 log({"tool": tool_name, "command": command, "decision": "redirect-to-trash", "new_command": new_command})
                 emit("allow", "삭제 명령을 휴지통 이동으로 안전하게 치환했습니다 (send2trash).",

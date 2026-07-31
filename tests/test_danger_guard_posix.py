@@ -508,7 +508,16 @@ def test_rm_denied_when_no_trash_tool(tmp_path):
 
 
 def test_rm_substituted_with_trash_put(tmp_path):
+    # -rf 의 f(force)는 trash-put 의 -f 로 넘긴다 — `rm -f 없는파일` 이 성공해야 하는
+    # rm 의 의미를 치환이 깨뜨리지 않도록.
     payload = run_with_path("rm -rf temp/", _stub(tmp_path, "trash-put"))
+    out = payload["hookSpecificOutput"]
+    assert out["permissionDecision"] == "allow"
+    assert out["updatedInput"]["command"] == "trash-put -f temp/"
+
+
+def test_rm_without_force_does_not_pass_f(tmp_path):
+    payload = run_with_path("rm temp/", _stub(tmp_path, "trash-put"))
     out = payload["hookSpecificOutput"]
     assert out["permissionDecision"] == "allow"
     assert out["updatedInput"]["command"] == "trash-put temp/"
@@ -645,3 +654,105 @@ def test_clean_snapshot_index_lives_in_git_dir(run_hook):
     assert "mktemp" not in command
     assert "claude-guard-index" in command
     assert "git rev-parse --git-dir" in command
+
+
+# --- 회귀: 치환이 rm 보다 위험해지면 안 된다 ---
+#
+# rm 은 `.`/`..` 삭제를 거부하지만 trash-put 은 거부하지 않는다(실측 확인). 그래서
+# `rm -rf .` 를 그대로 치환하면 rm 이었다면 아무 일도 없었을 명령이 현재 디렉터리를
+# 통째로 휴지통에 넣는다. 아래는 그 회귀를 고정하는 테스트들이다.
+
+def run_guard(cmd, *, cwd=None, path_prefix=None):
+    """훅을 돌려 판정 payload 를 돌려준다. cwd 와 PATH 를 개별로 통제할 수 있다."""
+    env = dict(os.environ)
+    if path_prefix is not None:
+        env["PATH"] = str(path_prefix)
+    payload = bash(cmd)
+    if cwd is not None:
+        payload["cwd"] = str(cwd)
+    proc = subprocess.run(
+        [sys.executable, "-X", "utf8", str(HOOK_PATH)],
+        input=json.dumps(payload), env=env,
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    out = (proc.stdout or "").strip()
+    return json.loads(out) if out else None
+
+
+def decision_of(payload):
+    return payload["hookSpecificOutput"]["permissionDecision"] if payload else None
+
+
+def command_of(payload):
+    return payload["hookSpecificOutput"]["updatedInput"]["command"]
+
+
+@pytest.mark.parametrize("target", [".", "./", "..", "../", "sub/.", "sub/..", "./."])
+def test_dot_targets_denied(run_hook, target):
+    d, *_ = run_hook(HOOK, bash(f"rm -rf {target}"))
+    assert d == "deny", target
+
+
+def test_resolved_home_denied(tmp_path):
+    """문자열로는 홈처럼 보이지 않지만 cwd 기준으로 풀면 홈인 경로도 막아야 한다."""
+    rel = os.path.relpath(os.path.expanduser("~"), "/tmp")
+    payload = run_guard(f"rm -rf {rel}", cwd="/tmp", path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) == "deny"
+
+
+def test_glob_expanded_to_concrete_paths(tmp_path):
+    """글로브를 인용해 넘기면 셸이 확장하지 못해 명령이 조용히 실패한다.
+    훅이 cwd 기준으로 확장해 구체 경로로 바꿔야 한다."""
+    (tmp_path / "a.log").write_text("x", encoding="utf-8")
+    (tmp_path / "b.log").write_text("x", encoding="utf-8")
+    payload = run_guard("rm -rf *.log", cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) == "allow"
+    command = command_of(payload)
+    assert str(tmp_path / "a.log") in command
+    assert str(tmp_path / "b.log") in command
+    assert "*" not in command
+
+
+def test_glob_with_no_match_denied(tmp_path):
+    payload = run_guard("rm -rf *.nothing", cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) == "deny"
+
+
+def test_brace_expansion_denied(tmp_path):
+    payload = run_guard("rm -rf {a,b}.log", cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) == "deny"
+
+
+MAX_TARGETS_OVER = 101   # 훅의 MAX_TRASH_TARGETS(100) 를 넘기는 개수
+
+
+def test_too_many_targets_asks(tmp_path):
+    targets = " ".join(f"f{i}" for i in range(MAX_TARGETS_OVER))
+    payload = run_guard(f"rm -rf {targets}", cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) == "ask"
+
+
+# --- 회귀: 가드를 우회하려는 접두어들 ---
+
+@pytest.mark.parametrize("wrapper", ["command", "env", "exec", "builtin", "nohup", "busybox", "doas"])
+def test_wrapper_prefixed_rm_is_caught(run_hook, wrapper):
+    """`command rm -rf /` 처럼 래퍼를 앞에 붙이면 예전엔 아무 판정 없이 통과했다."""
+    d, *_ = run_hook(HOOK, bash(f"{wrapper} rm -rf /"))
+    assert d == "deny", wrapper
+
+
+def test_env_assignment_prefix_is_peeled(run_hook):
+    d, *_ = run_hook(HOOK, bash("env FOO=1 BAR=2 rm -rf /"))
+    assert d == "deny"
+
+
+@pytest.mark.parametrize("cmd", ["/bin/rm -rf .", "/usr/bin/rm -rf .", "command rm -rf ."])
+def test_binary_path_and_wrapper_cannot_escape_dot_guard(run_hook, cmd):
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d == "deny", cmd
+
+
+def test_command_lookup_still_passes(run_hook):
+    """`command -v rm` 은 삭제가 아니라 조회다 — 래퍼 제거가 이걸 막으면 안 된다."""
+    d, *_ = run_hook(HOOK, bash("command -v rm"))
+    assert d is None

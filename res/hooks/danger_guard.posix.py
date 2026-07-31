@@ -6,9 +6,18 @@ danger_guard.py — PreToolUse hook (Claude Code, Bash 툴 대상, 유저 레벨
 정책:
   1) rm → 휴지통 이동으로 치환 (allow + updatedInput)
      치환에 쓸 도구는 trash-put (trash-cli) → trash (macOS 14.4+ 기본 내장) 순으로 찾는다.
-     단, 루트 경로(/, ~, $HOME, 와일드카드, 실제 $HOME 값을 그대로 적은 절대경로 포함) 삭제
-     시도는 즉시 deny. 휴지통 도구가 하나도 없으면 치환할 수 없으므로 fail-closed 로 deny.
+     핵심 원칙: **치환된 명령이 원래 rm 보다 더 많이 지울 수 있으면 안 된다.** rm 은
+     `rm -rf .` 을 거부하지만 trash-put 은 거부하지 않으므로, 그대로 치환하면 아무 일도
+     없었을 명령이 현재 디렉터리를 통째로 휴지통에 넣는다. 그래서 아래를 모두 검사한다:
+       - 루트 경로(/, ~, $HOME, 와일드카드, 실제 $HOME 값을 그대로 적은 절대경로) → deny
+       - 말단이 `.`/`..` 인 경로(`.`, `./`, `..`, `sub/.`) → deny (rm 과 동일)
+       - cwd 기준으로 풀면 루트/홈이 되는 상대경로 → deny
+       - 와일드카드는 cwd 기준으로 직접 확장해 절대경로로 고정하고, 확장된 경로 각각에
+         위 검사를 다시 적용한다. 매칭 0개/중괄호 확장이면 deny, 100개 초과면 ask.
+       - `rm -f` 의 force 의미는 trash-put 의 -f 로 넘긴다(macOS trash 는 지원 미확인이라 제외).
+     휴지통 도구가 하나도 없으면 치환할 수 없으므로 fail-closed 로 deny.
      멀티라인 또는 체이닝(&&/;) 스크립트 안에 섞여 있으면 자동 치환 대신 deny.
+     sudo/command/env/exec/… 래퍼 접두어와 /bin/rm 같은 경로 표기는 벗겨서 동일하게 검사한다.
   2) git: "서브커맨드"를 정확히 판정해 세분화한다(git_subcommand). 순진하게 "push in args" 로
      매칭하면 `git stash push`(작업을 저장하는 안전한 명령)까지 막히므로, 전역 옵션(-C/-c/…)을
      건너뛰고 실제 서브커맨드를 뽑아 아래 규칙을 적용한다.
@@ -64,6 +73,7 @@ import sys
 import json
 import shutil
 import shlex
+import glob
 import re
 import os
 import datetime
@@ -88,6 +98,79 @@ def _is_root_or_home_literal(path: str) -> bool:
         return False
     stripped = path.rstrip("/*") if path not in ("/", "") else path
     return os.path.normpath(stripped) == os.path.normpath(_HOME_DIR)
+
+
+def _is_dot_target(path: str) -> bool:
+    """GNU rm 이 거부하는 형태인가 — 경로의 말단 성분이 `.` 또는 `..` 인지.
+
+    rm 은 `.`, `./`, `..`, `../`, `sub/.`, `sub/..` 를 모두 거부한다
+    ("refusing to remove '.' or '..' directory", 실측 확인). 반면 trash-put 은
+    거부하지 않으므로, 이 검사가 없으면 치환이 원래 명령보다 위험해진다 —
+    `rm -rf .` 가 `trash-put .` 로 바뀌면서 현재 디렉터리가 통째로 휴지통에 들어간다.
+    """
+    stripped = path.rstrip("/") or path
+    return os.path.basename(stripped) in (".", "..")
+
+
+def _resolves_to_root_or_home(path: str, cwd: str) -> bool:
+    """cwd 기준으로 해석했을 때 루트나 홈을 가리키는가.
+
+    _is_root_or_home_literal 은 문자열만 보므로 `../../../home/pi` 처럼 해석해야
+    홈이 되는 경로를 놓친다. 훅은 명령이 실행될 cwd 를 받으므로 해석 후 한 번 더 본다.
+    """
+    try:
+        resolved = os.path.realpath(os.path.join(cwd, os.path.expanduser(path)))
+    except (OSError, ValueError):
+        return False
+    if resolved == os.sep:
+        return True
+    if not _HOME_DIR or _HOME_DIR == "/":
+        return False
+    return resolved == os.path.realpath(_HOME_DIR)
+
+
+# 글로브는 셸이 확장하는데 shlex.quote 로 인용해 버리면 확장이 죽어 명령이 조용히
+# 실패한다(`rm -rf *` → `trash-put '*'`). 인용을 빼면 반대로 무엇이 지워질지 모른 채
+# 통과시키게 된다. 그래서 훅이 cwd 기준으로 직접 확장해 구체 경로로 바꾼 뒤, 확장된
+# 경로 하나하나에 안전 검사를 적용한다. 중괄호 확장은 glob 이 다루지 못하므로 거부한다.
+GLOB_META_RE = re.compile(r"[*?\[]")
+BRACE_RE = re.compile(r"[{}]")
+# 한 번에 휴지통으로 보낼 수 있는 대상 수 상한. 넘으면 자동치환 대신 확인을 요청한다 —
+# 명령줄 길이 문제이기도 하고, 사고가 났을 때의 규모 문제이기도 하다.
+MAX_TRASH_TARGETS = 100
+
+
+def expand_delete_targets(args: list, cwd: str) -> tuple:
+    """글로브를 cwd 기준으로 확장한다. 반환: (확장된 경로 리스트, 실패 사유 또는 None)."""
+    expanded = []
+    for a in args:
+        if BRACE_RE.search(a):
+            return [], f"중괄호 확장이 포함된 대상('{a}')은 훅이 해석할 수 없어 차단합니다."
+        if not GLOB_META_RE.search(a):
+            expanded.append(a)
+            continue
+        # 확장 결과는 절대경로로 고정한다. 훅이 판정한 cwd 와 실제 실행 cwd 가 어긋나도
+        # 엉뚱한 디렉터리의 파일이 지워지지 않는다.
+        pattern = a if os.path.isabs(a) else os.path.join(cwd, a)
+        matches = sorted(glob.glob(pattern))
+        if not matches:
+            return [], f"'{a}' 와 일치하는 파일이 없습니다."
+        expanded.extend(matches)
+    return expanded, None
+
+
+def _is_force_flag(arg: str) -> bool:
+    """rm 의 -f(force). `-rf` 처럼 묶인 단축 플래그도 인식한다."""
+    if arg in ("-f", "--force"):
+        return True
+    return arg.startswith("-") and not arg.startswith("--") and "f" in arg[1:]
+
+
+# 실제 명령 앞에 붙어 가드를 빠져나가게 하는 래퍼들. sudo 만 벗기면 `command rm -rf x`,
+# `env rm -rf x` 가 아무 판정 없이 통과한다(실측 확인). 반복해서 벗겨 실제 명령을 찾는다.
+# 인자를 먼저 받는 래퍼(timeout 5 rm …, nice -n 5 rm …)는 여기서 다루지 않는다.
+COMMAND_WRAPPERS = {"sudo", "doas", "command", "exec", "builtin", "env", "nohup", "time", "busybox"}
+ENV_ASSIGN_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
 
 REMOTE_EXEC_TOKENS = {"bash", "sh", "zsh", "dash"}
 DISK_COMMANDS = {"fdisk", "parted", "wipefs", "gdisk", "sgdisk", "mke2fs"}
@@ -651,10 +734,22 @@ def main() -> None:
             args = cmd_parts[1:]
             lower_args = [a.lower() for a in args]
 
-            # sudo 접두어는 벗겨서 실제 명령을 검사한다 (sudo rm -rf / 가 우회되지 않도록).
-            if base == "sudo" and args and not args[0].startswith("-"):
-                base = os.path.basename(args[0])
-                args = args[1:]
+            # 래퍼 접두어(sudo/command/env/exec/…)는 벗겨서 실제 명령을 검사한다.
+            # `sudo rm -rf /` 뿐 아니라 `command rm -rf x`, `env rm -rf x` 같은 우회도 막는다.
+            # 중첩(`sudo env rm …`)을 위해 반복하되, 비정상 입력에 대비해 횟수를 제한한다.
+            for _ in range(8):
+                if base not in COMMAND_WRAPPERS or not args:
+                    break
+                # `env VAR=1 rm …` 의 환경변수 할당은 명령이 아니므로 건너뛴다.
+                idx = 0
+                if base == "env":
+                    while idx < len(args) and ENV_ASSIGN_RE.match(args[idx]):
+                        idx += 1
+                # 플래그가 오면(`command -v rm`, `env -i`) 실제 명령을 특정할 수 없으므로 멈춘다.
+                if idx >= len(args) or args[idx].startswith("-"):
+                    break
+                base = os.path.basename(args[idx])
+                args = args[idx + 1:]
                 lower_args = [a.lower() for a in args]
 
             # bash/sh -c "inner" 패턴: 내부 명령을 처리 큐에 추가해 동일 규칙으로 검사한다
@@ -670,10 +765,34 @@ def main() -> None:
                 if not clean_args:
                     emit("deny", "삭제 대상 파일이 지정되지 않았습니다.")
 
+                # rm 이 거부하는 형태(`.`/`..`)는 훅도 거부한다. 치환이 원래 명령보다
+                # 위험해지면 안 된다. 확장 전에 검사해야 사용자가 적은 그대로를 보여줄 수 있다.
+                for a in clean_args:
+                    if _is_dot_target(a.strip()):
+                        log({"command": command, "decision": "deny-dot-delete"})
+                        emit("deny", f"'{a}' 는 rm 이 거부하는 형태입니다(`.` 또는 `..`). "
+                                     "지울 대상을 명시적으로 지정하세요.")
+
                 for a in clean_args:
                     if _is_root_or_home_literal(a.strip()):
                         log({"command": command, "decision": "deny-root-delete"})
                         emit("deny", f"루트/홈 디렉터리 전체({a})를 삭제하려는 시도는 차단됩니다.")
+
+                cwd = data.get("cwd") or os.getcwd()
+                targets, glob_reason = expand_delete_targets(clean_args, cwd)
+                if glob_reason:
+                    log({"command": command, "decision": "deny-unexpandable-target"})
+                    emit("deny", glob_reason)
+
+                # 확장 결과에도 같은 안전 검사를 적용한다 — 글로브가 홈이나 루트를
+                # 가리키는 경로로 펼쳐질 수 있다.
+                for a in targets:
+                    if _is_root_or_home_literal(a.strip()) or _resolves_to_root_or_home(a.strip(), cwd):
+                        log({"command": command, "decision": "deny-root-delete"})
+                        emit("deny", f"루트/홈 디렉터리 전체({a})를 삭제하려는 시도는 차단됩니다.")
+
+                if len(targets) > MAX_TRASH_TARGETS:
+                    emit("ask", f"삭제 대상이 {len(targets)}개입니다. 한 번에 이만큼 휴지통으로 옮길까요?")
 
                 if is_multiline or is_chained:
                     emit("deny", "여러 줄 또는 체이닝된 명령 안에 삭제 명령이 섞여 있어 안전하게 자동 치환할 수 없습니다. 삭제 명령은 단독으로 실행하세요.")
@@ -682,7 +801,13 @@ def main() -> None:
                 if not trash_cmd:
                     emit("deny", "휴지통 이동 도구(trash-put / macOS trash)가 없어 삭제를 차단합니다. (pip install trash-cli)")
 
-                new_command = trash_cmd + " " + " ".join(shlex.quote(a) for a in clean_args)
+                # `rm -f` 는 없는 파일을 조용히 넘긴다. 이 의미를 버리면 `rm -f 없는파일` 이
+                # 실패해 호출자를 혼란스럽게 하므로 trash-put 의 -f 로 넘긴다.
+                # macOS 내장 trash 는 -f 지원을 확인하지 못했으므로 붙이지 않는다 —
+                # 모르는 플래그를 넘겨 삭제 도구가 오작동하는 쪽이 더 위험하다.
+                force_flag = (" -f" if trash_cmd == "trash-put"
+                              and any(_is_force_flag(a) for a in args) else "")
+                new_command = trash_cmd + force_flag + " " + " ".join(shlex.quote(a) for a in targets)
                 log({"command": command, "decision": "redirect-to-trash", "new_command": new_command})
                 emit("allow", f"rm → {trash_cmd} 치환 (휴지통으로 안전하게 이동)",
                      updated_input={"command": new_command})

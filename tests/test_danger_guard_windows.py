@@ -3,6 +3,7 @@
 이 훅은 Windows 에 설치되지만 순수 파이썬이라 어느 OS 에서도 정책을 검증할 수 있다.
 """
 import json
+import os
 import re
 import subprocess
 import sys
@@ -545,3 +546,97 @@ def test_installer_self_test_covers_the_powershell_backup_snippet(run_hook):
     for command in ps_backup_snippets:
         assert "$LASTEXITCODE" in command, f"PS 방언이 아니거나 실패 가드가 없다: {command}"
         assert "$(date " not in command, f"bash 문법이 섞여 있다: {command}"
+
+
+# --- 회귀: 치환이 rm 보다 위험해지면 안 된다 (POSIX 쪽과 정책 통일) ---
+#
+# rm 은 `.`/`..` 삭제를 거부하지만 휴지통 이동 도구는 거부하지 않는다. 그대로 치환하면
+# rm 이었다면 아무 일도 없었을 명령이 현재 디렉터리를 통째로 휴지통에 넣는다.
+
+def run_guard(event, cwd=None):
+    """훅을 돌려 판정 payload 를 돌려준다. cwd 를 지정할 수 있다."""
+    payload = dict(event)
+    if cwd is not None:
+        payload["cwd"] = str(cwd)
+    proc = subprocess.run(
+        [sys.executable, "-X", "utf8", str(HOOK_PATH)],
+        input=json.dumps(payload),
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    out = (proc.stdout or "").strip()
+    return json.loads(out) if out else None
+
+
+def decision_of(payload):
+    return payload["hookSpecificOutput"]["permissionDecision"] if payload else None
+
+
+@pytest.mark.parametrize("cmd", [
+    "rm -rf .", "rm -rf ./", "rm -rf ..", "rm -rf sub/.", "rm -rf sub/..",
+])
+def test_dot_targets_denied_bash(run_hook, cmd):
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d == "deny", cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "Remove-Item -Recurse -Force .",
+    "Remove-Item -Recurse -Force ..",
+    "del /q .",
+    "rd /s /q ..",
+])
+def test_dot_targets_denied_powershell(run_hook, cmd):
+    d, *_ = run_hook(HOOK, ps(cmd))
+    assert d == "deny", cmd
+
+
+def test_resolved_home_denied():
+    """문자열로는 홈처럼 보이지 않지만 cwd 기준으로 풀면 홈인 경로도 막아야 한다."""
+    rel = os.path.relpath(os.path.expanduser("~"), "/tmp")
+    assert decision_of(run_guard(bash(f"rm -rf {rel}"), cwd="/tmp")) == "deny"
+
+
+def test_glob_expanded_to_concrete_paths(tmp_path):
+    (tmp_path / "a.log").write_text("x", encoding="utf-8")
+    (tmp_path / "b.log").write_text("x", encoding="utf-8")
+    payload = run_guard(bash("rm -rf *.log"), cwd=tmp_path)
+    assert decision_of(payload) == "allow"
+    command = payload["hookSpecificOutput"]["updatedInput"]["command"]
+    assert str(tmp_path / "a.log") in command
+    assert str(tmp_path / "b.log") in command
+    assert "*" not in command
+
+
+def test_glob_with_no_match_denied(tmp_path):
+    assert decision_of(run_guard(bash("rm -rf *.nothing"), cwd=tmp_path)) == "deny"
+
+
+def test_brace_expansion_denied(tmp_path):
+    assert decision_of(run_guard(bash("rm -rf {a,b}.log"), cwd=tmp_path)) == "deny"
+
+
+def test_too_many_targets_asks(tmp_path):
+    targets = " ".join(f"f{i}" for i in range(101))   # 훅의 MAX_TRASH_TARGETS(100) 초과
+    assert decision_of(run_guard(bash(f"rm -rf {targets}"), cwd=tmp_path)) == "ask"
+
+
+# --- 회귀: 가드를 우회하려는 접두어와 실행파일 표기 ---
+
+@pytest.mark.parametrize("wrapper", ["command", "env", "exec", "builtin", "nohup", "busybox"])
+def test_wrapper_prefixed_rm_is_caught(run_hook, wrapper):
+    d, *_ = run_hook(HOOK, bash(f"{wrapper} rm -rf /"))
+    assert d == "deny", wrapper
+
+
+@pytest.mark.parametrize("cmd", ["/bin/rm -rf .", "rm.exe -rf ."])
+def test_binary_path_and_exe_cannot_escape_dot_guard_bash(run_hook, cmd):
+    """경로나 .exe 를 붙여도 rm 으로 판정되어야 한다."""
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d == "deny", cmd
+
+
+def test_windows_path_exe_cannot_escape_dot_guard(run_hook):
+    # 역슬래시 경로는 PowerShell 툴에서 검증한다 — bash 모드의 shlex 는 `\` 를
+    # 이스케이프로 먹어 경로 형태가 보존되지 않는다.
+    d, *_ = run_hook(HOOK, ps("C:\\tools\\rm.exe -Recurse -Force ."))
+    assert d == "deny"
