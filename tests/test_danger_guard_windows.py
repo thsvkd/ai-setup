@@ -640,3 +640,52 @@ def test_windows_path_exe_cannot_escape_dot_guard(run_hook):
     # 이스케이프로 먹어 경로 형태가 보존되지 않는다.
     d, *_ = run_hook(HOOK, ps("C:\\tools\\rm.exe -Recurse -Force ."))
     assert d == "deny"
+
+
+# --- 회귀: 자기 인자를 먼저 받는 래퍼 (WSL/Git Bash 에서 그대로 쓰인다) ---
+
+@pytest.mark.parametrize("cmd", [
+    "timeout 5 rm -rf .",
+    "timeout -s KILL 5 rm -rf .",
+    "nice -n 5 rm -rf .",
+    "ionice -c 2 -n 7 rm -rf .",
+    "taskset -c 0,1 rm -rf .",
+    "chrt -f 99 rm -rf .",
+    "setsid rm -rf .",
+    "timeout 5 sudo rm -rf .",
+])
+def test_arg_taking_wrapper_cannot_escape_dot_guard(run_hook, cmd):
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d == "deny", cmd
+
+
+@pytest.mark.parametrize("cmd", ["timeout 30 npm test", "nice -n 10 make build"])
+def test_arg_wrapper_with_harmless_command_passes(run_hook, cmd):
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d is None, cmd
+
+
+# --- 회귀: find / xargs 대량 삭제 ---
+
+@pytest.mark.parametrize("cmd", [
+    "find . -name '*.log' -delete",
+    "find . -exec rm {} ;",
+    "find . -type f | xargs rm -rf",
+    "xargs -0 rm -rf",
+])
+def test_find_and_xargs_delete_asks(run_hook, cmd):
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d == "ask", cmd
+
+
+@pytest.mark.parametrize("cmd", ["find . -name '*.py'", "xargs grep foo"])
+def test_find_and_xargs_without_delete_pass(run_hook, cmd):
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d is None, cmd
+
+
+def test_powershell_delete_cmdlet_still_denied(run_hook):
+    """EXEC_DELETE_COMMANDS 를 추가하면서 기존 DELETE_COMMANDS 를 덮어써
+    remove-item 판정이 사라진 적이 있다. 이름 충돌 회귀를 고정한다."""
+    d, *_ = run_hook(HOOK, ps("Remove-Item -Recurse -Force ."))
+    assert d == "deny"

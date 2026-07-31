@@ -756,3 +756,84 @@ def test_command_lookup_still_passes(run_hook):
     """`command -v rm` 은 삭제가 아니라 조회다 — 래퍼 제거가 이걸 막으면 안 된다."""
     d, *_ = run_hook(HOOK, bash("command -v rm"))
     assert d is None
+
+
+# --- 회귀: 자기 인자를 먼저 받는 래퍼 (timeout/nice/…) ---
+# 이 형태는 COMMAND_WRAPPERS 루프가 첫 인자를 명령으로 보고 멈추기 때문에
+# rm 보호가 통째로 무력화됐다. 실측으로 확인한 뒤 막았다.
+
+@pytest.mark.parametrize("cmd", [
+    "timeout 5 rm -rf .",
+    "timeout 5s rm -rf .",
+    "timeout -s KILL 5 rm -rf .",
+    "timeout --kill-after 3 5 rm -rf .",
+    "nice -n 5 rm -rf .",
+    "nice -5 rm -rf .",
+    "ionice -c 2 -n 7 rm -rf .",
+    "taskset 0x3 rm -rf .",
+    "taskset -c 0,1 rm -rf .",
+    "chrt -f 99 rm -rf .",
+    "setsid rm -rf .",
+    "stdbuf -oL rm -rf .",
+])
+def test_arg_taking_wrapper_cannot_escape_dot_guard(run_hook, cmd):
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d == "deny", cmd
+
+
+def test_arg_wrapper_and_command_wrapper_can_be_mixed(run_hook):
+    """`timeout 5 sudo rm -rf .` — 두 종류의 래퍼가 섞여도 벗겨야 한다."""
+    d, *_ = run_hook(HOOK, bash("timeout 5 sudo rm -rf ."))
+    assert d == "deny"
+
+
+@pytest.mark.parametrize("cmd", ["timeout 30 npm test", "nice -n 10 make build", "timeout 5 ls"])
+def test_arg_wrapper_with_harmless_command_passes(run_hook, cmd):
+    """래퍼 제거가 멀쩡한 명령을 막으면 안 된다."""
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d is None, cmd
+
+
+# --- 회귀: find / xargs 대량 삭제 ---
+# 대상을 훅이 미리 볼 수 없어 휴지통 치환이 불가능하므로 ask 로 사용자에게 넘긴다.
+
+@pytest.mark.parametrize("cmd", [
+    "find . -name '*.log' -delete",
+    "find . -type f -exec rm -f {} ;",
+    "find . -execdir rm {} ;",
+    "find /var -ok rm {} ;",
+    "find . -exec shred {} ;",
+])
+def test_find_delete_asks(run_hook, cmd):
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d == "ask", cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "xargs rm -rf",
+    "xargs -0 rm -rf",
+    "xargs -I {} rm -rf {}",
+    "xargs -n 1 unlink",
+    "find . -type f | xargs rm -rf",
+])
+def test_stdin_wrapper_delete_asks(run_hook, cmd):
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d == "ask", cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "find . -name '*.py'",
+    "find . -exec grep -l TODO {} ;",
+    "find . -name '*.log' -exec trash-put -- {} +",
+    "xargs grep foo",
+    "find . -type f | xargs wc -l",
+])
+def test_find_and_xargs_without_delete_pass(run_hook, cmd):
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d is None, cmd
+
+
+def test_quoted_pipe_is_not_treated_as_a_pipeline(run_hook):
+    """`grep "a|rm" f` 의 따옴표 안 파이프를 삭제로 오탐하면 안 된다."""
+    d, *_ = run_hook(HOOK, bash('grep "a|rm" file.txt'))
+    assert d is None

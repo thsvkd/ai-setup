@@ -109,11 +109,15 @@ bash scripts/setup.sh --dry-run   # 또는 .\scripts\setup.ps1 -DryRun
 | `/dev/sd*`·`/dev/disk*` 등 블록 디바이스로의 리다이렉트, 포크밤 `:(){ :\|:& };:`                                        | ⛔ **차단**                                                            |
 | `curl … \| bash`, `irm … \| iex` (원격 출력을 셸로 파이프 — 공백이 없어도)                                              | ⛔ **차단**                                                            |
 | `shutdown` / `reboot` / `Restart-Computer`, `chmod 777`, `shred`, `Clear-Content`, `reg delete`                         | ❓ **확인**                                                            |
+| `find … -delete`, `find … -exec`/`-execdir`/`-ok` + 삭제 명령                                                            | ❓ **확인** — 대상을 미리 볼 수 없어 휴지통 치환이 불가능하다          |
+| `xargs`/`parallel` + 삭제 명령 (`find … \| xargs rm` 처럼 파이프 하류여도)                                              | ❓ **확인** — 대상이 표준입력이라 훅이 볼 수 없다                      |
 | 그 외                                                                                                                   | ✅ 통과 (판단 안 함)                                                   |
 
 `sudo`/`command`/`env`/`exec`/`builtin`/`nohup`/`time`/`busybox`/`doas` 접두어는 벗겨 실제 명령을 위 규칙으로 검사한다(`sudo env rm …` 처럼 중첩된 것도 반복해서 벗긴다). 실행 파일을 경로나 확장자로 적은 형태(`/bin/rm`, `rm.exe`)도 같은 명령으로 판정한다. 모든 판정은 `~/.claude/hooks/guard.log`에 감사 기록으로 남는다.
 
-인자를 먼저 받는 래퍼(`timeout 5 rm …`, `nice -n 5 rm …`)와 `find … -delete` / `find … -exec rm` / `xargs rm` 은 아직 판정하지 않는다 — 삭제 경로이지만 이 훅의 검사 대상 밖이다.
+자기 인자를 먼저 받는 래퍼(`timeout 5 rm …`, `nice -n 5 rm …`, `ionice`/`stdbuf`/`setsid`/`taskset`/`chrt`)도 벗겨낸다. 이 형태는 첫 인자(`5`)를 명령으로 오인해 **rm 보호가 통째로 무력화됐던** 경로다. 두 종류의 래퍼는 번갈아 벗기므로 `timeout 5 sudo rm -rf .` 처럼 섞인 형태도 잡힌다.
+
+**이 목록은 완전하지 않다.** 블랙리스트는 원리적으로 완성될 수 없다 — 셸은 임의의 프로그램을 실행할 수 있어서 `python3 -c "shutil.rmtree('.')"` 같은 경로를 명령 문자열만 보고 판정하는 건 불가능하다. 실측 결과 삭제 경로 35가지 중 이 훅이 잡는 건 일부다. 그래서 이 훅의 역할은 **완전 차단이 아니라 흔한 실수에 대한 확인**이다. 근거와 대안(OS 수준 샌드박스, 섀도 스냅샷)은 [docs/2026-07-31-delete-guard-architecture.md](docs/2026-07-31-delete-guard-architecture.md) 참고.
 
 ### 치환은 원래 명령보다 위험해지면 안 된다
 

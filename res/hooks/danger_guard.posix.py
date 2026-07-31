@@ -49,8 +49,16 @@ danger_guard.py — PreToolUse hook (Claude Code, Bash 툴 대상, 유저 레벨
   4) curl|bash, wget -O- | sh 같은 "원격 스크립트를 바로 셸로 파이프 실행" 패턴 → deny
      (`curl url|bash` 처럼 파이프 앞뒤에 공백이 없어도 잡는다)
   5) shutdown / reboot / halt / poweroff → ask ; chmod 777 / shred → ask
-  6) sudo 접두어는 벗겨서 실제 명령을 위 규칙으로 검사한다.
+  6) 래퍼 접두어는 벗겨서 실제 명령을 위 규칙으로 검사한다. 두 종류가 있고 번갈아 벗긴다:
+       - 바로 명령이 오는 것: sudo / doas / command / exec / builtin / env / nohup / time / busybox
+       - 자기 인자를 먼저 받는 것: timeout / nice / ionice / stdbuf / setsid / taskset / chrt
+         (`timeout 5 rm -rf .` 은 첫 인자 `5` 를 명령으로 보고 멈춰 rm 보호가 통째로
+          무력화됐다 — 실측 확인. 옵션과 값, 숫자로 시작하는 위치 인자를 건너뛴다.)
   7) bash/sh -c "inner" 패턴: 내부 명령을 추출해 동일 규칙으로 추가 검사한다.
+  8) 대상을 미리 볼 수 없는 대량 삭제 → ask (치환도 확장도 불가능하므로 판정을 넘긴다):
+       - find … -delete / -exec|-execdir|-ok|-okdir <삭제명령>
+       - xargs|parallel <삭제명령>  (파이프 하류에 있어도 잡는다)
+     되돌리려면 `-exec trash-put -- {} +` / `xargs trash-put --` 형태를 쓰라고 안내한다.
 
 이 훅은 macOS 기본 인터프리터(/usr/bin/python3, 3.9.x)에서도 반드시 실행되어야 한다.
 훅이 예외로 죽으면 Claude Code 는 가드 없이 명령을 실행하므로, 3.10+ 전용 문법(PEP 604
@@ -168,9 +176,87 @@ def _is_force_flag(arg: str) -> bool:
 
 # 실제 명령 앞에 붙어 가드를 빠져나가게 하는 래퍼들. sudo 만 벗기면 `command rm -rf x`,
 # `env rm -rf x` 가 아무 판정 없이 통과한다(실측 확인). 반복해서 벗겨 실제 명령을 찾는다.
-# 인자를 먼저 받는 래퍼(timeout 5 rm …, nice -n 5 rm …)는 여기서 다루지 않는다.
 COMMAND_WRAPPERS = {"sudo", "doas", "command", "exec", "builtin", "env", "nohup", "time", "busybox"}
 ENV_ASSIGN_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
+
+# 자기 인자를 먼저 받는 래퍼. `timeout 5 rm -rf .` 은 COMMAND_WRAPPERS 방식으로 못 벗긴다 —
+# 첫 인자 `5` 를 명령으로 보고 멈추기 때문이다. 그 결과 rm 보호가 통째로 무력화된다(실측).
+ARG_WRAPPERS = {"timeout", "nice", "ionice", "stdbuf", "setsid", "taskset", "chrt"}
+# 위 래퍼들이 쓰는 '값을 받는' 옵션. 이 옵션을 만나면 다음 토큰까지 건너뛴다.
+# 붙여 쓴 형태(`-oL`, `-n5`)는 토큰 자체가 `-` 로 시작하므로 그냥 옵션으로 건너뛰어진다.
+ARG_WRAPPER_VALUE_OPTS = {
+    "-s", "--signal", "-k", "--kill-after",              # timeout
+    "-n", "--adjustment",                                # nice
+    "-c", "--class", "--classdata", "--cpu-list",        # ionice, taskset
+    "-p", "--pid",                                       # ionice, chrt
+    "-i", "-o", "-e", "--input", "--output", "--error",  # stdbuf
+}
+# 래퍼가 명령 앞에 두는 위치 인자(timeout 의 5s, taskset 의 0x3, chrt 의 우선순위 99).
+# 전부 숫자로 시작한다 — 명령 이름은 숫자로 시작하지 않으므로 이걸로 구분한다.
+WRAPPER_NUMERIC_ARG_RE = re.compile(r'^(0x[0-9a-fA-F]+|[0-9][0-9.,:+-]*[a-zA-Z]*)$')
+
+# 대상을 표준입력으로 받아 실행하는 래퍼. 훅이 대상을 볼 수 없어 치환도 확장도 불가능하다.
+STDIN_WRAPPERS = {"xargs", "parallel"}
+XARGS_VALUE_OPTS = {
+    "-a", "--arg-file", "-d", "--delimiter", "-E", "-I", "-i", "--replace",
+    "-L", "-l", "--max-lines", "-n", "--max-args", "-P", "--max-procs",
+    "-s", "--max-chars",
+}
+
+# find -exec / xargs 뒤에 오면 대량 삭제인 명령들.
+EXEC_DELETE_COMMANDS = {"rm", "unlink", "shred", "srm", "wipe"}
+FIND_EXEC_OPTS = {"-exec", "-execdir", "-ok", "-okdir"}
+
+
+def _peel_arg_wrapper(args: list) -> list:
+    """ARG_WRAPPERS 의 자기 인자를 건너뛰고 실제 명령부터 시작하는 토큰 목록을 돌려준다.
+
+    옵션(-로 시작) → 값을 받는 옵션이면 그 값까지 → 숫자로 시작하는 위치 인자 순으로
+    건너뛴다. 명령을 특정하지 못하면 빈 목록을 돌려준다(판정 포기).
+
+    Args:
+        args: 래퍼 이름을 제외한 나머지 토큰.
+
+    Returns:
+        실제 명령으로 시작하는 토큰 목록. 특정 실패 시 빈 목록.
+    """
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok.startswith("-"):
+            if tok in ARG_WRAPPER_VALUE_OPTS:
+                i += 2
+            else:
+                i += 1
+            continue
+        if WRAPPER_NUMERIC_ARG_RE.match(tok):
+            i += 1
+            continue
+        return args[i:]
+    return []
+
+
+def _stdin_wrapper_target(args: list):
+    """xargs/parallel 이 실행할 명령 이름을 돌려준다. 특정하지 못하면 None."""
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok.startswith("-"):
+            i += 2 if tok in XARGS_VALUE_OPTS else 1
+            continue
+        return os.path.basename(tok)
+    return None
+
+
+def _find_delete_reason(args: list):
+    """find 명령이 파일을 지우는지 판정하고, 지운다면 사유 문자열을 돌려준다."""
+    for i, tok in enumerate(args):
+        if tok == "-delete":
+            return "find -delete"
+        if tok in FIND_EXEC_OPTS and i + 1 < len(args):
+            if os.path.basename(args[i + 1]) in EXEC_DELETE_COMMANDS:
+                return f"find {tok} {args[i + 1]}"
+    return None
 
 REMOTE_EXEC_TOKENS = {"bash", "sh", "zsh", "dash"}
 DISK_COMMANDS = {"fdisk", "parted", "wipefs", "gdisk", "sgdisk", "mke2fs"}
@@ -726,6 +812,27 @@ def main() -> None:
         sub_commands = split_commands(parts)
         is_chained = len(sub_commands) > 1
 
+        # 파이프 하류의 명령도 개별 검사한다. `find . -type f | xargs rm -rf` 는 앞 명령만
+        # 보면 삭제로 보이지 않는다(실측 확인). 원본(파이프 토큰 포함)도 목록에 남겨 둬야
+        # 아래의 파이프→셸 검사가 그대로 동작한다. 따옴표 안의 `|` 는 shlex 가 한 토큰으로
+        # 묶으므로 여기 걸리지 않는다 — `grep "a|rm" f` 가 삭제로 오탐되지 않는다.
+        for segment in list(sub_commands):
+            if "|" not in segment:
+                continue
+            # 삭제가 파이프에 얽혀 있으면 치환 대상을 안전하게 특정할 수 없다.
+            # 체이닝과 동일하게 취급해 자동 치환 대신 deny 로 보낸다.
+            is_chained = True
+            piece: list = []
+            for token in segment:
+                if token == "|":
+                    if piece:
+                        sub_commands.append(piece)
+                    piece = []
+                else:
+                    piece.append(token)
+            if piece:
+                sub_commands.append(piece)
+
         for cmd_parts in sub_commands:
             if not cmd_parts:
                 continue
@@ -737,20 +844,53 @@ def main() -> None:
             # 래퍼 접두어(sudo/command/env/exec/…)는 벗겨서 실제 명령을 검사한다.
             # `sudo rm -rf /` 뿐 아니라 `command rm -rf x`, `env rm -rf x` 같은 우회도 막는다.
             # 중첩(`sudo env rm …`)을 위해 반복하되, 비정상 입력에 대비해 횟수를 제한한다.
+            # 두 종류의 래퍼를 번갈아 벗긴다. 한 종류씩 순서대로 처리하면
+            # `timeout 5 sudo rm -rf .` 처럼 섞인 형태를 놓친다(실측 확인).
             for _ in range(8):
-                if base not in COMMAND_WRAPPERS or not args:
-                    break
-                # `env VAR=1 rm …` 의 환경변수 할당은 명령이 아니므로 건너뛴다.
-                idx = 0
-                if base == "env":
-                    while idx < len(args) and ENV_ASSIGN_RE.match(args[idx]):
-                        idx += 1
-                # 플래그가 오면(`command -v rm`, `env -i`) 실제 명령을 특정할 수 없으므로 멈춘다.
-                if idx >= len(args) or args[idx].startswith("-"):
-                    break
-                base = os.path.basename(args[idx])
-                args = args[idx + 1:]
-                lower_args = [a.lower() for a in args]
+                if base in COMMAND_WRAPPERS and args:
+                    # `env VAR=1 rm …` 의 환경변수 할당은 명령이 아니므로 건너뛴다.
+                    idx = 0
+                    if base == "env":
+                        while idx < len(args) and ENV_ASSIGN_RE.match(args[idx]):
+                            idx += 1
+                    # 플래그가 오면(`command -v rm`, `env -i`) 실제 명령을 특정할 수 없으므로 멈춘다.
+                    if idx >= len(args) or args[idx].startswith("-"):
+                        break
+                    base = os.path.basename(args[idx])
+                    args = args[idx + 1:]
+                    lower_args = [a.lower() for a in args]
+                    continue
+
+                # 자기 인자를 먼저 받는 래퍼(timeout 5 rm …, nice -n 5 rm …).
+                # 옵션·위치 인자를 건너뛰는 규칙이 달라 별도 헬퍼로 처리한다.
+                if base in ARG_WRAPPERS:
+                    peeled = _peel_arg_wrapper(args)
+                    if not peeled:
+                        break
+                    base = os.path.basename(peeled[0])
+                    args = peeled[1:]
+                    lower_args = [a.lower() for a in args]
+                    continue
+
+                break
+
+            # xargs/parallel 은 대상을 표준입력으로 받아 훅이 볼 수 없다. 확장도 치환도
+            # 불가능하므로 판정을 사용자에게 넘긴다.
+            if base in STDIN_WRAPPERS:
+                target = _stdin_wrapper_target(args)
+                if target in EXEC_DELETE_COMMANDS:
+                    log({"command": command, "decision": "ask-stdin-delete"})
+                    emit("ask", f"`{base} {target}` 은 표준입력으로 받은 목록을 지웁니다. "
+                                "훅이 대상을 확인할 수 없어 휴지통 치환도 못 합니다. "
+                                f"되돌리려면 `{base} trash-put --` 형태를 쓰세요. 계속할까요?")
+
+            if base == "find":
+                reason = _find_delete_reason(args)
+                if reason:
+                    log({"command": command, "decision": "ask-find-delete"})
+                    emit("ask", f"`{reason}` 는 조건에 맞는 파일을 전부 지웁니다. 훅이 대상을 "
+                                "미리 확인할 수 없습니다. 되돌리려면 "
+                                "`-exec trash-put -- {} +` 형태를 쓰세요. 계속할까요?")
 
             # bash/sh -c "inner" 패턴: 내부 명령을 처리 큐에 추가해 동일 규칙으로 검사한다
             # (예: sudo bash -c "rm -rf /" 우회 차단).
