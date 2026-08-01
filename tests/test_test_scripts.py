@@ -207,6 +207,28 @@ def test_test_ps1_parses():
     assert proc.returncode == 0, proc.stderr
 
 
+def test_pester_실패가_러너의_종료코드에_반영된다():
+    """Invoke-Pester 는 테스트가 실패해도 종료 코드 0 을 낸다 (Pester 5 엔 -EnableExit 도 없다).
+
+    그래서 러너가 결과 객체의 FailedCount 를 직접 종료 코드로 만들지 않으면, 깨진 Pester
+    테스트가 영원히 '통과' 로 보고된다 — 이 파일이 막으려는 바로 그 거짓 통과다. 실제로
+    test.sh 가 이 버그를 갖고 있었다(실패 1건인데 '✅ Pester 통과' 출력).
+
+    pwsh 없이도 회귀를 잡아야 하므로 소스를 정적으로 검사한다.
+    """
+    for runner in (REPO_ROOT / TEST_SH_REL, TEST_PS1):
+        source = runner.read_text(encoding="utf-8")
+        if "Invoke-Pester" not in source:
+            continue
+        assert "FailedCount" in source, (
+            f"{runner.name} 이 Invoke-Pester 결과를 FailedCount 로 판정하지 않는다 — "
+            "Pester 실패가 통과로 보고된다"
+        )
+        assert "-PassThru" in source, (
+            f"{runner.name} 은 -PassThru 로 결과 객체를 받아야 FailedCount 를 볼 수 있다"
+        )
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows 에서만 실제 실행 검증")
 def test_test_ps1_help_exits_zero():
     proc = subprocess.run(

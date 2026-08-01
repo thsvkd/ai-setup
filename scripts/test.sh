@@ -154,7 +154,10 @@ else
         echo "pwsh/powershell 이 없어 건너뜁니다. — Windows 훅의 PowerShell 경로는 이 스위트로만 실행 검증된다."
         record "Pester (Setup.Tests.ps1)" "skip" "pwsh 미설치"
     else
-        "$PWSH" -NoProfile -Command "Invoke-Pester '$REPO_ROOT/tests/Setup.Tests.ps1' -Output Detailed"
+        # Invoke-Pester 는 테스트가 실패해도 종료 코드 0 을 낸다 (Pester 5 는 -EnableExit 도 없다).
+        # 그대로 두면 아래 판정이 실패를 통과로 기록해, 깨진 Pester 테스트가 영영 드러나지 않는다.
+        # -PassThru 로 결과 객체를 받아 실패 개수를 직접 종료 코드로 만든다.
+        "$PWSH" -NoProfile -Command "\$r = Invoke-Pester '$REPO_ROOT/tests/Setup.Tests.ps1' -Output Detailed -PassThru; exit \$r.FailedCount"
         if [[ $? -eq 0 ]]; then record "Pester (Setup.Tests.ps1)" "pass" ""; else record "Pester (Setup.Tests.ps1)" "fail" ""; fi
     fi
 fi
