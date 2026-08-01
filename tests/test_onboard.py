@@ -272,6 +272,35 @@ def test_벤더링된_questionary가_실제로_프롬프트를_만들_수_있다
     assert "OK" in proc.stdout
 
 
+def test_install_ps1이_받은_스위치를_전부_setup에_넘긴다():
+    """install.ps1 은 param 블록의 스위치를 해시테이블 스플랫으로 setup.ps1 에 넘기는데,
+    그 목록이 param 블록과 따로 적혀 있다. 한쪽에만 추가하면 플래그가 조용히 무시된다 —
+    실제로 -NoOnboard 를 추가할 때 이 함정에 빠졌다.
+
+    install.sh 는 "$@" 로 전부 넘기므로 POSIX 쪽에서는 이 비대칭이 드러나지 않는다.
+    pwsh 없이도 잡아야 하므로 소스를 정적으로 검사한다.
+    """
+    import re
+
+    source = (ROOT / "install.ps1").read_text(encoding="utf-8-sig")
+
+    # 최상위 param 블록의 [switch]$Name 들 (Help 는 부트스트랩이 직접 처리하므로 제외)
+    param_block = source.split("Set-StrictMode", 1)[0]
+    declared = set(re.findall(r"\[switch\]\$(\w+)", param_block)) - {"Help"}
+    assert declared, "install.ps1 의 param 블록에서 스위치를 찾지 못했다"
+
+    # setup.ps1 로 넘기는 목록: foreach ($k in 'A', 'B', ...)
+    forward_line = re.search(r"foreach \(\$k in ([^)]+)\)", source)
+    assert forward_line, "install.ps1 에서 스위치 전달 목록을 찾지 못했다"
+    forwarded = set(re.findall(r"'(\w+)'", forward_line.group(1)))
+
+    missing = declared - forwarded
+    assert not missing, (
+        f"install.ps1 이 받기만 하고 setup.ps1 에 넘기지 않는 스위치: {sorted(missing)} — "
+        "사용자가 지정해도 조용히 무시된다"
+    )
+
+
 def test_벤더_라이선스가_함께_들어있다():
     licenses = ROOT / "res" / "vendor" / "LICENSES"
     names = {p.name for p in licenses.iterdir()} if licenses.is_dir() else set()

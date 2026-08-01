@@ -8,6 +8,8 @@
     끊기면 잘린 스크립트가 iex 로 파싱될 때 함수 정의만 있고 호출부가 없어 아무것도 실행되지 않는다.
     플래그(-DryRun 등)는 최상위 param 블록에서 [switch] 로 받아 해시테이블 스플랫으로 setup.ps1
     에 넘긴다 — 배열 스플랫(@Rest)은 '-DryRun' 을 위치 인자로 취급해 스위치 바인딩이 안 된다.
+    스위치를 새로 추가할 때는 param 블록과 아래 $fwd 목록 **양쪽** 에 넣어야 한다. 한쪽만 넣으면
+    조용히 무시된다 (install.sh 는 "$@" 로 전부 넘기므로 이 비대칭이 POSIX 쪽에선 안 보인다).
 .EXAMPLE
     irm https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1 | iex
 .EXAMPLE
@@ -25,6 +27,7 @@ param(
     [switch]$AgentsMd,
     [switch]$Uninstall,
     [switch]$DryRun,
+    [switch]$NoOnboard,
     [switch]$Help,
     [Parameter(ValueFromRemainingArguments = $true)] $Rest
 )
@@ -125,6 +128,7 @@ function Invoke-Install {
         [switch]$AgentsMd,
         [switch]$Uninstall,
         [switch]$DryRun,
+        [switch]$NoOnboard,
         [switch]$Help,
         [Parameter(ValueFromRemainingArguments = $true)] $Rest
     )
@@ -134,10 +138,14 @@ function Invoke-Install {
 claude-code-setup 원격 설치 부트스트랩 (Windows)
 
 사용법:
-  irm .../install.ps1 | iex                                              # 전체 설치
+  irm .../install.ps1 | iex                                              # 대화형 온보딩 → 고른 대로
   & ([scriptblock]::Create((irm .../install.ps1))) -Hooks                 # 전역 가드/권한만
   & ([scriptblock]::Create((irm .../install.ps1))) -AgentsMd             # 현재 폴더에 AGENTS.md
   & ([scriptblock]::Create((irm .../install.ps1))) -DryRun               # 미리보기
+  & ([scriptblock]::Create((irm .../install.ps1))) -NoOnboard            # 온보딩 없이 전체 설치
+
+플래그 없이 실행하면 설치 범위·권한 모드(auto/bypassPermissions)를 고르는 온보딩이 뜹니다.
+콘솔이 없는 환경(CI 등)에서는 온보딩을 건너뛰고 전체 설치로 진행합니다.
 
 환경변수:
   `$env:CLAUDE_SETUP_REPO (기본 thsvkd/claude-code-setup), `$env:CLAUDE_SETUP_REF (기본 main)
@@ -177,7 +185,7 @@ claude-code-setup 원격 설치 부트스트랩 (Windows)
         # setup_agentsmd 는 현재 작업 디렉터리에 AGENTS.md 를 설치하므로 cwd 를 유지한 채 실행한다.
         # 스위치는 반드시 해시테이블 스플랫으로 넘긴다 (배열 스플랫 @Rest 는 스위치 바인딩 실패).
         $fwd = @{}
-        foreach ($k in 'Hooks', 'AgentsMd', 'Uninstall', 'DryRun') {
+        foreach ($k in 'Hooks', 'AgentsMd', 'Uninstall', 'DryRun', 'NoOnboard') {
             if ($PSBoundParameters[$k]) { $fwd[$k] = $true }
         }
         & $setup @fwd
