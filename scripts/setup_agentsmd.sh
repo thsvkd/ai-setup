@@ -9,8 +9,12 @@
 #   이 스크립트는 scripts/setup.sh 디스패처가 --agentsmd 로 호출하는 워커입니다.
 #   프로젝트 루트에서 직접 실행할 수도 있습니다.
 #
+#   --force 를 주면 기존 파일을 덮어씁니다. 온보딩에서 사용자가 명시적으로 "덮어쓴다"를
+#   고른 경우에만 쓰이며, 덮어쓰기 전에 원본을 .bak.<타임스탬프> 로 남깁니다.
+#
 # 사용법:
-#   bash setup_agentsmd.sh              # 실제 설치
+#   bash setup_agentsmd.sh              # 실제 설치 (기존 파일이 있으면 건너뜀)
+#   bash setup_agentsmd.sh --force      # 기존 파일을 백업 후 덮어쓰기
 #   bash setup_agentsmd.sh --dry-run    # 아무것도 건드리지 않고 미리보기만
 #
 set -euo pipefail
@@ -21,9 +25,11 @@ SOURCE="$REPO_ROOT/res/AGENTS.md"
 TARGET="$(pwd)/AGENTS.md"
 
 DRY_RUN=0
+FORCE=0
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=1 ;;
+        --force) FORCE=1 ;;
         *) echo "알 수 없는 옵션: $arg" >&2; exit 1 ;;
     esac
 done
@@ -35,11 +41,21 @@ if [[ ! -f "$SOURCE" ]]; then
     exit 1
 fi
 
-if [[ -f "$TARGET" ]]; then
+if [[ -f "$TARGET" && "$FORCE" -eq 0 ]]; then
     echo "  ℹ️ 이미 $TARGET 가 존재합니다 — 덮어쓰지 않고 건너뜁니다."
 elif [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "  🧪 DRY RUN — $TARGET 에 설치될 예정입니다 (실제로 쓰지 않음)."
+    if [[ -f "$TARGET" ]]; then
+        echo "  🧪 DRY RUN — 기존 $TARGET 를 백업 후 덮어쓸 예정입니다 (실제로 쓰지 않음)."
+    else
+        echo "  🧪 DRY RUN — $TARGET 에 설치될 예정입니다 (실제로 쓰지 않음)."
+    fi
 else
+    # 덮어쓰기는 사용자 콘텐츠를 지우는 일이므로 원본을 반드시 남긴다.
+    if [[ -f "$TARGET" ]]; then
+        BACKUP="$TARGET.bak.$(date +%Y%m%d%H%M%S)"
+        cp "$TARGET" "$BACKUP"
+        echo "  💾 기존 파일 백업: $BACKUP"
+    fi
     cp "$SOURCE" "$TARGET"
     echo "  ✅ 설치 완료: $TARGET"
 fi

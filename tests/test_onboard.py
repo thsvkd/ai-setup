@@ -1,0 +1,457 @@
+"""res/onboard.py (대화형 온보딩) 와 그 선택이 설치에 반영되는 경로 테스트.
+
+온보딩의 위험은 '안 뜨는 것'이 아니라 **묻지도 않고 뭔가를 골라버리는 것**이다. 실측해보면
+questionary 는 stdin 이 파이프일 때(= curl | sh) 에러도 없이 첫 항목을 자동 확정한다. 그래서
+여기서는 프롬프트가 뜨는 경우뿐 아니라, 띄울 수 없는 상황에서 **아무 선택도 하지 않는지**를
+같은 비중으로 검증한다.
+
+pty 를 쓰는 테스트는 실제 터미널 상호작용을 재현한다 — 느리지만, 이 기능에서 유일하게
+의미 있는 검증이다. Windows 에서는 pty/POSIX 셸이 없어 건너뛴다.
+"""
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+ONBOARD = ROOT / "res" / "onboard.py"
+
+DOWN = b"\x1b[B"
+ENTER = b"\r"
+CTRL_C = b"\x03"
+
+EXIT_OK = 0
+EXIT_NON_INTERACTIVE = 2
+EXIT_CANCELLED = 130
+
+posix_only = pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("bash") is None,
+    reason="POSIX 전용 (pty / bash 필요)",
+)
+
+
+def clean_env(**extra):
+    """CI 감지에 걸리지 않는 환경. 테스트 러너 자체가 CI 에서 도는 경우를 배제한다."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("CI", "CONTINUOUS_INTEGRATION", "GITHUB_ACTIONS", "GITLAB_CI", "BUILDKITE")}
+    env["TERM"] = "xterm-256color"
+    env.update(extra)
+    return env
+
+
+def run_in_pty(argv, keys, cwd=None, env=None, stdin_pipe=False, timeout=25):
+    """argv 를 제어 터미널이 붙은 pty 아래에서 실행하고 keys 를 차례로 보낸다.
+
+    stdin_pipe=True 면 stdin 을 파이프로 준다 — `curl … | sh` 재현이다. 이때 프롬프트가
+    동작하려면 onboard.py 가 /dev/tty 를 직접 열어야만 한다.
+
+    반환: (종료코드, 화면에 찍힌 raw 바이트)
+    """
+    import fcntl
+    import pty
+    import select
+    import termios
+
+    master, slave = pty.openpty()
+    try:
+        termios.tcsetwinsize(slave, (24, 100))
+    except Exception:
+        pass
+
+    if stdin_pipe:
+        pin_r, pin_w = os.pipe()
+        os.write(pin_w, b"# leftover install.sh body\n" * 5)
+        os.close(pin_w)
+        child_stdin = pin_r
+    else:
+        child_stdin = slave
+
+    def attach_ctty():
+        os.setsid()
+        fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+
+    proc = subprocess.Popen(
+        argv, stdin=child_stdin, stdout=slave, stderr=slave,
+        preexec_fn=attach_ctty, cwd=str(cwd) if cwd else None, env=env or clean_env(),
+    )
+    os.close(slave)
+    if stdin_pipe:
+        os.close(child_stdin)
+
+    out = bytearray()
+
+    def drain(seconds):
+        end = time.time() + seconds
+        while time.time() < end:
+            ready, _, _ = select.select([master], [], [], 0.1)
+            if not ready:
+                continue
+            try:
+                chunk = os.read(master, 65536)
+            except OSError:
+                return
+            if not chunk:
+                return
+            out.extend(chunk)
+
+    try:
+        drain(2.0)              # 첫 프롬프트가 그려질 때까지
+        for key in keys:
+            try:
+                os.write(master, key)
+            except OSError:
+                break
+            drain(0.6)          # 선택이 반영될 때까지
+
+        deadline = time.time() + timeout
+        while proc.poll() is None and time.time() < deadline:
+            drain(0.5)
+        if proc.poll() is None:
+            proc.kill()
+            pytest.fail(f"프로세스가 끝나지 않았습니다. 화면:\n{bytes(out).decode(errors='replace')}")
+        return proc.wait(timeout=5), bytes(out)
+    finally:
+        os.close(master)
+
+
+def read_answers(path: Path) -> dict:
+    if not path.exists() or not path.read_text(encoding="utf-8").strip():
+        return {}
+    result = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            result[key] = value
+    return result
+
+
+# ── 대화형으로 물을 수 없는 상황: 아무것도 고르지 않아야 한다 ──────────────────
+
+
+def test_tty_없으면_아무것도_선택하지_않는다(tmp_path):
+    """가장 중요한 계약. 여기서 뭔가를 골라버리면 사용자가 동의한 적 없는 설치가 일어난다."""
+    out = tmp_path / "answers"
+    proc = subprocess.run(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out)],
+        capture_output=True, text=True, encoding="utf-8", env=clean_env(), timeout=60,
+    )
+    assert proc.returncode == EXIT_NON_INTERACTIVE
+    assert read_answers(out) == {}
+
+
+def test_ci_환경에서는_프롬프트를_띄우지_않는다(tmp_path):
+    """CI 는 TTY 를 붙여주기도 한다(docker -t, tmux). TTY 검사만으로는 못 거른다."""
+    out = tmp_path / "answers"
+    env = clean_env(CI="true")
+    proc = subprocess.run(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out)],
+        capture_output=True, text=True, encoding="utf-8", env=env, timeout=60,
+    )
+    assert proc.returncode == EXIT_NON_INTERACTIVE
+    assert read_answers(out) == {}
+
+
+@posix_only
+def test_ci_환경변수는_tty가_있어도_프롬프트를_막는다(tmp_path):
+    out = tmp_path / "answers"
+    code, _ = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out)],
+        keys=[], env=clean_env(CI="true"),
+    )
+    assert code == EXIT_NON_INTERACTIVE
+    assert read_answers(out) == {}
+
+
+# ── 실제 터미널 상호작용 ──────────────────────────────────────────────
+
+
+@posix_only
+def test_기본값_그대로_선택하면_전체설치_auto_적용(tmp_path):
+    out = tmp_path / "answers"
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        keys=[ENTER, ENTER, ENTER],
+    )
+    assert code == EXIT_OK, screen.decode(errors="replace")
+    assert read_answers(out) == {
+        "SCOPE": "all",
+        "DEFAULT_MODE": "auto",
+        "OVERWRITE_AGENTSMD": "0",
+        "DRY_RUN": "0",
+    }
+
+
+@posix_only
+def test_curl_파이프_설치에서도_프롬프트가_동작한다(tmp_path):
+    """`curl … | sh` 는 stdin 이 스크립트 본문이다. /dev/tty 를 열지 못하면 여기서 깨진다.
+
+    questionary 는 이 상황에서 조용히 첫 항목을 확정해버리므로, '두 번째 항목이 제대로
+    골라졌는지'까지 확인해야 진짜로 키 입력을 받은 것이다.
+    """
+    out = tmp_path / "answers"
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        keys=[DOWN, ENTER, DOWN, ENTER, DOWN, ENTER],
+        stdin_pipe=True,
+    )
+    assert code == EXIT_OK, screen.decode(errors="replace")
+    answers = read_answers(out)
+    assert answers["SCOPE"] == "hooks"
+    assert answers["DEFAULT_MODE"] == "bypassPermissions"
+    assert answers["DRY_RUN"] == "1"
+
+
+@posix_only
+def test_bypass_선택시_경고를_보여준다(tmp_path):
+    out = tmp_path / "answers"
+    _, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        keys=[ENTER, DOWN, ENTER, ENTER],
+    )
+    text = screen.decode(errors="replace")
+    assert "권한 확인" in text and "생략" in text, text
+
+
+@posix_only
+def test_ctrl_c_취소는_비대화형_폴백과_구분된다(tmp_path):
+    """130 과 2 를 뭉뚱그리면 '취소했는데 기본값으로 설치되는' 최악의 동작이 된다."""
+    out = tmp_path / "answers"
+    code, _ = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out)],
+        keys=[CTRL_C],
+    )
+    assert code == EXIT_CANCELLED
+    assert read_answers(out) == {}
+
+
+@posix_only
+def test_기존_agentsmd가_있을때만_덮어쓰기를_묻는다(tmp_path):
+    (tmp_path / "AGENTS.md").write_text("기존 프로젝트 규칙\n", encoding="utf-8")
+    out = tmp_path / "answers"
+    # 질문이 하나 늘어난다: 범위 → 권한 → 덮어쓰기 → 적용
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        keys=[ENTER, ENTER, ENTER, ENTER],
+    )
+    assert code == EXIT_OK, screen.decode(errors="replace")
+    assert "덮어쓸까요" in screen.decode(errors="replace")
+    # confirm 의 기본값은 '아니오' — 사용자 콘텐츠는 실수로 날아가면 안 된다.
+    assert read_answers(out)["OVERWRITE_AGENTSMD"] == "0"
+
+
+# ── 벤더링 회귀 방지 ─────────────────────────────────────────────────
+
+
+def test_벤더링된_questionary가_실제로_프롬프트를_만들_수_있다():
+    """`prompt_toolkit-*.dist-info/METADATA` 를 지우면 여기서 걸린다.
+
+    questionary 는 프롬프트를 만들기 전에 is_prompt_toolkit_3() 을 호출하고, 그 값은
+    설치 메타데이터에서 온다. import 만으로는 드러나지 않고 실제로 프롬프트를 구성할 때
+    PackageNotFoundError 로 터진다.
+    """
+    code = (
+        "import sys; sys.path.insert(0, %r)\n"
+        "import questionary\n"
+        "from questionary.utils import is_prompt_toolkit_3\n"
+        "assert is_prompt_toolkit_3(), 'prompt_toolkit 3 이 아님'\n"
+        "questionary.select('t', choices=['a', 'b'])\n"
+        "print('OK')\n" % str(ROOT / "res" / "vendor")
+    )
+    proc = subprocess.run([sys.executable, "-X", "utf8", "-c", code],
+                          capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert "OK" in proc.stdout
+
+
+def test_벤더_라이선스가_함께_들어있다():
+    licenses = ROOT / "res" / "vendor" / "LICENSES"
+    names = {p.name for p in licenses.iterdir()} if licenses.is_dir() else set()
+    assert {"questionary-MIT.txt", "wcwidth-MIT.txt",
+            "prompt_toolkit-BSD-3-Clause.txt"} <= names, names
+
+
+# ── 선택이 실제 설치로 이어지는가 ───────────────────────────────────────
+
+
+@posix_only
+def test_setup_sh가_온보딩_선택대로_dry_run을_수행한다(tmp_path):
+    """온보딩에서 '훅만 + dry-run' 을 고르면 AGENTS.md 는 건드리지 않고 미리보기만 나와야 한다."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    project = tmp_path / "project"
+    project.mkdir()
+
+    stub_bin = tmp_path / "stubbin"
+    stub_bin.mkdir()
+    trash = stub_bin / "trash-put"
+    trash.write_text('#!/bin/sh\necho "[stub] $*"\n', encoding="utf-8")
+    trash.chmod(0o755)
+
+    env = clean_env(HOME=str(home), PATH=f"{stub_bin}{os.pathsep}{os.environ['PATH']}")
+    # 범위=훅만(↓), 권한=auto(기본), 적용=dry-run 먼저(↓)
+    code, screen = run_in_pty(
+        ["bash", str(ROOT / "scripts" / "setup.sh")],
+        keys=[DOWN, ENTER, ENTER, DOWN, ENTER],
+        cwd=project, env=env, timeout=90,
+    )
+    text = screen.decode(errors="replace")
+    assert code == 0, text
+    assert "DRY RUN" in text, text
+    # dry-run 이므로 실제 설정은 하나도 쓰이지 않는다.
+    assert not (home / ".claude" / "settings.json").exists(), text
+    # 범위가 '훅만' 이므로 AGENTS.md 도 설치되지 않는다.
+    assert not (project / "AGENTS.md").exists(), text
+
+
+@posix_only
+def test_파이프로_실행된_setup_sh에서도_온보딩이_동작한다(tmp_path):
+    """`curl … | sh` 의 실제 모양 — setup.sh 자체가 stdin 을 파이프로 받은 채 온보딩을 띄운다.
+
+    install.sh 는 curl 파이프 안에서 setup.sh 를 부른다. 여기서 stdin 은 여전히 스크립트
+    본문이므로, 온보딩이 /dev/tty 를 열지 못하면 이 경로 전체가 깨진다.
+    """
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    project = tmp_path / "project"
+    project.mkdir()
+
+    env = clean_env(HOME=str(home))
+    # 범위=AGENTS.md만(↓↓), 적용=dry-run 먼저(↓) — 권한 모드는 묻지 않는 범위다.
+    code, screen = run_in_pty(
+        ["bash", str(ROOT / "scripts" / "setup.sh")],
+        keys=[DOWN, DOWN, ENTER, DOWN, ENTER],
+        cwd=project, env=env, stdin_pipe=True, timeout=90,
+    )
+    text = screen.decode(errors="replace")
+    assert code == 0, text
+    assert "무엇을 설치할까요" in text, text
+    assert "DRY RUN" in text, text
+    # AGENTS.md 만 고르고 dry-run 이므로 훅도 파일도 설치되지 않는다.
+    assert not (home / ".claude" / "settings.json").exists(), text
+    assert not (project / "AGENTS.md").exists(), text
+
+
+@posix_only
+def test_플래그를_주면_온보딩을_건너뛴다(tmp_path):
+    """자동화/CI 가 쓰던 기존 호출은 온보딩 때문에 멈추면 안 된다."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    env = clean_env(HOME=str(home))
+    proc = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "setup.sh"), "--agentsmd", "--dry-run"],
+        cwd=str(tmp_path), env=env, capture_output=True, text=True,
+        encoding="utf-8", timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "DRY RUN" in proc.stdout
+    assert "무엇을 설치할까요" not in proc.stdout
+
+
+# ── 온보딩이 고른 값이 settings.json 까지 도달하는가 ──────────────────────
+
+
+@posix_only
+def test_default_mode_옵션이_settings에_반영된다(tmp_path):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    env = clean_env(HOME=str(home))
+    proc = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "setup_hooks.sh"), "--dry-run",
+         "--default-mode", "bypassPermissions"],
+        cwd=str(ROOT), env=env, capture_output=True, text=True,
+        encoding="utf-8", timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert '"defaultMode": "bypassPermissions"' in proc.stdout, proc.stdout
+
+
+@posix_only
+def test_알수없는_default_mode는_거부된다(tmp_path):
+    """오타가 그대로 settings.json 에 박히면 사용자는 모드가 왜 안 켜지는지 알 길이 없다."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    env = clean_env(HOME=str(home))
+    proc = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "setup_hooks.sh"), "--dry-run",
+         "--default-mode", "bypass"],   # 그럴듯한 오타
+        cwd=str(ROOT), env=env, capture_output=True, text=True,
+        encoding="utf-8", timeout=120,
+    )
+    assert proc.returncode != 0
+    assert "알 수 없는 defaultMode" in proc.stderr
+
+
+def test_merge가_default_mode를_조각보다_우선한다(tmp_path):
+    """조각(res/settings.json) 파일 자체는 건드리지 않고 값만 갈아끼워야 한다."""
+    settings = tmp_path / "settings.json"
+    manifest = tmp_path / "manifest.json"
+    proc = subprocess.run(
+        [sys.executable, "-X", "utf8", str(ROOT / "res" / "hooks" / "merge_and_diff.py"),
+         "--default-mode", "bypassPermissions",
+         str(ROOT / "res" / "settings.json"), str(settings), "0", "python3",
+         str(tmp_path / "hooks"), str(manifest), "danger_guard.py"],
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    written = json.loads(settings.read_text(encoding="utf-8"))
+    assert written["permissions"]["defaultMode"] == "bypassPermissions"
+
+    # 조각 원본은 그대로 auto 여야 한다 (SSoT 훼손 방지).
+    fragment = json.loads((ROOT / "res" / "settings.json").read_text(encoding="utf-8"))
+    assert fragment["permissions"]["defaultMode"] == "auto"
+
+
+def test_merge의_잘못된_default_mode는_병합을_막는다(tmp_path):
+    settings = tmp_path / "settings.json"
+    proc = subprocess.run(
+        [sys.executable, "-X", "utf8", str(ROOT / "res" / "hooks" / "merge_and_diff.py"),
+         "--default-mode", "nonsense",
+         str(ROOT / "res" / "settings.json"), str(settings), "0", "python3",
+         str(tmp_path / "hooks")],
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    assert proc.returncode != 0
+    assert not settings.exists()
+
+
+# ── AGENTS.md 덮어쓰기 ──────────────────────────────────────────────
+
+
+@posix_only
+def test_force는_기존_agentsmd를_백업한_뒤_덮어쓴다(tmp_path):
+    target = tmp_path / "AGENTS.md"
+    target.write_text("사용자가 손댄 내용\n", encoding="utf-8")
+    proc = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "setup_agentsmd.sh"), "--force"],
+        cwd=str(tmp_path), env=clean_env(), capture_output=True, text=True,
+        encoding="utf-8", timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert target.read_text(encoding="utf-8") != "사용자가 손댄 내용\n"
+
+    backups = list(tmp_path.glob("AGENTS.md.bak.*"))
+    assert len(backups) == 1, list(tmp_path.iterdir())
+    assert backups[0].read_text(encoding="utf-8") == "사용자가 손댄 내용\n"
+
+
+@posix_only
+def test_force가_없으면_기존_agentsmd를_건드리지_않는다(tmp_path):
+    target = tmp_path / "AGENTS.md"
+    target.write_text("사용자가 손댄 내용\n", encoding="utf-8")
+    proc = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "setup_agentsmd.sh")],
+        cwd=str(tmp_path), env=clean_env(), capture_output=True, text=True,
+        encoding="utf-8", timeout=60,
+    )
+    assert proc.returncode == 0
+    assert target.read_text(encoding="utf-8") == "사용자가 손댄 내용\n"
+    assert not list(tmp_path.glob("AGENTS.md.bak.*"))

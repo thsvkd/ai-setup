@@ -22,11 +22,16 @@
 .USAGE
     powershell -ExecutionPolicy Bypass -File setup_hooks.ps1              # 실제 적용
     powershell -ExecutionPolicy Bypass -File setup_hooks.ps1 -DryRun      # 미리보기만
+    powershell -ExecutionPolicy Bypass -File setup_hooks.ps1 -DefaultMode bypassPermissions
+                                                                          # 권한 모드 지정
 #>
 
 param(
     [switch]$DryRun,
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    # 온보딩이 고른 permissions.defaultMode. 안 주면 res/settings.json 의 값(auto)을 쓴다.
+    [ValidateSet("", "auto", "bypassPermissions", "default", "acceptEdits", "plan")]
+    [string]$DefaultMode = ""
 )
 
 Set-StrictMode -Version Latest
@@ -133,7 +138,8 @@ $mergeExit = Invoke-SettingsMerge `
     -MergeScriptPath (Join-Path $ResDir "hooks\merge_and_diff.py") `
     -PyExe $py.Exe -PyArgs $py.Args `
     -ManifestPath (Join-Path $WorkHome ".claude\$MANIFEST_NAME") `
-    -HookFilesCsv "danger_guard.py,secrets_guard.py,send_to_trash.py"
+    -HookFilesCsv "danger_guard.py,secrets_guard.py,send_to_trash.py" `
+    -DefaultMode $DefaultMode
 if ($mergeExit -ne 0) {
     throw "병합 검증 실패 — 예상치 못한 최상위 키 변경이 감지되었습니다. 수동 확인이 필요합니다."
 }
@@ -164,7 +170,7 @@ Write-SetupReport -DryRun:$DryRun -InstalledFiles @(
     (Join-Path $RealHooksDir "danger_guard.py"),
     (Join-Path $RealHooksDir "secrets_guard.py"),
     (Join-Path $RealHooksDir "send_to_trash.py")
-) -SettingsPath $RealSettingsPath -GuardLogPath (Join-Path $RealHooksDir "guard.log") -DependencyWarning $depWarning
+) -SettingsPath $RealSettingsPath -GuardLogPath (Join-Path $RealHooksDir "guard.log") -DependencyWarning $depWarning -DefaultMode $DefaultMode
 # 설치 영수증(매니페스트)은 위 Invoke-SettingsMerge 안에서 merge 가 기록한다.
 
 $script:ExitCode = 0

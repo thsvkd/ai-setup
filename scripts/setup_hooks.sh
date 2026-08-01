@@ -24,6 +24,8 @@
 #   bash setup_hooks.sh              # 실제 적용
 #   bash setup_hooks.sh --dry-run    # 아무것도 건드리지 않고 변경 계획만 출력
 #   bash setup_hooks.sh --uninstall  # 훅 제거 + settings.json 등록 해제 (권한은 보존)
+#   bash setup_hooks.sh --default-mode bypassPermissions
+#                                    # permissions.defaultMode 를 지정 (기본: 조각의 auto)
 #
 set -euo pipefail
 
@@ -35,13 +37,33 @@ source "$SCRIPT_DIR/lib/setup_common.sh"
 
 DRY_RUN=0
 UNINSTALL=0
-for arg in "$@"; do
-    case "$arg" in
-        --dry-run) DRY_RUN=1 ;;
-        --uninstall) UNINSTALL=1 ;;
-        *) echo "알 수 없는 옵션: $arg" >&2; exit 1 ;;
+DEFAULT_MODE=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run) DRY_RUN=1; shift ;;
+        --uninstall) UNINSTALL=1; shift ;;
+        # 온보딩이 고른 권한 모드. 안 주면 res/settings.json 의 값(auto)을 그대로 쓴다.
+        --default-mode)
+            if [[ -z "${2:-}" ]]; then
+                echo "--default-mode 에 값이 필요합니다." >&2; exit 1
+            fi
+            DEFAULT_MODE="$2"; shift 2 ;;
+        --default-mode=*) DEFAULT_MODE="${1#*=}"; shift ;;
+        *) echo "알 수 없는 옵션: $1" >&2; exit 1 ;;
     esac
 done
+
+# 값 검증은 여기서 한다. merge 도 같은 검사를 하지만 거기서 걸리면 "병합 검증 실패"라는
+# 엉뚱한 메시지가 나온다 — 진짜 원인(오타 난 모드 이름)이 묻히지 않도록 먼저 거른다.
+if [[ -n "$DEFAULT_MODE" ]]; then
+    case "$DEFAULT_MODE" in
+        auto|bypassPermissions|default|acceptEdits|plan) ;;
+        *)
+            echo "알 수 없는 defaultMode: '$DEFAULT_MODE'" >&2
+            echo "가능한 값: auto, bypassPermissions, default, acceptEdits, plan" >&2
+            exit 1 ;;
+    esac
+fi
 
 REAL_HOME="$HOME"
 REAL_CLAUDE_DIR="$REAL_HOME/.claude"
@@ -150,7 +172,7 @@ echo ""
 echo "[3/4] settings.json 병합 계획 수립 및 실행..."
 
 MANIFEST_PATH="$WORK_HOME/.claude/$MANIFEST_NAME"
-if ! invoke_settings_merge "$PY" "$RES_DIR/hooks/merge_and_diff.py" "$RES_DIR/settings.json" "$SETTINGS_PATH" "$DRY_RUN" "$PY" "$REAL_HOOKS_DIR" "$MANIFEST_PATH" "danger_guard.py,secrets_guard.py"; then
+if ! invoke_settings_merge "$PY" "$RES_DIR/hooks/merge_and_diff.py" "$RES_DIR/settings.json" "$SETTINGS_PATH" "$DRY_RUN" "$PY" "$REAL_HOOKS_DIR" "$MANIFEST_PATH" "danger_guard.py,secrets_guard.py" "$DEFAULT_MODE"; then
     echo "  ❌ 병합 검증 실패 — 예상치 못한 최상위 키 변경이 감지되었습니다. 수동 확인이 필요합니다." >&2
     exit 1
 fi
@@ -173,6 +195,6 @@ DEP_WARNING=""
 if [[ "$HAS_TRASH" -eq 0 ]]; then
     DEP_WARNING="휴지통 도구(trash-put / macOS trash)가 없어, 설치 전까지 rm 명령은 '차단'됩니다 (안전을 위한 기본값)."
 fi
-print_setup_report "$DRY_RUN" "$REAL_SETTINGS_PATH" "$REAL_HOOKS_DIR/guard.log" "$DEP_WARNING" \
+print_setup_report "$DRY_RUN" "$REAL_SETTINGS_PATH" "$REAL_HOOKS_DIR/guard.log" "$DEP_WARNING" "$DEFAULT_MODE" \
     "$REAL_HOOKS_DIR/danger_guard.py" "$REAL_HOOKS_DIR/secrets_guard.py"
 # 설치 영수증(매니페스트)은 위 invoke_settings_merge 안에서 merge 가 기록한다.

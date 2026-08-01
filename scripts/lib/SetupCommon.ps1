@@ -86,13 +86,15 @@ function Invoke-SettingsMerge {
         [Parameter(Mandatory)][string]$PyExe,
         [string[]]$PyArgs = @(),
         [string]$ManifestPath = "",     # 주면 (비 dry-run) merge 가 설치 영수증을 기록
-        [string]$HookFilesCsv = ""
+        [string]$HookFilesCsv = "",
+        [string]$DefaultMode = ""       # 온보딩이 고른 permissions.defaultMode (비면 조각의 auto)
     )
     $PSNativeCommandUseErrorActionPreference = $false   # S1 방어 — 아래 exit code 는 $LASTEXITCODE 로 판정
     $dry = if ($DryRun) { "1" } else { "0" }
+    $modeFlag = if ($DefaultMode) { @("--default-mode", $DefaultMode) } else { @() }
     # 출력을 변수로 캡처해서 다시 Write-Host 로 찍는다 — 그냥 & 로 호출하면 stdout 줄들이
     # 이 함수의 파이프라인 출력에 섞여 들어가서 호출부가 $exitCode 로 받는 값이 오염된다.
-    $output = & $PyExe @($PyArgs) -X utf8 $MergeScriptPath $FragmentPath $SettingsPath $dry $PyInvoke $RealHooksDir $ManifestPath $HookFilesCsv
+    $output = & $PyExe @($PyArgs) -X utf8 $MergeScriptPath @modeFlag $FragmentPath $SettingsPath $dry $PyInvoke $RealHooksDir $ManifestPath $HookFilesCsv
     $exitCode = $LASTEXITCODE
     $output | ForEach-Object { Write-Host $_ }
     return $exitCode
@@ -118,8 +120,10 @@ function Write-SetupReport {
         [string[]]$InstalledFiles = @(),
         [Parameter(Mandatory)][string]$SettingsPath,
         [Parameter(Mandatory)][string]$GuardLogPath,
-        [string]$DependencyWarning = $null
+        [string]$DependencyWarning = $null,
+        [string]$DefaultMode = "auto"
     )
+    if (-not $DefaultMode) { $DefaultMode = "auto" }
     Write-Host ""
     if ($DryRun) {
         Write-Host "🧪 DRY RUN 완료 — 실제 파일은 하나도 바뀌지 않았습니다." -ForegroundColor Magenta
@@ -140,13 +144,20 @@ function Write-SetupReport {
     Write-Host "     세션은 시작 시점의 권한 스냅샷을 그대로 쓰므로(실시간 재로드 안 함), 방금 allow" -ForegroundColor Yellow
     Write-Host "     목록에 넣은 Artifact 등이 이 세션에서는 계속 확인 프롬프트를 띄울 수 있습니다." -ForegroundColor Yellow
     Write-Host "     Claude Code 를 종료 후 다시 실행(새 세션)하면 프롬프트가 사라집니다." -ForegroundColor Yellow
-    Write-Host "  ⚠️ 범위 변경 안내: 이 훅과 defaultMode(auto)는 이제 이 사용자가 여는 모든" -ForegroundColor DarkGray
+    Write-Host "  ⚠️ 범위 변경 안내: 이 훅과 defaultMode($DefaultMode)는 이제 이 사용자가 여는 모든" -ForegroundColor DarkGray
     Write-Host "     프로젝트에 적용됩니다 (특정 프로젝트 한정이 아님)." -ForegroundColor DarkGray
-    Write-Host "  ℹ️ defaultMode를 'auto'로 설정했지만, 실제로 auto 모드가 켜지려면 계정이" -ForegroundColor DarkGray
-    Write-Host "     Claude Code v2.1.83+, Team/Enterprise/API 플랜, Sonnet 4.6 이상 모델 등" -ForegroundColor DarkGray
-    Write-Host "     자격 요건을 충족해야 합니다 (아직 research preview, PowerShell 툴에서는" -ForegroundColor DarkGray
-    Write-Host "     auto 모드가 아직 지원되지 않는다는 보고도 있습니다). Shift+Tab 으로 모드를" -ForegroundColor DarkGray
-    Write-Host "     순환시켜 auto 가 뜨는지 직접 확인해보세요." -ForegroundColor DarkGray
+    if ($DefaultMode -eq "auto") {
+        Write-Host "  ℹ️ defaultMode를 'auto'로 설정했지만, 실제로 auto 모드가 켜지려면 계정이" -ForegroundColor DarkGray
+        Write-Host "     Claude Code v2.1.83+, Team/Enterprise/API 플랜, Sonnet 4.6 이상 모델 등" -ForegroundColor DarkGray
+        Write-Host "     자격 요건을 충족해야 합니다 (아직 research preview, PowerShell 툴에서는" -ForegroundColor DarkGray
+        Write-Host "     auto 모드가 아직 지원되지 않는다는 보고도 있습니다). Shift+Tab 으로 모드를" -ForegroundColor DarkGray
+        Write-Host "     순환시켜 auto 가 뜨는지 직접 확인해보세요." -ForegroundColor DarkGray
+    } elseif ($DefaultMode -eq "bypassPermissions") {
+        Write-Host "  ⚠️ defaultMode를 'bypassPermissions'로 설정했습니다 — Claude Code 의 권한 확인이" -ForegroundColor Yellow
+        Write-Host "     모두 생략됩니다. 방금 설치한 가드 훅(rm 휴지통 치환, git 백업, 시크릿 확인)은" -ForegroundColor Yellow
+        Write-Host "     그대로 동작하지만, 훅이 판단하지 않는 명령은 확인 없이 실행됩니다." -ForegroundColor Yellow
+        Write-Host "     되돌리려면 $SettingsPath 의 permissions.defaultMode 를 'auto' 로 바꾸세요." -ForegroundColor Yellow
+    }
     Write-Host "  감사 로그: $GuardLogPath"
 }
 

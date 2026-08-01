@@ -11,6 +11,10 @@
 #   curl ... | sh -s -- --dry-run     # 미리보기
 #   curl ... | sh -s -- --hooks       # 전역 가드/권한만
 #
+# 인자 없이 실행하면 setup.sh 가 대화형 온보딩을 띄운다. 이 스크립트는 stdin 이 파이프인
+# 채로 setup.sh 를 부르지만(위 curl | sh), 온보딩이 /dev/tty 를 직접 열기 때문에 정상
+# 동작한다. 터미널이 없으면 온보딩은 조용히 건너뛰고 예전처럼 전체 설치가 진행된다.
+#
 # 환경변수:
 #   CLAUDE_SETUP_REPO=owner/repo   대상 레포 (기본 thsvkd/claude-code-setup)
 #   CLAUDE_SETUP_REF=main          브랜치/태그 (기본 main; 배포 시 vX.Y.Z 태그 권장)
@@ -28,11 +32,16 @@ print_help() {
 claude-code-setup 원격 설치 부트스트랩
 
 사용법:
-  curl -fsSL .../install.sh | sh                 # 전체 설치 (가드/권한 + AGENTS.md)
+  curl -fsSL .../install.sh | sh                 # 대화형 온보딩 → 고른 대로 설치
   curl -fsSL .../install.sh | sh -s -- --hooks    # 전역 가드/권한만
   curl -fsSL .../install.sh | sh -s -- --agentsmd # 현재 폴더에 AGENTS.md 만
   curl -fsSL .../install.sh | sh -s -- --dry-run  # 아무것도 바꾸지 않고 미리보기
+  curl -fsSL .../install.sh | sh -s -- --no-onboard # 온보딩 없이 전체 설치
   curl -fsSL .../install.sh | sh -s -- --help     # 이 도움말
+
+인자 없이 실행하면 설치 범위·권한 모드(auto/bypassPermissions)를 고르는 온보딩이 뜹니다.
+파이프로 실행해도(stdin 이 스크립트 본문이어도) 제어 터미널을 직접 열어 동작하며,
+터미널이 없는 환경(CI 등)에서는 온보딩 없이 전체 설치로 진행합니다.
 
 환경변수:
   CLAUDE_SETUP_REPO=owner/repo   대상 레포 (기본 thsvkd/claude-code-setup)

@@ -60,12 +60,20 @@ install_hook_files() {
 }
 
 invoke_settings_merge() {
-    # args: py_exe merge_script fragment settings_path dry_run(0/1) py_invoke hooks_dir [manifest_path] [hook_files_csv]
+    # args: py_exe merge_script fragment settings_path dry_run(0/1) py_invoke hooks_dir [manifest_path] [hook_files_csv] [default_mode]
     # res/settings.json 조각(SSoT)의 자리표시자를 치환하고 대상 settings.json에 외과적으로 병합한다.
     # manifest_path 를 주면 (비 dry-run) merge 가 설치 영수증까지 기록한다.
+    # default_mode 를 주면 조각의 permissions.defaultMode 를 그 값으로 바꿔 병합한다 (온보딩 선택).
     local py_exe="$1" merge_script="$2" fragment="$3" settings_path="$4"
     local dry_run="$5" py_invoke="$6" hooks_dir="$7" manifest_path="${8:-}" hook_files_csv="${9:-}"
-    "$py_exe" -X utf8 "$merge_script" "$fragment" "$settings_path" "$dry_run" "$py_invoke" "$hooks_dir" "$manifest_path" "$hook_files_csv"
+    local default_mode="${10:-}"
+
+    # bash 3.2 (macOS 기본) 는 set -u 에서 빈 배열 확장을 unbound variable 로 본다.
+    local mode_flag=()
+    [[ -n "$default_mode" ]] && mode_flag=(--default-mode "$default_mode")
+
+    "$py_exe" -X utf8 "$merge_script" ${mode_flag[@]+"${mode_flag[@]}"} \
+        "$fragment" "$settings_path" "$dry_run" "$py_invoke" "$hooks_dir" "$manifest_path" "$hook_files_csv"
 }
 
 uninstall_hooks() {
@@ -129,9 +137,13 @@ run_hook_self_test() {
 }
 
 print_setup_report() {
-    # args: dry_run(0/1) settings_path guard_log_path dependency_warning  [installed_file...]
+    # args: dry_run(0/1) settings_path guard_log_path dependency_warning default_mode [installed_file...]
+    # default_mode 가 비면 조각의 기본값(auto)이 쓰인 것으로 본다.
     local dry_run="$1" settings_path="$2" guard_log_path="$3" dependency_warning="$4"
-    shift 4
+    # 빈 문자열로 넘어와도(호출부가 변수를 그대로 전달) auto 로 본다.
+    local default_mode="${5:-}"
+    [[ -n "$default_mode" ]] || default_mode="auto"
+    shift 5
     local installed=("$@")
 
     echo ""
@@ -157,11 +169,18 @@ print_setup_report() {
     echo "     세션은 시작 시점의 권한 스냅샷을 그대로 쓰므로(실시간 재로드 안 함), 방금 allow"
     echo "     목록에 넣은 Artifact 등이 이 세션에서는 계속 확인 프롬프트를 띄울 수 있습니다."
     echo "     Claude Code 를 종료 후 다시 실행(새 세션)하면 프롬프트가 사라집니다."
-    echo "  ⚠️ 범위 변경 안내: 이 훅과 defaultMode(auto)는 이제 이 사용자가 여는 모든"
+    echo "  ⚠️ 범위 변경 안내: 이 훅과 defaultMode($default_mode)는 이제 이 사용자가 여는 모든"
     echo "     프로젝트에 적용됩니다 (특정 프로젝트 한정이 아님)."
-    echo "  ℹ️ defaultMode를 'auto'로 설정했지만, 실제로 auto 모드가 켜지려면 계정이"
-    echo "     Claude Code v2.1.83+, Team/Enterprise/API 플랜, Sonnet 4.6 이상 모델 등"
-    echo "     자격 요건을 충족해야 합니다 (아직 research preview). 세션에서 Shift+Tab 으로"
-    echo "     모드를 순환시켜 auto 가 뜨는지 직접 확인해보세요."
+    if [[ "$default_mode" == "auto" ]]; then
+        echo "  ℹ️ defaultMode를 'auto'로 설정했지만, 실제로 auto 모드가 켜지려면 계정이"
+        echo "     Claude Code v2.1.83+, Team/Enterprise/API 플랜, Sonnet 4.6 이상 모델 등"
+        echo "     자격 요건을 충족해야 합니다 (아직 research preview). 세션에서 Shift+Tab 으로"
+        echo "     모드를 순환시켜 auto 가 뜨는지 직접 확인해보세요."
+    elif [[ "$default_mode" == "bypassPermissions" ]]; then
+        echo "  ⚠️ defaultMode를 'bypassPermissions'로 설정했습니다 — Claude Code 의 권한 확인이"
+        echo "     모두 생략됩니다. 방금 설치한 가드 훅(rm 휴지통 치환, git 백업, 시크릿 확인)은"
+        echo "     그대로 동작하지만, 훅이 판단하지 않는 명령은 확인 없이 실행됩니다."
+        echo "     되돌리려면 $settings_path 의 permissions.defaultMode 를 'auto' 로 바꾸세요."
+    fi
     echo "  감사 로그: $guard_log_path"
 }

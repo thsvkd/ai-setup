@@ -18,7 +18,11 @@ allow/deny/ask 는 합집합(중복 없이 뒤에 추가), defaultMode 는 덮�
 설치 영수증(매니페스트)으로 기록한다. --uninstall 모드는 그 영수증을 읽어, 설치가 건드린
 부분만 정밀하게 되돌린다 (훅 등록 해제 + 우리가 추가한 권한 항목만 제거 + defaultMode 원복).
 
-usage: merge_and_diff.py <fragment.json> <settings_path> <dry_run:0|1> <py_invoke> <hooks_dir> [manifest_path] [hook_files_csv]
+--default-mode 를 주면 조각의 permissions.defaultMode 를 그 값으로 바꿔 병합한다. 온보딩이
+사용자에게 고르게 한 값(auto / bypassPermissions)을 전달하는 통로다. 조각(res/settings.json)
+자체는 건드리지 않으므로 SSoT 는 그대로 유지된다.
+
+usage: merge_and_diff.py [--default-mode <mode>] <fragment.json> <settings_path> <dry_run:0|1> <py_invoke> <hooks_dir> [manifest_path] [hook_files_csv]
        merge_and_diff.py --uninstall <settings_path> <dry_run:0|1> <manifest_path>
 """
 import copy
@@ -34,6 +38,16 @@ PY_RE = re.compile(r'[A-Za-z0-9_.\-]+\.py')
 # 스칼라 최상위 설정 키(단일 값). allow/deny 처럼 '없을 때만 추가'하고, 기존 값이 있으면
 # 사용자 선택을 그대로 보존한다. uninstall 은 '우리가 실제로 추가한' 키만 정밀 제거한다.
 SCALAR_KEYS = ("model", "effortLevel", "language")
+
+# 온보딩이 --default-mode 로 넘길 수 있는 값. Claude Code 가 실제로 아는 모드만 받는다 —
+# 오타가 그대로 settings.json 에 박히면 사용자는 모드가 왜 안 켜지는지 알 길이 없다.
+VALID_DEFAULT_MODES = (
+    "auto",
+    "bypassPermissions",
+    "default",
+    "acceptEdits",
+    "plan",
+)
 
 
 def load_manifest(path):
@@ -458,8 +472,26 @@ def main() -> int:
     if argv and argv[0] == "--uninstall":
         return main_uninstall(argv[1:])
 
+    # 위치 인자 사이 어디에 와도 되도록 --default-mode 를 먼저 걷어낸다.
+    default_mode = ""
+    positional = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--default-mode" and i + 1 < len(argv):
+            default_mode = argv[i + 1]
+            i += 2
+        else:
+            positional.append(argv[i])
+            i += 1
+    argv = positional
+
+    if default_mode and default_mode not in VALID_DEFAULT_MODES:
+        print(f"알 수 없는 defaultMode: {default_mode!r} (가능: {', '.join(VALID_DEFAULT_MODES)})",
+              file=sys.stderr)
+        return 1
+
     if len(argv) < 5:
-        print("usage: merge_and_diff.py <fragment.json> <settings_path> <dry_run> <py_invoke> <hooks_dir> [manifest_path] [hook_files_csv]",
+        print("usage: merge_and_diff.py [--default-mode <mode>] <fragment.json> <settings_path> <dry_run> <py_invoke> <hooks_dir> [manifest_path] [hook_files_csv]",
               file=sys.stderr)
         return 1
 
@@ -477,6 +509,10 @@ def main() -> int:
         fragment = json.load(f)
     fragment.pop("_comment", None)
     fragment = substitute(fragment, {"{{PY}}": py_invoke, "{{HOOKS_DIR}}": hooks_dir})
+
+    # 온보딩이 고른 권한 모드로 조각의 기본값을 갈아끼운다 (조각 파일 자체는 그대로).
+    if default_mode:
+        fragment.setdefault("permissions", {})["defaultMode"] = default_mode
 
     settings_existed = os.path.exists(settings_path)
     if settings_existed:

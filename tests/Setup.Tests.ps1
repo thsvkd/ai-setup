@@ -127,7 +127,9 @@ Describe "Windows .ps1 인코딩 회귀 (BOM)" {
         }
     }
 
-    It "powershell.exe(Windows PowerShell 5.1) 로 setup.ps1 -Help 를 실행해도 정상 파싱/실행된다" {
+    # powershell.exe 는 Windows 에만 있다. 없는 곳에서 '실패'로 잡으면 진짜 실패가 묻힌다 —
+    # 건너뛴 것은 통과가 아니라 '검증 안 됨'이며, Pester 요약에 Skipped 로 정직하게 남는다.
+    It "powershell.exe(Windows PowerShell 5.1) 로 setup.ps1 -Help 를 실행해도 정상 파싱/실행된다" -Skip:(-not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) {
         $out = powershell.exe -ExecutionPolicy Bypass -File $script:Setup -Help 2>&1 | Out-String
         $ec = $LASTEXITCODE
         $ec | Should -Be 0
@@ -151,5 +153,113 @@ Describe "네이티브 명령 오류 승격 방어 회귀 (S1)" {
             $content | Should -Match '\$PSNativeCommandUseErrorActionPreference\s*=\s*\$false' `
                 -Because "$f 는 네이티브 명령 실패를 `$LASTEXITCODE 로 직접 판정하므로, PS 7.4+ 에서 그 실패가 예외로 승격되면 안 됨"
         }
+    }
+}
+
+# 온보딩(res/onboard.py)은 인자 없이 실행할 때만 뜬다. 여기서 지키려는 건 두 가지다:
+# 콘솔이 없을 때 아무것도 골라버리지 않을 것, 그리고 기존 플래그 호출이 멈추지 않을 것.
+Describe "온보딩 연결" {
+    BeforeEach {
+        $script:sandbox = Join-Path $env:TEMP ("cc-pester-onboard-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        New-Item -ItemType Directory -Force -Path $script:sandbox | Out-Null
+        $script:oldUP = $env:USERPROFILE
+        $env:USERPROFILE = $script:sandbox
+    }
+    AfterEach {
+        $env:USERPROFILE = $script:oldUP
+        Remove-Item -Recurse -Force $script:sandbox -ErrorAction SilentlyContinue
+    }
+
+    It "-Help 가 온보딩에서 고를 수 있는 항목을 안내한다" {
+        $r = Invoke-Script $script:Setup @("-Help")
+        $r.ExitCode | Should -Be 0
+        $r.Output | Should -Match "온보딩"
+        $r.Output | Should -Match "bypassPermissions"
+    }
+
+    It "플래그를 주면 온보딩을 띄우지 않는다" {
+        # 자동화/CI 가 쓰던 기존 호출이 프롬프트를 기다리며 멈추면 안 된다.
+        $r = Invoke-Script $script:Setup @("-Hooks", "-DryRun")
+        $r.ExitCode | Should -Be 0
+        $r.Output | Should -Not -Match "무엇을 설치할까요"
+    }
+
+    It "-NoOnboard 는 온보딩 없이 기본 동작으로 진행한다" {
+        $r = Invoke-Script $script:Setup @("-NoOnboard", "-DryRun")
+        $r.ExitCode | Should -Be 0
+        $r.Output | Should -Not -Match "무엇을 설치할까요"
+        $r.Output | Should -Match "DRY RUN"
+    }
+
+    It "onboard.py 는 콘솔이 없으면 아무 선택도 남기지 않고 2 로 끝난다" {
+        $onboard = Join-Path $script:RepoRoot "res\onboard.py"
+        $answers = Join-Path $script:sandbox "answers.txt"
+        $py = if (Get-Command python3 -ErrorAction SilentlyContinue) { "python3" } else { "python" }
+        & $py -X utf8 $onboard --out $answers *> $null
+        $LASTEXITCODE | Should -Be 2 -Because "물어볼 수 없는 환경에서 뭔가를 고르면 사용자가 동의한 적 없는 설치가 된다"
+
+        $written = if (Test-Path $answers) { Get-Content $answers -Raw -ErrorAction SilentlyContinue } else { $null }
+        [string]::IsNullOrWhiteSpace($written) | Should -BeTrue -Because "선택을 못 받았으면 결과 파일도 비어 있어야 한다"
+    }
+}
+
+Describe "온보딩이 고른 값이 설치에 반영된다" {
+    BeforeEach {
+        $script:sandbox = Join-Path $env:TEMP ("cc-pester-mode-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        New-Item -ItemType Directory -Force -Path $script:sandbox | Out-Null
+        $script:oldUP = $env:USERPROFILE
+        $env:USERPROFILE = $script:sandbox
+    }
+    AfterEach {
+        $env:USERPROFILE = $script:oldUP
+        Remove-Item -Recurse -Force $script:sandbox -ErrorAction SilentlyContinue
+    }
+
+    It "-DefaultMode bypassPermissions 가 settings.json 계획에 반영된다" {
+        $r = Invoke-Script $script:SetupHooks @("-DryRun", "-DefaultMode", "bypassPermissions")
+        $r.ExitCode | Should -Be 0
+        $r.Output | Should -Match '"defaultMode":\s*"bypassPermissions"'
+    }
+
+    It "-DefaultMode 를 주지 않으면 조각의 기본값(auto)이 그대로 쓰인다" {
+        $r = Invoke-Script $script:SetupHooks @("-DryRun")
+        $r.ExitCode | Should -Be 0
+        $r.Output | Should -Match '"defaultMode":\s*"auto"'
+    }
+
+    It "알 수 없는 -DefaultMode 는 ValidateSet 이 거부한다" {
+        $r = Invoke-Script $script:SetupHooks @("-DryRun", "-DefaultMode", "bypass")
+        $r.ExitCode | Should -Not -Be 0
+    }
+}
+
+Describe "AGENTS.md 덮어쓰기 (-Force)" {
+    BeforeEach {
+        $script:proj = Join-Path $env:TEMP ("cc-pester-agents-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        New-Item -ItemType Directory -Force -Path $script:proj | Out-Null
+        $script:AgentsMd = Join-Path $script:RepoRoot "scripts\setup_agentsmd.ps1"
+    }
+    AfterEach {
+        Remove-Item -Recurse -Force $script:proj -ErrorAction SilentlyContinue
+    }
+
+    It "-Force 없이는 기존 AGENTS.md 를 건드리지 않는다" {
+        $target = Join-Path $script:proj "AGENTS.md"
+        Set-Content -Path $target -Value "사용자가 손댄 내용" -Encoding UTF8
+        Push-Location $script:proj
+        try { pwsh -NoProfile -File $script:AgentsMd *> $null } finally { Pop-Location }
+        (Get-Content $target -Raw) | Should -Match "사용자가 손댄 내용"
+    }
+
+    It "-Force 는 덮어쓰기 전에 원본을 백업한다" {
+        $target = Join-Path $script:proj "AGENTS.md"
+        Set-Content -Path $target -Value "사용자가 손댄 내용" -Encoding UTF8
+        Push-Location $script:proj
+        try { pwsh -NoProfile -File $script:AgentsMd -Force *> $null } finally { Pop-Location }
+
+        $backups = @(Get-ChildItem -Path $script:proj -Filter "AGENTS.md.bak.*")
+        $backups.Count | Should -Be 1 -Because "사용자 콘텐츠를 덮어쓸 때는 되돌릴 방법을 남겨야 한다"
+        (Get-Content $backups[0].FullName -Raw) | Should -Match "사용자가 손댄 내용"
+        (Get-Content $target -Raw) | Should -Not -Match "사용자가 손댄 내용"
     }
 }

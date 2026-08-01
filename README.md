@@ -36,16 +36,30 @@ irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/
 
 ## 사용법
 
-`setup`은 디스패처이고, 플래그로 하위 작업을 고른다. 인자가 없으면 전부 실행한다. PowerShell에서 `irm | iex`는 인자를 넘기기 어려우므로, 플래그가 필요하면 아래처럼 `scriptblock` 형태로 감싸서 쓴다.
+인자 없이 실행하면 **대화형 온보딩**이 떠서 무엇을 어떻게 설치할지 고르게 한다:
+
+```
+? 무엇을 설치할까요? (↑↓ 이동, Enter 선택)
+ » 전체 — 가드 훅/권한(전역) + AGENTS.md(현재 폴더)
+   가드 훅 + 권한만 (~/.claude, 모든 프로젝트에 적용)
+   AGENTS.md 만 (현재 폴더)
+```
+
+이어서 **권한 모드**(`auto` / `bypassPermissions`), 기존 `AGENTS.md`가 있다면 **덮어쓸지**, 그리고 **지금 적용할지 변경 계획만 먼저 볼지**를 묻는다. `curl … | sh`로 실행해도 프롬프트가 정상 동작한다 — 자세한 사정은 [아래 절](#curl--sh에서-대화형-프롬프트가-동작하는-이유)에 있다.
+
+플래그를 하나라도 주면 온보딩을 건너뛰고 예전과 똑같이 동작하므로, 기존 자동화 호출은 그대로 쓰면 된다. PowerShell에서 `irm | iex`는 인자를 넘기기 어려우므로, 플래그가 필요하면 아래처럼 `scriptblock` 형태로 감싸서 쓴다.
 
 | 플래그 (POSIX / PowerShell)  | 동작                                                                                             |
 | ----------------------------- | -------------------------------------------------------------------------------------------------- |
-| (없음)                       | 가드 훅/권한 + `AGENTS.md` 모두 설치                                                              |
+| (없음)                       | 대화형 온보딩 → 고른 대로 설치 (터미널이 없으면 전체 설치로 폴백)                                 |
 | `--hooks` / `-Hooks`         | 가드 훅 + 권한만 설치 (전역, `~/.claude`)                                                         |
 | `--agentsmd` / `-AgentsMd`   | 현재 폴더에 `AGENTS.md`만 설치                                                                    |
 | `--dry-run` / `-DryRun`      | 아무것도 바꾸지 않고 변경 계획만 출력                                                             |
+| `--no-onboard` / `-NoOnboard`| 온보딩을 띄우지 않고 기본값(전체 설치)으로 실행                                                   |
 | `--uninstall` / `-Uninstall` | 설치가 추가한 것만 정밀 복원 (아래 참고)                                                          |
 | `--help` / `-Help`           | 도움말                                                                                             |
+
+온보딩이 직접 쓰는 하위 옵션도 워커에 그대로 열려 있다 — `setup_hooks`의 `--default-mode <모드>`(`auto`/`bypassPermissions`/`default`/`acceptEdits`/`plan`)와 `setup_agentsmd`의 `--force`(기존 `AGENTS.md`를 `.bak.<타임스탬프>`로 백업한 뒤 덮어쓰기)다.
 
 예시 (macOS/Linux/Git Bash — Windows는 위 `scriptblock` 패턴에 `-Hooks`/`-DryRun`/`-Uninstall` 등을 붙이면 된다):
 
@@ -78,9 +92,46 @@ bash scripts/setup.sh --dry-run   # 또는 .\scripts\setup.ps1 -DryRun
 | `~/.claude/hooks/secrets_guard.py` | 시크릿 파일 접근 가드 (Read·Write·Edit)                                              |
 | `~/.claude/hooks/send_to_trash.py` | (Windows) 휴지통 이동 헬퍼                                                           |
 | `~/.claude/settings.json`          | 권한 + PreToolUse 훅 등록 + `model`/`effortLevel`/`language`·`env.CLAUDE_CODE_SCROLL_SPEED` 기본값(없을 때만) |
-| `./AGENTS.md`                      | (`--agentsmd` 시) 현재 폴더에 프로젝트 워크플로 규칙 — 이미 있으면 건너뜀            |
+| `./AGENTS.md`                      | (`--agentsmd` 시) 현재 폴더에 프로젝트 워크플로 규칙 — 이미 있으면 건너뜀 (`--force`면 백업 후 덮어쓰기) |
 
 `settings.json`에는 `permissions.defaultMode: "auto"`, 핵심 툴 `allow`(`Bash`, `PowerShell`, `Read(*)`, `Edit(*)`, `Write(*)`, `Agent(*)`, `WebFetch(*)` 등), `ask`(위험 스킬만 — git 관련 규칙은 없음), `hooks.PreToolUse` 등록, 그리고 없을 때만 채우는 `model: "opus"` / `effortLevel: "xhigh"` / `language: "korean"` 과 `env.CLAUDE_CODE_SCROLL_SPEED: "3"`(마우스 휠 스크롤 속도, `/scroll-speed` 대응)이 병합된다. git 관련 deny/ask를 `permissions`에 두지 않는 이유와 그 대가는 [아래 절](#git-정책을-permissions가-아니라-훅이-담당하는-이유-그리고-그-대가)에서 설명한다. 사용자가 이미 고른 값과 그 외 최상위 키(`statusLine` 등), 그리고 사용자의 기존 `env` 키/값은 건드리지 않는다(우리가 관리하는 `env` 키만 없을 때 추가). 단일 소스는 [`res/settings.json`](res/settings.json)이며, 설치 시 python 실행 명령과 훅 경로만 치환된다.
+
+---
+
+## 온보딩
+
+### `curl | sh`에서 대화형 프롬프트가 동작하는 이유
+
+`curl -fsSL install.sh | sh`는 **stdin이 스크립트 본문**이다. 이 상태에서 프롬프트가 stdin을 읽으면 스크립트의 나머지를 삼키거나 EOF를 만난다. 후보 라이브러리 네 개를 pty 위에서 실측해보면 결과가 이렇다:
+
+| 라이브러리 | 일반 실행 | `curl \| sh` | `/dev/tty` 재바인딩 후 |
+| --- | --- | --- | --- |
+| **questionary** (채택) | ✅ | ❌ **조용히 첫 항목 확정** | ✅ |
+| InquirerPy | ✅ | ❌ `EOFError` | ✅ |
+| beaupy | ✅ | ❌ | ❌ 멈춤 |
+| cutie | ✅ | ❌ | ✅ |
+
+주목할 건 questionary의 실패 방식이다 — 에러도 경고도 없이 **첫 항목("전체 설치")을 자동으로 확정**한다. 사용자가 아무것도 고르지 않았는데 전역 설치가 진행되는, 가장 위험한 실패 모드다.
+
+그래서 `res/onboard.py`는 프롬프트를 띄우기 전에 제어 터미널(POSIX `/dev/tty`, Windows `CONIN$`/`CONOUT$`)을 직접 열어 fd 0/1에 얹는다. 터미널을 못 열면 대화형을 **아예 포기한다** — 라이브러리에게 판단을 맡기지 않는다.
+
+### 물어볼 수 없을 때와 사용자가 거부했을 때는 다르다
+
+온보딩은 종료 코드로 세 상황을 구분하고, 호출부는 이를 다르게 처리한다:
+
+| 코드 | 상황 | 설치 동작 |
+| --- | --- | --- |
+| `0` | 사용자가 선택을 마침 | 고른 대로 실행 |
+| `2` | 물어볼 수 없음 (TTY 없음 / CI / 벤더 깨짐) | **예전 기본값으로 그대로 진행** — 실패가 아니다 |
+| `130` | 사용자가 `Ctrl+C`로 취소 | **아무것도 설치하지 않고 중단** |
+
+`2`와 `130`을 뭉뚱그리면 "취소했는데 기본값으로 설치되는" 동작이 된다. CI 감지는 TTY 검사와 별도로 둔다 — `docker -t`나 tmux처럼 CI가 TTY를 붙여주는 경우가 있어 TTY 유무만으로는 못 거른다.
+
+### 의존성을 설치하지 않고 레포에 넣어둔 이유
+
+온보딩은 `questionary`(+`prompt_toolkit`, `wcwidth`)를 쓰는데, 이를 [`res/vendor/`](res/vendor/)에 벤더링해 둔다. 설치 중에 `pip install`을 하지 않기 위해서다 — 최신 배포판은 PEP 668(`externally-managed-environment`)로 시스템 Python에 대한 `pip install`을 거부하고, 네트워크가 막힌 환경에서는 설치가 통째로 실패한다. 설치 스크립트가 사용자의 파이썬 환경을 바꾸는 것 자체도 적절하지 않다.
+
+벤더링 갱신 방법과 주의사항(특히 `prompt_toolkit`의 `dist-info/METADATA`를 지우면 프롬프트를 띄우는 순간 죽는다)은 [`res/vendor/README.md`](res/vendor/README.md)에 있다.
 
 ---
 
@@ -183,6 +234,8 @@ Claude Code에서 `permissions`의 `deny`/`ask` 규칙은 PreToolUse 훅의 `all
 res/
   AGENTS.md                 # 배포될 프로젝트 워크플로 규칙
   settings.json             # 실제 settings.json 조각 (SSoT, {{PY}}·{{HOOKS_DIR}} 자리표시자)
+  onboard.py                # 대화형 온보딩 TUI (인자 없이 실행할 때만 뜸)
+  vendor/                   # 온보딩 의존성 (questionary·prompt_toolkit·wcwidth, 벤더링)
   hooks/
     danger_guard.windows.py # Windows용 (Bash + PowerShell)
     danger_guard.posix.py   # macOS/Linux용 (Bash)

@@ -2,13 +2,16 @@
 .SYNOPSIS
     Claude Code 사용자 레벨 설정 CLI 엔트리포인트 (Windows)
 .DESCRIPTION
-    인자 없이 실행하면 훅/권한 설정(setup_hooks.ps1)과 AGENTS.md 설치(setup_agentsmd.ps1)를
-    모두 실행합니다. -Hooks 또는 -AgentsMd 를 지정하면 지정한 것만 실행합니다.
+    인자 없이 실행하면 대화형 온보딩(res/onboard.py)이 떠서 설치 범위·권한 모드 등을
+    고르게 합니다. 플래그를 하나라도 주면 사용자가 이미 뜻을 밝힌 것이므로 온보딩을
+    건너뛰고 예전과 똑같이 동작합니다. 온보딩을 띄울 수 없는 환경(콘솔 없음/CI)에서도
+    예전 기본값(훅+권한 설치 + AGENTS.md 설치)으로 그대로 진행합니다.
 .USAGE
-    powershell -ExecutionPolicy Bypass -File setup.ps1                       # 전체 실행
+    powershell -ExecutionPolicy Bypass -File setup.ps1                       # 온보딩 → 선택대로
     powershell -ExecutionPolicy Bypass -File setup.ps1 -Hooks                # 훅/권한만
     powershell -ExecutionPolicy Bypass -File setup.ps1 -AgentsMd             # AGENTS.md만
     powershell -ExecutionPolicy Bypass -File setup.ps1 -DryRun               # 미리보기 (전체)
+    powershell -ExecutionPolicy Bypass -File setup.ps1 -NoOnboard            # 온보딩 끄기
 #>
 
 param(
@@ -16,6 +19,7 @@ param(
     [switch]$AgentsMd,
     [switch]$Uninstall,
     [switch]$DryRun,
+    [switch]$NoOnboard,
     [switch]$Help
 )
 
@@ -30,31 +34,111 @@ if ($Help) {
 claude-code-setup — Claude Code 사용자 레벨 설정
 
 사용법: .\setup.ps1 [옵션]
-  (옵션 없음)   가드/권한 + AGENTS.md 모두 설치
+  (옵션 없음)   대화형 온보딩으로 설치 범위/권한 모드를 고른 뒤 실행
   -Hooks        전역 가드 훅 + 권한만 설치 (~/.claude)
   -AgentsMd     현재 폴더에 AGENTS.md 만 설치
   -Uninstall    가드 훅 제거 + settings.json 등록 해제 (권한은 보존)
   -DryRun       아무것도 바꾸지 않고 변경 계획만 출력
+  -NoOnboard    대화형 온보딩을 띄우지 않고 기본값으로 실행
   -Help         이 도움말
+
+온보딩에서 고를 수 있는 것:
+  · 설치 범위 (전체 / 가드 훅+권한만 / AGENTS.md만)
+  · 권한 모드 (auto / bypassPermissions)
+  · 기존 AGENTS.md 덮어쓰기 여부 (파일이 이미 있을 때만 물음)
+  · 지금 적용할지, 변경 계획(-DryRun)만 먼저 볼지
 "@
     exit 0
 }
 
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+
+# 온보딩이 채우는 값들. 비어 있으면 워커가 각자의 기본값을 쓴다.
+$defaultMode = ""
+$forceAgentsMd = $false
+$runHooks = [bool]$Hooks
+$runAgentsMd = [bool]$AgentsMd
+$dryRun = [bool]$DryRun
+
+function Resolve-PythonForOnboard {
+    foreach ($candidate in @(@{ Exe = "py"; Args = @("-3") }, @{ Exe = "python"; Args = @() }, @{ Exe = "python3"; Args = @() })) {
+        $cmd = Get-Command $candidate.Exe -ErrorAction SilentlyContinue
+        if ($cmd) { return $candidate }
+    }
+    return $null
+}
+
+# 온보딩 종료 코드: 0=선택 완료, 2=대화형 불가(콘솔 없음/CI), 130=사용자 취소.
+# 2 와 130 을 구분하는 게 중요하다 — 2 는 "물어볼 수 없었다"라서 예전 기본값으로 계속
+# 진행해야 하고, 130 은 사용자가 명시적으로 거부한 것이라 아무것도 설치하면 안 된다.
+function Invoke-Onboarding {
+    $onboard = Join-Path $RepoRoot "res\onboard.py"
+    if (-not (Test-Path $onboard)) { return $null }
+
+    $py = Resolve-PythonForOnboard
+    if (-not $py) { return $null }
+
+    # python 이 2.x 면 onboard.py 는 파싱 단계에서 SyntaxError 로 죽고, 그 traceback 이
+    # 그대로 사용자에게 보여 설치가 실패한 것처럼 읽힌다. 먼저 조용히 걸러낸다.
+    & $py.Exe @($py.Args) -c "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)" *> $null
+    if ($LASTEXITCODE -ne 0) { return $null }
+
+    $answersPath = [System.IO.Path]::GetTempFileName()
+    try {
+        & $py.Exe @($py.Args) -X utf8 $onboard --out $answersPath --project-dir (Get-Location).Path
+        $status = $LASTEXITCODE
+
+        if ($status -eq 130) { exit 130 }
+        if ($status -ne 0) { return $null }   # 대화형 불가 — 예전 기본값 그대로
+
+        # Invoke-Expression 대신 한 줄씩 읽어 아는 키만 받는다.
+        $parsed = @{}
+        foreach ($line in (Get-Content $answersPath -Encoding UTF8)) {
+            $pair = $line -split "=", 2
+            if ($pair.Count -eq 2) { $parsed[$pair[0]] = $pair[1] }
+        }
+        return $parsed
+    } finally {
+        Remove-Item $answersPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+$hadArgs = $Hooks -or $AgentsMd -or $Uninstall -or $DryRun -or $NoOnboard
+if (-not $hadArgs) {
+    $answers = Invoke-Onboarding
+    if ($answers) {
+        switch ($answers["SCOPE"]) {
+            "all"      { $runHooks = $true; $runAgentsMd = $true }
+            "hooks"    { $runHooks = $true }
+            "agentsmd" { $runAgentsMd = $true }
+        }
+        if ($answers.ContainsKey("DEFAULT_MODE") -and
+            $answers["DEFAULT_MODE"] -in @("auto", "bypassPermissions", "default", "acceptEdits", "plan")) {
+            $defaultMode = $answers["DEFAULT_MODE"]
+        }
+        if ($answers["OVERWRITE_AGENTSMD"] -eq "1") { $forceAgentsMd = $true }
+        if ($answers["DRY_RUN"] -eq "1") { $dryRun = $true }
+    }
+}
+
 # uninstall 은 훅 전용 (프로젝트 AGENTS.md 는 사용자 콘텐츠라 건드리지 않음).
 if ($Uninstall) {
-    & (Join-Path $PSScriptRoot "setup_hooks.ps1") -Uninstall -DryRun:$DryRun
+    & (Join-Path $PSScriptRoot "setup_hooks.ps1") -Uninstall -DryRun:$dryRun
     exit $LASTEXITCODE
 }
 
-$runAll = -not ($Hooks -or $AgentsMd)
+if (-not ($runHooks -or $runAgentsMd)) {
+    $runHooks = $true
+    $runAgentsMd = $true
+}
 
-if ($runAll -or $Hooks) {
-    & (Join-Path $PSScriptRoot "setup_hooks.ps1") -DryRun:$DryRun
+if ($runHooks) {
+    & (Join-Path $PSScriptRoot "setup_hooks.ps1") -DryRun:$dryRun -DefaultMode $defaultMode
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
-if ($runAll -or $AgentsMd) {
-    & (Join-Path $PSScriptRoot "setup_agentsmd.ps1") -DryRun:$DryRun
+if ($runAgentsMd) {
+    & (Join-Path $PSScriptRoot "setup_agentsmd.ps1") -DryRun:$dryRun -Force:$forceAgentsMd
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
