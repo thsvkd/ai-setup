@@ -31,14 +31,26 @@ danger_guard.py — PreToolUse hook (Claude Code, Bash 툴 대상, 유저 레벨
                branch -D, branch -M(대상 이름이 이미 있었으면), tag -d, tag -f(대상이 이미
                있었으면), rebase(새로 시작하는 경우), commit --amend, filter-branch/filter-repo,
                reflog expire|delete, gc --prune=now|all, checkout/switch --force|-B|-C(강제 전환),
+               worktree remove --force(지워질 워크트리 안의 추적/미추적 파일을 -C 로 스냅샷),
                checkout -- <path>/checkout ./restore(워킹트리) → 실행 전 refs/claude-backups/
                <timestamp>/<대상> 에 되돌릴 대상을 백업한 뒤 원본 명령을 그대로 이어서 실행한다
                (자동치환). git stash create 는 추적 안 된 파일을 담지 못하는 한계가 있어(검증됨)
                clean 은 별도 스크래치 인덱스로 추적 안 된 파일까지 스냅샷하며, -x/-X 로 무시된
                파일까지 지우는 경우엔 `git add -Af` 로 .gitignore 대상까지 담는다.
                백업 스니펫은 전부 `&&` 로 이어져 한 단계라도 실패하면 뒤의 원본 파괴적 명령이
-               실행되지 않는다(fail-closed). 멀티라인/체이닝이거나 -C/--git-dir/--work-tree 로
-               '다른 저장소'를 대상으로 삼아 백업 대상을 안전하게 특정할 수 없으면 ask 로 폴백한다.
+               실행되지 않는다(fail-closed). 자동치환에는 두 가지 형태가 있다:
+                 - 한 줄짜리 명령: `백업 && 원본` 으로 통째로 갈아끼운다.
+                 - 멀티라인 블록: 파괴적 명령이 한 줄 통째로 있으면 그 줄 '바로 앞'에 백업 줄만
+                   끼워 넣고 나머지 줄은 원문 그대로 둔다. 블록 전체를 갈아끼우면 나머지 줄이
+                   소리 없이 사라지고, 블록 맨 앞에 백업을 붙이면 앞선 `cd` 가 반영되기 전
+                   cwd 를 백업해 엉뚱한 저장소를 잡는다 — 줄 삽입은 둘 다 피한다. 삽입 판정은
+                   모든 줄·파이프 하류까지 검사한 뒤 확정하므로, 같은 블록 뒤쪽의 deny/ask
+                   (`… | rm -rf ~` 등)가 항상 우선한다.
+               체이닝돼 있어도 파괴적 명령이 '줄의 맨 앞'이면 삽입한다 — 백업과 원본 사이에
+               cwd 를 바꿀 기회가 없기 때문이다. 반대로 `cd /x && git restore .` 처럼 뒤에 오면
+               백업이 cd 이전 디렉터리에서 돌아 엉뚱한 저장소를 잡으므로 ask 로 폴백한다.
+               히어독·줄에 걸친 따옴표라 줄 단위로 쪼갤 수 없거나, -C/--git-dir/--work-tree 로
+               '다른 저장소'를 대상으로 삼아 백업 대상을 안전하게 특정할 수 없을 때도 ask 다.
        pass  : stash push/save/pop/apply/list/show, reset --soft/--mixed, clean -n, branch -d,
                checkout/switch <branch>(전환), restore --staged(인덱스만), rebase --continue/
                --abort/--skip, 그 외 안전한 서브커맨드
@@ -582,6 +594,56 @@ def _backup_full_snapshot(reason: str, include_ignored: bool) -> str:
     )
 
 
+# 큰따옴표 안에서 의미가 바뀌어 스니펫을 깨뜨리거나 다른 명령을 실행시킬 수 있는 문자들.
+DQ_UNSAFE = ('"', '`', '\\', '$(')
+
+
+def _dq_embed(token: str):
+    """경로 토큰을 백업 스니펫에 큰따옴표로 감싸 넣는다. 불가능하면 None(→ ask).
+
+    shlex.quote 로 리터럴화하면 안 된다 — `git worktree remove --force "$SCRATCH/clean"` 의
+    `$SCRATCH` 가 확장되지 않아 존재하지 않는 경로를 백업하려다 실패하고, fail-closed 때문에
+    원본 명령까지 못 돌게 된다. 큰따옴표는 $VAR 확장과 공백을 동시에 살려 원본 줄과 정확히
+    같은 경로를 가리킨다."""
+    if not token or any(bad in token for bad in DQ_UNSAFE):
+        return None
+    return '"' + token + '"'
+
+
+def _backup_worktree_snapshot(path_expr: str, reason: str) -> str:
+    """`git worktree remove --force` 로 지워질 워크트리의 추적/미추적 파일을 스냅샷 커밋으로
+    백업한다. git 은 더티한 워크트리를 그냥은 지우지 않고 --force 를 요구하므로(실측 확인),
+    --force 가 붙었다는 것 자체가 '버릴 미커밋 변경이 실제로 있다'는 신호다.
+
+    백업 대상이 cwd 가 아니라 '지워질 워크트리' 라서 모든 git 호출에 -C 를 붙인다. 그냥
+    cwd 에서 스냅샷하면 본 저장소를 백업하고 정작 사라질 워크트리는 무방비가 된다.
+    refs/claude-backups/ 는 워크트리별(per-worktree) ref 가 아니라 저장소 전체가 공유하는
+    ref 라, 워크트리가 사라진 뒤에도 본 저장소에서 그대로 조회·복구할 수 있다.
+    워크트리가 이미 깨져 있어 스냅샷이 실패하면 fail-closed 로 원본도 막는다 — 그 경우
+    git worktree remove 자체도 'is not a working tree' 로 실패한다."""
+    return (
+        f'{_backup_ts_snippet()} && '
+        f'_bk_wt={path_expr} && '
+        '_bk_gitdir=$(git -C "$_bk_wt" rev-parse --absolute-git-dir) && '
+        '_bk_idx="$_bk_gitdir/claude-guard-index" && '
+        'GIT_INDEX_FILE="$_bk_idx" git -C "$_bk_wt" add -A -- . && '
+        '_bk_tree=$(GIT_INDEX_FILE="$_bk_idx" git -C "$_bk_wt" write-tree) && '
+        f'_bk_h=$(git -C "$_bk_wt" commit-tree "$_bk_tree" -p HEAD -m {shlex.quote(reason)}) && '
+        'git -C "$_bk_wt" update-ref "refs/claude-backups/${_bk_ts}/worktree-snapshot" "$_bk_h"'
+    )
+
+
+def _worktree_remove_force_path(rest: list):
+    """`git worktree remove --force <path>` 의 <path>. remove 가 아니거나 --force 가 없으면
+    None — --force 없는 remove 는 워크트리가 더티하면 git 이 알아서 거부하므로 손실이 없다."""
+    if _first_non_option(rest) != "remove":
+        return None
+    if not any(t == "--force" or "f" in _short_flag_chars(t) for t in rest):
+        return None
+    positionals = [t for t in rest if not t.startswith("-")]
+    return positionals[1] if len(positionals) > 1 else None
+
+
 def _backup_refs(ref_exprs: list) -> str:
     """주어진 각 ref 표현식(브랜치 이름 등)이 가리키는 커밋을, 삭제되기 전에 백업한다."""
     quoted = " ".join(shlex.quote(r) for r in ref_exprs)
@@ -665,14 +727,36 @@ def _fail_closed(backup_snippet: str) -> str:
     )
 
 
+# 멀티라인 블록에서 '파괴적 명령이 있는 줄 바로 앞'에 끼워 넣을 백업 스니펫 예약 목록
+# ({원본 줄 인덱스: [스니펫, …]}). 명령 전체를 `백업 && 그 줄` 로 갈아끼우면 나머지 줄이
+# 소리 없이 사라지므로, 멀티라인에서는 다른 줄을 원문 그대로 두고 백업 줄만 삽입한다.
+# 이 방식은 앞선 `cd` 도 그대로 살아 있어 백업이 '실제로 명령이 돌 저장소'를 잡는다 —
+# 명령 전체 앞에 백업을 붙이면 cd 이전 cwd 를 백업하고 진짜 대상은 무방비가 된다.
+_PENDING_BACKUPS: dict = {}
+_PENDING_REASONS: list = []
+# 지금 검사 중인 서브커맨드에 백업 줄을 끼워 넣을 수 있으면 그 원본 줄 인덱스, 아니면 None.
+# main() 의 git 분기 진입 시마다 다시 계산해 대입한다(아래 백업 헬퍼들이 이 값을 읽는다).
+_INSERT_AT = None
+
+
 def _emit_with_backup(backup_snippet: str, line: str, reason: str, command: str) -> None:
+    """_INSERT_AT 이 있으면 즉시 emit 하지 않고 삽입을 '예약'한 뒤 검사를 계속한다. 여기서
+    바로 allow 를 내면 같은 블록 뒤쪽 줄과 파이프 하류 토큰(`… | rm -rf ~`)이 아예 검사되지
+    않은 채 통과한다 — 예약해 두면 뒤에서 발견된 deny/ask 가 그대로 우선한다."""
+    if _INSERT_AT is not None:
+        # 한 줄에는 백업이 하나면 충분하다(줄 안에서 체이닝된 경우는 애초에 삽입 대상이 아니다).
+        # checkout 처럼 한 서브커맨드가 두 규칙에 걸릴 때 먼저 걸린 쪽을 쓰는 기존 우선순위와 같다.
+        if _INSERT_AT not in _PENDING_BACKUPS:
+            _PENDING_BACKUPS[_INSERT_AT] = backup_snippet
+            _PENDING_REASONS.append(reason)
+        return
     new_command = _fail_closed(backup_snippet) + " && " + line.strip()
     log({"command": command, "decision": "prepend-backup", "new_command": new_command})
     emit("allow", reason, updated_input={"command": new_command})
 
 
 def _emit_with_backup_or_ask(backup_snippet, line, allow_reason, no_safe_backup, command) -> None:
-    """no_safe_backup 이면(멀티라인·체이닝·다른 저장소 대상) 백업 대상을 특정할 수 없어 ask."""
+    """no_safe_backup 이면(백업 줄을 끼워 넣을 수도, 명령 전체를 갈아끼울 수도 없으면) ask."""
     if no_safe_backup:
         emit("ask", CHAINED_BACKUP_ASK)
     _emit_with_backup(backup_snippet, line, allow_reason, command)
@@ -755,7 +839,10 @@ def _emit_backup_prepend(paths, cmd_parts, line, no_safe_backup, command) -> Non
     명령이 그 뒤에 자기 몫의 일(다른 ref 에서 가져오기 등)을 그대로 수행할 수 있다. 백업 스니펫은
     _fail_closed 로 감싼 뒤 `&&` 로 이어붙여, 백업이 실패하면 뒤의 파괴적 원본이 실행되지 않는다."""
     has_pipe_or_redirect = "|" in cmd_parts or any(t in (">", ">>") for t in cmd_parts)
-    if no_safe_backup or not paths or has_pipe_or_redirect:
+    # 파이프/리다이렉트는 '명령 전체를 갈아끼우는' 경로에서만 위험하다 — 원본을 재구성하면서
+    # 남의 토큰(`… | rm -rf ~` 의 rm)을 끌어들인다. 백업 줄만 앞에 끼워 넣는 경로는 원본 줄을
+    # 손대지 않고, 그 rm 도 서브커맨드로 계속 검사돼 deny 가 예약된 백업보다 우선하므로 무관하다.
+    if not paths or (_INSERT_AT is None and (no_safe_backup or has_pipe_or_redirect)):
         emit("ask", "커밋되지 않은 로컬 변경사항을 버릴 수 있는 명령입니다. 계속할까요?")
     backup = _backup_head_and_worktree(f"claude-auto-backup: before {line.strip()}")
     _emit_with_backup(
@@ -765,7 +852,20 @@ def _emit_backup_prepend(paths, cmd_parts, line, no_safe_backup, command) -> Non
     )
 
 
+def _all_lines_parseable(lines: list) -> bool:
+    """모든 줄이 각각 독립적으로 shlex 파싱되는지. 하나라도 실패하면 그 블록은 따옴표나
+    역슬래시가 줄에 걸쳐 있다는 뜻이라(`python3 -c "` … `"`), 줄 사이에 뭔가를 끼워 넣으면
+    문자열 리터럴 한복판을 잘라 원문을 망가뜨린다."""
+    for ln in lines:
+        try:
+            shlex.split(ln)
+        except ValueError:
+            return False
+    return True
+
+
 def main() -> None:
+    global _INSERT_AT
     try:
         raw = sys.stdin.read()
         data = json.loads(raw) if raw else {}
@@ -779,14 +879,22 @@ def main() -> None:
     if not command.strip():
         sys.exit(0)
 
-    original_lines = [ln for ln in command.splitlines() if ln.strip()]
+    raw_lines = command.splitlines()
+    original_lines = [ln for ln in raw_lines if ln.strip()]
+    # 검사 대상 줄 → 원본(빈 줄 포함) 줄 번호. 백업 줄을 원위치에 끼워 넣을 때 쓴다.
+    original_raw_index = [idx for idx, ln in enumerate(raw_lines) if ln.strip()]
     is_multiline = len(original_lines) > 1
+    # 이 블록에 백업 줄을 끼워 넣어도 원문이 보존되는가. 히어독(`<<`)이나 줄에 걸친 따옴표가
+    # 있으면 삽입 지점이 문자열 내부일 수 있어 원문을 망가뜨리므로, 그 경우는 종전대로 ask 로 넘긴다.
+    can_insert_lines = "<<" not in command and _all_lines_parseable(original_lines)
     # 처리 큐: 원본 라인 + bash/sh -c 로 발견된 내부 명령이 추가된다.
     lines = list(original_lines)
 
     i = 0
     while i < len(lines):
         line = lines[i]
+        # bash -c 로 추출된 내부 명령은 원본에 대응하는 줄이 없어 삽입 대상이 아니다.
+        line_raw_index = original_raw_index[i] if i < len(original_raw_index) else None
         i += 1
         stripped = line.strip()
         # shlex 파싱 전에 원시 문자열로 잡아야 하는 패턴들.
@@ -811,11 +919,21 @@ def main() -> None:
 
         sub_commands = split_commands(parts)
         is_chained = len(sub_commands) > 1
+        # 파이프 승격(아래) 이전의 '진짜 &&/||/; 체이닝' 여부. 백업 줄 삽입 판정에는 이걸 쓴다 —
+        # 파이프는 원본 줄을 손대지 않는 삽입 방식에선 무해하지만, 체이닝은 파괴적 명령이 줄
+        # 전체가 아니라서 그 앞에 백업 줄을 놓아도 실행 순서를 보장할 수 없다.
+        chained_by_operator = is_chained
 
         # 파이프 하류의 명령도 개별 검사한다. `find . -type f | xargs rm -rf` 는 앞 명령만
         # 보면 삭제로 보이지 않는다(실측 확인). 원본(파이프 토큰 포함)도 목록에 남겨 둬야
         # 아래의 파이프→셸 검사가 그대로 동작한다. 따옴표 안의 `|` 는 shlex 가 한 토큰으로
         # 묶으므로 여기 걸리지 않는다 — `grep "a|rm" f` 가 삭제로 오탐되지 않는다.
+        # 줄의 맨 앞에서 시작하는 서브커맨드들. 파괴적 명령이 여기 해당하면 체이닝돼 있어도
+        # 그 줄 앞에 백업 줄을 놓는 것이 안전하다 — 앞에 아무것도 없으니 백업과 원본 사이에
+        # cwd 를 바꿀 기회가 없다. (`cd /x && git restore .` 처럼 뒤에 오면 여전히 위험하다.)
+        head_segment = sub_commands[0] if sub_commands else None
+        line_head_parts = [head_segment] if head_segment else []
+
         for segment in list(sub_commands):
             if "|" not in segment:
                 continue
@@ -823,10 +941,15 @@ def main() -> None:
             # 체이닝과 동일하게 취급해 자동 치환 대신 deny 로 보낸다.
             is_chained = True
             piece: list = []
+            first_piece = True
             for token in segment:
                 if token == "|":
                     if piece:
                         sub_commands.append(piece)
+                        # 파이프 상류의 첫 조각은 여전히 줄의 맨 앞이다 (`git restore . | tee log`).
+                        if segment is head_segment and first_piece:
+                            line_head_parts.append(piece)
+                        first_piece = False
                     piece = []
                 else:
                     piece.append(token)
@@ -970,7 +1093,19 @@ def main() -> None:
                 # 백업 자동치환을 포기하고 ask 로 폴백해야 하는 조건들. -C/--git-dir/--work-tree 는
                 # 명령의 대상 저장소를 cwd 밖으로 옮기는데 백업 스니펫은 cwd 에서 돌기 때문에,
                 # 그대로 두면 엉뚱한 저장소를 백업하고 진짜 대상은 무방비로 파괴된다.
-                no_safe_backup = is_multiline or is_chained or _git_repo_redirected(own_args)
+                redirected = _git_repo_redirected(own_args)
+                # 체이닝도 멀티라인도 아닌 한 줄짜리는 종전대로 `백업 && 원본` 으로 갈아끼운다.
+                # 그 외에는 이 파괴적 명령이 '줄의 맨 앞'일 때만 그 줄 앞에 백업 줄을 끼워 넣어
+                # 나머지 줄·체이닝을 원문 그대로 살린다. -C/--git-dir 는 여전히 제외한다 —
+                # 백업 스니펫은 그 옵션을 물려받지 않아 엉뚱한 저장소를 백업한다.
+                needs_line_insert = is_multiline or chained_by_operator
+                is_line_head = any(cmd_parts is p for p in line_head_parts)
+                _INSERT_AT = (line_raw_index
+                              if needs_line_insert and can_insert_lines
+                              and line_raw_index is not None
+                              and is_line_head and not redirected
+                              else None)
+                no_safe_backup = _INSERT_AT is None and (is_multiline or is_chained or redirected)
 
                 if subl == "push":
                     cwd = data.get("cwd") or os.getcwd()
@@ -1006,6 +1141,20 @@ def main() -> None:
                         f"{scope}를 스냅샷으로 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git checkout <hash> -- . 로 복구).",
                         no_safe_backup, command,
                     )
+
+                if subl == "worktree":
+                    wt_path = _worktree_remove_force_path(rest)
+                    if wt_path:
+                        embedded = _dq_embed(wt_path)
+                        if embedded is None:
+                            emit("ask", "삭제할 워크트리 경로를 백업 명령에 안전하게 넣을 수 없습니다. 워크트리 안의 미커밋 변경은 되돌릴 수 없습니다. 계속할까요?")
+                        backup = _backup_worktree_snapshot(
+                            embedded, f"claude-auto-backup: pre git worktree remove --force {wt_path}")
+                        _emit_with_backup_or_ask(
+                            backup, line,
+                            f"사라질 워크트리의 추적/미추적 파일을 스냅샷으로 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git checkout <hash> -- . 로 복구).",
+                            no_safe_backup, command,
+                        )
 
                 if subl == "stash":
                     stash_action = _first_non_option(rest)
@@ -1154,6 +1303,20 @@ def main() -> None:
 
             if base in {"shutdown", "reboot", "halt", "poweroff"}:
                 emit("ask", f"'{base}' 는 시스템을 종료/재시작합니다. 계속할까요?")
+
+    # 모든 줄·서브커맨드를 다 본 뒤에야 예약된 백업을 확정한다. 여기까지 왔다는 건 블록 어디에도
+    # deny/ask 사유가 없다는 뜻이다. 백업 줄은 해당 줄 '바로 앞'에 들어가므로 앞선 cd 가 이미
+    # 적용된 상태에서 돌고, 나머지 줄은 한 글자도 바뀌지 않는다.
+    if _PENDING_BACKUPS:
+        out_lines = []
+        for idx, ln in enumerate(raw_lines):
+            if idx in _PENDING_BACKUPS:
+                out_lines.append(_fail_closed(_PENDING_BACKUPS[idx]))
+            out_lines.append(ln)
+        new_command = "\n".join(out_lines)
+        log({"command": command, "decision": "insert-backup-line", "new_command": new_command})
+        emit("allow", " / ".join(dict.fromkeys(_PENDING_REASONS)),
+             updated_input={"command": new_command})
 
     sys.exit(0)
 

@@ -208,10 +208,145 @@ def test_git_checkout_chained_asks(run_hook):
     assert d == "ask"
 
 
-def test_git_checkout_multiline_asks(run_hook):
-    # 멀티라인 안에 섞여 있으면 자동치환 불가 → ask.
-    d, *_ = run_hook(HOOK, bash("echo start\ngit checkout HEAD -- file.txt"))
+def assert_backup_line_inserted(payload, decision, original_command, backed_up_line):
+    """멀티라인 블록에서는 명령 전체를 갈아끼우지 않고 backed_up_line '바로 앞'에만 백업 줄을
+    끼워 넣는다. 원문이 한 줄도 사라지거나 바뀌지 않는 것이 이 방식의 핵심 계약이다."""
+    assert decision == "allow"
+    new_command = payload["hookSpecificOutput"]["updatedInput"]["command"]
+    assert "refs/claude-backups/" in new_command
+    new_lines = new_command.splitlines()
+    # 원문의 모든 줄이 순서 그대로 살아있다.
+    assert [ln for ln in new_lines if "refs/claude-backups/" not in ln] == original_command.splitlines()
+    # 백업 줄이 대상 줄 바로 앞에 있다.
+    idx = new_lines.index(backed_up_line)
+    assert "refs/claude-backups/" in new_lines[idx - 1], new_command
+    return new_command
+
+
+def test_git_checkout_multiline_inserts_backup_line(run_hook):
+    # 멀티라인이어도 파괴적 명령이 한 줄 통째면, 그 줄 앞에 백업 줄만 끼워 넣고 나머지는 원문 유지.
+    cmd = "echo start\ngit checkout HEAD -- file.txt"
+    d, payload, _ = run_hook(HOOK, bash(cmd))
+    assert_backup_line_inserted(payload, d, cmd, "git checkout HEAD -- file.txt")
+
+
+def test_git_multiline_backup_runs_after_cd(run_hook):
+    # 백업은 대상 줄 바로 앞에서 돌아야 앞선 cd 가 반영된 '진짜 대상 저장소'를 잡는다.
+    # 블록 맨 앞에 붙이면 cd 이전 cwd 를 백업하고 진짜 대상은 무방비가 된다.
+    cmd = 'cd /tmp/other-repo\ngit reset --hard HEAD~1'
+    d, payload, _ = run_hook(HOOK, bash(cmd))
+    new_command = assert_backup_line_inserted(payload, d, cmd, "git reset --hard HEAD~1")
+    lines = new_command.splitlines()
+    assert lines.index("cd /tmp/other-repo") < next(
+        i for i, ln in enumerate(lines) if "refs/claude-backups/" in ln)
+
+
+def test_git_multiline_backs_up_every_destructive_line(run_hook):
+    # 한 블록에 파괴적 명령이 여러 줄이면 각각 앞에 자기 백업이 붙는다 —
+    # 첫 줄에서 allow 하고 끝내면 뒤쪽 filter-branch 가 백업 없이 히스토리를 갈아엎는다.
+    cmd = "git restore .\necho done\ngit filter-branch --prune-empty develop..HEAD"
+    d, payload, _ = run_hook(HOOK, bash(cmd))
+    assert d == "allow"
+    new_command = payload["hookSpecificOutput"]["updatedInput"]["command"]
+    lines = new_command.splitlines()
+    for target in ("git restore .", "git filter-branch --prune-empty develop..HEAD"):
+        assert "refs/claude-backups/" in lines[lines.index(target) - 1], new_command
+
+
+def test_git_multiline_with_pipe_inserts_backup_line(run_hook):
+    # 파이프는 원본 줄을 손대지 않는 삽입 방식에선 무해하다 (예전엔 체이닝으로 승격돼 ask 였다).
+    cmd = "echo start\ngit filter-branch --prune-empty develop..HEAD 2>&1 | tail -25"
+    d, payload, _ = run_hook(HOOK, bash(cmd))
+    assert_backup_line_inserted(
+        payload, d, cmd, "git filter-branch --prune-empty develop..HEAD 2>&1 | tail -25")
+
+
+def test_git_multiline_line_chaining_still_asks(run_hook):
+    # 줄 안에서 &&/; 로 체이닝되면 파괴적 명령이 줄 전체가 아니라 삽입 지점을 특정할 수 없다.
+    d, *_ = run_hook(HOOK, bash("echo start\ncd /x && git checkout HEAD -- file.txt"))
     assert d == "ask"
+
+
+def test_git_multiline_other_repo_still_asks(run_hook):
+    # -C 는 백업 스니펫이 물려받지 못해 엉뚱한 저장소를 백업한다 → 삽입 대상에서 제외.
+    d, *_ = run_hook(HOOK, bash("echo start\ngit -C /other reset --hard"))
+    assert d == "ask"
+
+
+def test_git_inside_heredoc_still_asks(run_hook):
+    # 히어독 본문에 백업 줄을 끼워 넣으면 '실행'이 아니라 작성될 파일 내용이 오염된다.
+    d, *_ = run_hook(HOOK, bash("cat <<'EOF' > s.sh\ngit restore .\nEOF"))
+    assert d == "ask"
+
+
+def test_git_inside_multiline_string_still_asks(run_hook):
+    # 줄에 걸친 따옴표는 줄 단위로 쪼갤 수 없다 — 삽입하면 문자열 리터럴 한복판이 잘린다.
+    d, *_ = run_hook(HOOK, bash('python3 -c "\ngit restore .\n"'))
+    assert d == "ask"
+
+
+def test_git_chained_head_inserts_backup_line(run_hook):
+    # 체이닝돼 있어도 파괴적 명령이 줄의 맨 앞이면 백업과 원본 사이에 cwd 를 바꿀 기회가 없다.
+    cmd = 'git restore . && echo done'
+    d, payload, _ = run_hook(HOOK, bash(cmd))
+    assert_backup_line_inserted(payload, d, cmd, "git restore . && echo done")
+
+
+def test_git_chained_not_head_still_asks(run_hook):
+    # 앞선 cd 가 백업 대상 저장소를 바꿔버리므로, 파괴적 명령이 뒤에 오면 삽입할 수 없다.
+    d, *_ = run_hook(HOOK, bash("cd /x && git restore ."))
+    assert d == "ask"
+
+
+# --- git worktree remove --force: git 이 --force 를 요구한다 = 버릴 미커밋 변경이 있다 ---
+
+def test_git_worktree_remove_force_backs_up_worktree(run_hook):
+    cmd = 'cd /repo\ngit worktree remove --force ../wt && echo 제거됨'
+    d, payload, _ = run_hook(HOOK, bash(cmd))
+    new_command = assert_backup_line_inserted(
+        payload, d, cmd, "git worktree remove --force ../wt && echo 제거됨")
+    backup_line = next(ln for ln in new_command.splitlines() if "refs/claude-backups/" in ln)
+    # 백업은 cwd(본 저장소)가 아니라 '사라질 워크트리'를 대상으로 해야 한다.
+    assert '-C "$_bk_wt"' in backup_line, backup_line
+    assert '_bk_wt="../wt"' in backup_line, backup_line
+    # stash create 는 추적 안 된 파일을 담지 못하므로 스크래치 인덱스 스냅샷이어야 한다.
+    assert "GIT_INDEX_FILE" in backup_line and "add -A" in backup_line, backup_line
+
+
+def test_git_worktree_remove_force_preserves_variable_expansion(run_hook):
+    """`"$SCRATCH/clean"` 을 리터럴로 따옴표 처리하면 없는 경로를 백업하려다 실패하고,
+    fail-closed 때문에 원본 명령까지 막힌다. 큰따옴표로 감싸 확장을 살려야 한다."""
+    cmd = 'SCRATCH=/tmp/x\ngit worktree remove --force "$SCRATCH/clean"'
+    d, payload, _ = run_hook(HOOK, bash(cmd))
+    new_command = payload["hookSpecificOutput"]["updatedInput"]["command"]
+    assert d == "allow"
+    assert '_bk_wt="$SCRATCH/clean"' in new_command, new_command
+
+
+@pytest.mark.parametrize("cmd", [
+    "git worktree remove ../wt",     # --force 없음: 더티하면 git 이 스스로 거부한다
+    "git worktree prune",            # 이미 사라진 워크트리의 관리 파일만 정리
+    "git worktree add ../wt -b x",
+    "git worktree list",
+])
+def test_git_worktree_safe_actions_pass(run_hook, cmd):
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d is None, cmd
+
+
+def test_git_worktree_remove_force_unquotable_path_asks(run_hook):
+    # 백틱/$( ) 가 든 경로는 백업 스니펫에 안전하게 넣을 수 없다 → 판단을 사용자에게 넘긴다.
+    d, *_ = run_hook(HOOK, bash('git worktree remove --force "`evil`"'))
+    assert d == "ask"
+
+
+def test_git_multiline_smuggled_rm_still_denied(run_hook):
+    # 백업 삽입은 모든 줄·파이프 하류를 다 검사한 뒤에 확정된다. 스모글링된 rm 이 뒤에서
+    # 발견되면 예약된 백업을 버리고 deny 가 이긴다.
+    d, *_ = run_hook(HOOK, bash("echo start\ngit checkout -- f | rm -rf ~"))
+    assert d == "deny"
+    d, *_ = run_hook(HOOK, bash("echo start\ngit restore .\nrm -rf /"))
+    assert d == "deny"
 
 
 # --- git 서브커맨드 세분화: 안전한 명령은 통과, 위험한 것만 게이팅 ---

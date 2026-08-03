@@ -55,7 +55,7 @@ def backup_refs(repo):
 
 def worktree_backup_hash(pairs):
     for ref, h in pairs:
-        if ref.endswith("/worktree") or ref.endswith("/snapshot"):
+        if ref.endswith("/worktree") or ref.endswith("/snapshot") or ref.endswith("/worktree-snapshot"):
             return h
     return None
 
@@ -313,3 +313,39 @@ def test_two_backups_in_the_same_second_do_not_collide(repo):
     refs = [ref for ref, _ in backup_refs(repo)]
     assert any(ref.endswith("/rel") for ref in refs)
     assert any(ref.endswith("/rel/x") for ref in refs)
+
+
+def test_worktree_remove_force_destroys_work_but_substitution_preserves(repo):
+    """대조군-치환본 쌍으로 검증한다. `git worktree remove --force` 는 워크트리 안의 미커밋
+    변경과 추적 안 된 파일을 디렉터리째 지워 없앤다 — git 이 --force 를 요구한다는 것 자체가
+    '버릴 게 실제로 있다'는 신호다."""
+    def make_worktree(name):
+        wt = repo.parent / name
+        run_in(repo, f"git worktree add -q -b {name} '{wt}'")
+        (wt / "tracked.txt").write_text("line1\nPRECIOUS\n", encoding="utf-8")
+        (wt / "untracked.txt").write_text("UNTRACKED\n", encoding="utf-8")
+        return wt
+
+    # 대조군: 그냥 실행하면 워크트리가 통째로 사라지고 복구 수단이 없다.
+    wt = make_worktree("ctrl")
+    assert run_in(repo, f"git worktree remove '{wt}'").returncode != 0, \
+        "git 은 더티한 워크트리를 --force 없이는 거부해야 한다(이 규칙의 전제)"
+    run_in(repo, f"git worktree remove --force '{wt}'")
+    assert not wt.exists(), "대조군: 워크트리가 미커밋 변경째로 사라져야 한다"
+    assert not backup_refs(repo), "대조군: 백업이 하나도 없어야 한다"
+
+    # 훅 치환본: 같은 상황을 다시 만들고 훅이 내놓은 명령을 실행한다.
+    wt = make_worktree("hooked")
+    decision, new_cmd = hook_result(f"git worktree remove --force '{wt}'", cwd=str(repo))
+    assert decision == "allow", new_cmd
+    assert run_in(repo, new_cmd).returncode == 0
+    assert not wt.exists(), "치환본도 원래 명령의 일(워크트리 제거)은 그대로 해야 한다"
+
+    snapshot = worktree_backup_hash(backup_refs(repo))
+    assert snapshot, f"워크트리 스냅샷 백업이 없다: {backup_refs(repo)}"
+    tracked = run_in(repo, f"git show {snapshot}:tracked.txt").stdout
+    untracked = run_in(repo, f"git show {snapshot}:untracked.txt").stdout
+    assert "PRECIOUS" in tracked, "미커밋 변경이 백업에서 복구돼야 한다"
+    assert "UNTRACKED" in untracked, "추적 안 된 파일까지 백업돼야 한다(stash create 로는 불가)"
+    # 백업은 '사라질 워크트리'를 담아야 한다 — 본 저장소를 잘못 스냅샷하면 PRECIOUS 가 없다.
+    assert "PRECIOUS" not in (repo / "tracked.txt").read_text(encoding="utf-8")
