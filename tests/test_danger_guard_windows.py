@@ -258,6 +258,20 @@ def test_bash_root_delete_variants_denied(run_hook, cmd):
     assert d == "deny"
 
 
+@pytest.mark.parametrize("cmd", ["FOO=1 rm -rf /", "FOO=1 BAR=2 rm -rf ~"])
+def test_bash_bare_env_assignment_prefix_cannot_escape_rm_guard(run_hook, cmd):
+    """회귀: `env` 래퍼 없이 명령 앞에 바로 붙은 `VAR=val` 은 벗겨지지 않아 base 가 'FOO=1' 이
+    됐고, rm 규칙 전체가 무판정으로 통과했다(실측 확인)."""
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d == "deny", cmd
+
+
+def test_bash_bare_env_assignment_prefix_cannot_escape_git_guard(run_hook):
+    """회귀: `FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch …` 가 통째로 무판정 통과했다."""
+    d, payload, _ = run_hook(HOOK, bash("FOO=1 git reset --hard HEAD~1"))
+    assert_backup_then(payload, d, "FOO=1 git reset --hard HEAD~1", is_bash=True)
+
+
 @pytest.mark.parametrize("cmd", [
     "Remove-Item -Recurse temp",
     r"Remove-Item -Recurse C:\Users\me\tmp",

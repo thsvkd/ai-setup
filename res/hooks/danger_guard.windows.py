@@ -926,8 +926,16 @@ def main() -> None:
             if not cmd_parts:
                 continue
 
-            base = _command_base(cmd_parts[0])
-            args = cmd_parts[1:]
+            # bash 경로에서 `FOO=1 rm -rf /` 처럼 명령 바로 앞에 붙는 환경변수 할당은 명령이
+            # 아니다. 벗겨내지 않으면 base 가 'FOO=1' 이 되어 rm/git 규칙이 통째로 우회된다 —
+            # 실제로 `FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch …` 가 무판정으로
+            # 통과했다(실측 확인). PowerShell 에는 이 구문이 없으므로 bash 에서만 적용한다.
+            head = 0
+            if is_bash:
+                while head < len(cmd_parts) - 1 and ENV_ASSIGN_RE.match(cmd_parts[head]):
+                    head += 1
+            base = _command_base(cmd_parts[head])
+            args = cmd_parts[head + 1:]
             lower_args = [a.lower() for a in args]
 
             # 래퍼 접두어(sudo/command/env/exec/…)는 벗겨서 실제 명령을 검사한다.
