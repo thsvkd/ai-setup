@@ -48,9 +48,12 @@ Bash 툴(Git Bash)과 PowerShell 툴(네이티브, Git for Windows 미설치 시
                    소리 없이 사라지고, 블록 맨 앞에 백업을 붙이면 앞선 cd 가 반영되기 전 cwd 를
                    백업해 엉뚱한 저장소를 잡는다 — 줄 삽입은 둘 다 피한다. 삽입 판정은 모든
                    줄·파이프 하류까지 검사한 뒤 확정하므로 뒤쪽의 deny/ask 가 항상 우선한다.
-               체이닝돼 있어도 파괴적 명령이 '줄의 맨 앞'이면 삽입한다 — 백업과 원본 사이에
-               cwd 를 바꿀 기회가 없기 때문이다. 반대로 `cd /x && git restore .` 처럼 뒤에 오면
-               백업이 cd 이전 디렉터리에서 돌아 엉뚱한 저장소를 잡으므로 ask 로 폴백한다.
+               줄 안에서 체이닝된 경우(`cd X && git reset --hard`)는 원문 문자열을 그 앞
+               연산자에서 잘라 백업을 사이에 끼운다 — 백업이 cd 뒤에서 돌아야 '실제로 명령이
+               돌 저장소'를 잡는다. 자를 위치는 '잘린 두 조각을 다시 파싱하면 원래 토큰 열이
+               복원되는가' 로 검증해, 따옴표나 $( ) 안의 연산자에서 잘리면 ask 로 폴백한다.
+               `a || git reset --hard` 는 `(a||백업) && git reset` 으로 결합 방향이 바뀌어
+               실행되지 않아야 할 명령이 실행되므로 || 앞에서는 자르지 않는다.
                히어독·줄에 걸친 따옴표라 줄 단위로 쪼갤 수 없거나, -C/--git-dir/--work-tree 로
                '다른 저장소'를 대상으로 삼아 백업 대상을 안전하게 특정할 수 없을 때도 ask 다.
        pass  : stash push/pop/apply/list, reset --soft/--mixed, clean -n, branch -d,
@@ -906,19 +909,25 @@ def _fail_closed(backup_snippet: str, is_bash: bool) -> str:
 # 이 방식은 앞선 cd/Set-Location 이 그대로 살아 있어 백업이 '실제로 명령이 돌 저장소'를 잡는다.
 _PENDING_BACKUPS: dict = {}
 _PENDING_REASONS: list = []
-# 지금 검사 중인 서브커맨드에 백업 줄을 끼워 넣을 수 있으면 그 원본 줄 인덱스, 아니면 None.
-_INSERT_AT = None
+# 지금 검사 중인 서브커맨드의 삽입 계획 (원본 줄 인덱스, 백업 앞에 둘 원문, 백업 뒤에 둘 원문).
+# 파괴적 명령이 줄 맨 앞이면 앞부분은 빈 문자열이고, `cd X && git reset --hard` 처럼 뒤에 오면
+# 원문을 그 `&&` 에서 잘라 앞뒤로 나눈다.
+_INSERT_PLAN = None
 
 
 def _emit_with_backup(backup_snippet: str, line: str, reason: str, command: str, is_bash: bool) -> None:
-    """_INSERT_AT 이 있으면 즉시 emit 하지 않고 삽입을 '예약'한 뒤 검사를 계속한다. 여기서
+    """_INSERT_PLAN 이 있으면 즉시 emit 하지 않고 삽입을 '예약'한 뒤 검사를 계속한다. 여기서
     바로 allow 를 내면 같은 블록 뒤쪽 줄과 파이프 하류 토큰(`… | rm -rf ~`)이 아예 검사되지
     않은 채 통과한다 — 예약해 두면 뒤에서 발견된 deny/ask 가 그대로 우선한다."""
-    if _INSERT_AT is not None:
+    if _INSERT_PLAN is not None:
+        raw_idx, head_text, tail_text = _INSERT_PLAN
         # 한 줄에는 백업이 하나면 충분하다. checkout 처럼 한 서브커맨드가 두 규칙에 걸릴 때
         # 먼저 걸린 쪽을 쓰는 기존 우선순위와 같다.
-        if _INSERT_AT not in _PENDING_BACKUPS:
-            _PENDING_BACKUPS[_INSERT_AT] = _fail_closed(backup_snippet, is_bash)
+        if raw_idx not in _PENDING_BACKUPS:
+            gated = _fail_closed(backup_snippet, is_bash)
+            # 앞부분이 있으면 그 끝의 연산자에 이어 붙으므로 백업 뒤에도 구분자를 단다.
+            _PENDING_BACKUPS[raw_idx] = ([head_text, gated + _join(is_bash).rstrip(), tail_text]
+                                         if head_text else [gated, tail_text])
             _PENDING_REASONS.append(reason)
         return
     new_command = _fail_closed(backup_snippet, is_bash) + _join(is_bash) + line.strip()
@@ -941,7 +950,7 @@ def _emit_backup_prepend(paths, cmd_parts, line, no_safe_backup, command, is_bas
     # 파이프/리다이렉트는 '명령 전체를 갈아끼우는' 경로에서만 위험하다 — 원본을 재구성하면서
     # 남의 토큰(`… | rm -rf ~` 의 rm)을 끌어들인다. 백업 줄만 앞에 끼워 넣는 경로는 원본 줄을
     # 손대지 않고, 그 rm 도 서브커맨드로 계속 검사돼 deny 가 예약된 백업보다 우선하므로 무관하다.
-    if not paths or (_INSERT_AT is None and (no_safe_backup or has_pipe_or_redirect)):
+    if not paths or (_INSERT_PLAN is None and (no_safe_backup or has_pipe_or_redirect)):
         emit("ask", "커밋되지 않은 로컬 변경사항을 버릴 수 있는 명령입니다. 계속할까요?")
     backup = _backup_head_and_worktree(f"claude-auto-backup: before {line.strip()}", is_bash)
     _emit_with_backup(
@@ -949,6 +958,37 @@ def _emit_backup_prepend(paths, cmd_parts, line, no_safe_backup, command, is_bas
         f"되돌리기 전 uncommitted 변경사항을 refs/claude-backups/ 에 백업했습니다 ({BACKUP_HINT} git stash apply <hash> 로 복구).",
         command, is_bash,
     )
+
+
+def _split_line_at_operator(line: str, parts: list, op_index: int, is_bash: bool):
+    """원문 line 을 parts[op_index] 의 연산자 위치에서 (연산자까지의 앞부분, 그 뒤) 로 자른다.
+    자를 수 없으면 None(→ ask).
+
+    토큰에서 줄을 재조립하면 따옴표·확장이 깨지므로 원문 문자열을 그대로 자른다. 자를 위치는
+    '잘린 두 조각을 다시 파싱하면 원래 토큰 열이 그대로 복원되는가' 로 검증하고, 그런 후보가
+    정확히 하나일 때만 쓴다 — 따옴표 안의 연산자에서 엉뚱하게 잘리면 검증이 실패해 조용히
+    통과하지 않는다. 검증에는 PowerShell 따옴표를 벗기기 전의 토큰을 쓴다(벗긴 뒤와 비교하면
+    항상 어긋난다)."""
+    op = parts[op_index]
+    # `a || git reset --hard` 를 `(a || 백업) && git reset --hard` 로 바꾸면 결합 방향 때문에
+    # a 가 성공했을 때 원래는 실행되지 않았어야 할 파괴적 명령이 실행된다. && 와 ; 만 안전하다.
+    if op not in ("&&", ";"):
+        return None
+    hits = []
+    start = 0
+    while True:
+        i = line.find(op, start)
+        if i < 0:
+            break
+        start = i + 1
+        try:
+            head_tokens = shlex.split(line[:i], posix=is_bash)
+            tail_tokens = shlex.split(line[i + len(op):], posix=is_bash)
+        except ValueError:
+            continue
+        if len(head_tokens) == op_index and head_tokens + [op] + tail_tokens == parts:
+            hits.append((line[:i + len(op)], line[i + len(op):]))
+    return hits[0] if len(hits) == 1 else None
 
 
 def _all_lines_parseable(lines: list, is_bash: bool) -> bool:
@@ -964,7 +1004,7 @@ def _all_lines_parseable(lines: list, is_bash: bool) -> bool:
 
 
 def main() -> None:
-    global _INSERT_AT
+    global _INSERT_PLAN
     try:
         raw = sys.stdin.read()
         data = json.loads(raw) if raw else {}
@@ -1011,6 +1051,8 @@ def main() -> None:
         if not parts:
             continue
 
+        # 연산자 위치 검증은 따옴표를 벗기기 전 토큰과 대조해야 한다(벗긴 뒤와는 어긋난다).
+        raw_parts = list(parts)
         if not is_bash:
             parts = [strip_ps_quotes(p) for p in parts]
 
@@ -1025,11 +1067,11 @@ def main() -> None:
         # 보면 삭제로 보이지 않는다(실측 확인). 원본(파이프 토큰 포함)도 목록에 남겨 둬야
         # 아래의 파이프→셸 검사가 그대로 동작한다. 따옴표 안의 `|` 는 한 토큰으로 묶이므로
         # 여기 걸리지 않는다 — `grep "a|rm" f` 가 삭제로 오탐되지 않는다.
-        # 줄의 맨 앞에서 시작하는 서브커맨드들. 파괴적 명령이 여기 해당하면 체이닝돼 있어도
-        # 그 줄 앞에 백업 줄을 놓는 것이 안전하다 — 앞에 아무것도 없으니 백업과 원본 사이에
-        # cwd 를 바꿀 기회가 없다. (`cd /x && git restore .` 처럼 뒤에 오면 여전히 위험하다.)
-        head_segment = sub_commands[0] if sub_commands else None
-        line_head_parts = [head_segment] if head_segment else []
+        # 각 서브커맨드가 이 줄의 몇 번째 체이닝 항목인지. 0 이면 줄 맨 앞이라 그 줄 앞에 백업을
+        # 놓으면 되고, 그 뒤면 원문을 앞 연산자에서 잘라 백업을 사이에 끼워야 한다
+        # (`cd X && git reset --hard` 의 백업은 반드시 cd 이후에 돌아야 한다).
+        operator_segments = list(sub_commands)
+        segment_index = {id(seg): j for j, seg in enumerate(operator_segments)}
 
         for segment in list(sub_commands):
             if "|" not in segment:
@@ -1043,9 +1085,10 @@ def main() -> None:
                 if token == "|":
                     if piece:
                         sub_commands.append(piece)
-                        # 파이프 상류의 첫 조각은 여전히 줄의 맨 앞이다 (`git restore . | tee log`).
-                        if segment is head_segment and first_piece:
-                            line_head_parts.append(piece)
+                        # 파이프 상류의 첫 조각은 원래 서브커맨드와 같은 자리에서 시작한다
+                        # (`git restore . | tee log`) — 같은 체이닝 인덱스를 물려준다.
+                        if first_piece and id(segment) in segment_index:
+                            segment_index[id(piece)] = segment_index[id(segment)]
                         first_piece = False
                     piece = []
                 else:
@@ -1200,13 +1243,21 @@ def main() -> None:
                 # 끼워 넣어 나머지 줄·체이닝을 원문 그대로 살린다. -C/--git-dir 는 여전히 제외한다 —
                 # 백업 스니펫은 그 옵션을 물려받지 않아 엉뚱한 저장소를 백업한다.
                 needs_line_insert = is_multiline or chained_by_operator
-                is_line_head = any(cmd_parts is p for p in line_head_parts)
-                _INSERT_AT = (line_raw_index
-                              if needs_line_insert and can_insert_lines
-                              and line_raw_index is not None
-                              and is_line_head and not redirected
-                              else None)
-                no_safe_backup = _INSERT_AT is None and (is_multiline or is_chained or redirected)
+                seg_idx = segment_index.get(id(cmd_parts))
+                _INSERT_PLAN = None
+                if (needs_line_insert and can_insert_lines
+                        and line_raw_index is not None and seg_idx is not None
+                        and not redirected):
+                    if seg_idx == 0:
+                        _INSERT_PLAN = (line_raw_index, "", line)
+                    else:
+                        # parts = seg0 + [연산자] + seg1 + [연산자] + … 이므로, seg_idx 번째
+                        # 서브커맨드 앞 연산자의 토큰 위치는 앞 서브커맨드들의 길이 합 + (개수-1).
+                        op_index = sum(len(operator_segments[j]) for j in range(seg_idx)) + seg_idx - 1
+                        split = _split_line_at_operator(line, raw_parts, op_index, is_bash)
+                        if split:
+                            _INSERT_PLAN = (line_raw_index, split[0], split[1])
+                no_safe_backup = _INSERT_PLAN is None and (is_multiline or is_chained or redirected)
 
                 if subl == "push":
                     cwd = data.get("cwd") or os.getcwd()
@@ -1412,9 +1463,8 @@ def main() -> None:
     if _PENDING_BACKUPS:
         out_lines = []
         for idx, ln in enumerate(raw_lines):
-            if idx in _PENDING_BACKUPS:
-                out_lines.append(_PENDING_BACKUPS[idx])
-            out_lines.append(ln)
+            # 예약된 줄은 '백업이 끼워진 형태'로 통째 대체된다(원문 조각을 그대로 포함한다).
+            out_lines.extend(_PENDING_BACKUPS[idx] if idx in _PENDING_BACKUPS else [ln])
         new_command = "\n".join(out_lines)
         log({"command": command, "decision": "insert-backup-line", "new_command": new_command})
         emit("allow", " / ".join(dict.fromkeys(_PENDING_REASONS)),

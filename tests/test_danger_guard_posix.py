@@ -202,10 +202,28 @@ def test_git_restore_redirect_asks(run_hook):
     assert d == "ask"
 
 
-def test_git_checkout_chained_asks(run_hook):
-    # 체이닝 안에 섞여 있으면 자동치환 불가 → ask (rm 체이닝 가드와 동일 원칙).
-    d, *_ = run_hook(HOOK, bash("echo hi && git checkout HEAD -- file.txt"))
-    assert d == "ask"
+def assert_backup_spliced(payload, decision, original_line):
+    """체이닝된 줄은 백업이 파괴적 명령 '바로 앞'에서 돌도록 원문이 두 조각으로 잘린다
+    (`cd X &&` / 백업 / `git reset …`). 두 조각을 그대로 이으면 원문이어야 한다 — 토큰에서
+    재조립하면 따옴표나 $변수 확장이 깨지므로 원문 문자열을 자른다는 것이 이 방식의 계약이다."""
+    assert decision == "allow"
+    new_command = payload["hookSpecificOutput"]["updatedInput"]["command"]
+    lines = new_command.splitlines()
+    backup_at = [i for i, ln in enumerate(lines) if "refs/claude-backups/" in ln]
+    assert len(backup_at) == 1, new_command
+    i = backup_at[0]
+    # 백업 줄은 앞 조각 끝의 연산자에 이어지므로 자체 구분자로 끝나야 한다.
+    assert lines[i].rstrip().endswith(("&&", ";")), lines[i]
+    head, tail = lines[i - 1], lines[i + 1]
+    assert head + tail == original_line, f"{head!r} + {tail!r} != {original_line!r}"
+    return new_command
+
+
+def test_git_checkout_chained_backup_spliced_after_operator(run_hook):
+    # 체이닝돼 있어도 원문을 그 앞 연산자에서 잘라 백업을 사이에 끼운다.
+    line = "echo hi && git checkout HEAD -- file.txt"
+    d, payload, _ = run_hook(HOOK, bash(line))
+    assert_backup_spliced(payload, d, line)
 
 
 def assert_backup_line_inserted(payload, decision, original_command, backed_up_line):
@@ -261,10 +279,15 @@ def test_git_multiline_with_pipe_inserts_backup_line(run_hook):
         payload, d, cmd, "git filter-branch --prune-empty develop..HEAD 2>&1 | tail -25")
 
 
-def test_git_multiline_line_chaining_still_asks(run_hook):
-    # 줄 안에서 &&/; 로 체이닝되면 파괴적 명령이 줄 전체가 아니라 삽입 지점을 특정할 수 없다.
-    d, *_ = run_hook(HOOK, bash("echo start\ncd /x && git checkout HEAD -- file.txt"))
-    assert d == "ask"
+def test_git_multiline_chaining_splices_backup_after_cd(run_hook):
+    # 핵심 케이스: 백업이 cd 뒤에서 돌아야 '실제로 명령이 돌 저장소'를 잡는다.
+    # 줄 앞에 놓으면 cd 이전 디렉터리(저장소가 아닐 수 있다)를 백업하려다 실패해 전체가 막힌다.
+    line = "cd /x && git checkout HEAD -- file.txt"
+    d, payload, _ = run_hook(HOOK, bash("echo start\n" + line))
+    new_command = assert_backup_spliced(payload, d, line)
+    lines = new_command.splitlines()
+    assert lines.index("cd /x &&") < next(
+        i for i, ln in enumerate(lines) if "refs/claude-backups/" in ln)
 
 
 def test_git_multiline_other_repo_still_asks(run_hook):
@@ -292,9 +315,26 @@ def test_git_chained_head_inserts_backup_line(run_hook):
     assert_backup_line_inserted(payload, d, cmd, "git restore . && echo done")
 
 
-def test_git_chained_not_head_still_asks(run_hook):
-    # 앞선 cd 가 백업 대상 저장소를 바꿔버리므로, 파괴적 명령이 뒤에 오면 삽입할 수 없다.
-    d, *_ = run_hook(HOOK, bash("cd /x && git restore ."))
+@pytest.mark.parametrize("line", [
+    "cd /x ; git restore .",                    # ; 로 체이닝
+    "cd /x && cd y && git restore .",           # 앞 서브커맨드가 여럿
+    "echo $(a && b) && git restore .",          # $( ) 안의 && 에서 잘리면 안 된다
+])
+def test_git_chained_variants_splice_backup(run_hook, line):
+    d, payload, _ = run_hook(HOOK, bash("echo start\n" + line))
+    assert_backup_spliced(payload, d, line)
+
+
+def test_git_chained_after_or_operator_still_asks(run_hook):
+    """`a || git reset --hard` 를 `(a || 백업) && git reset --hard` 로 바꾸면 결합 방향 때문에
+    a 가 성공했을 때 원래는 실행되지 않았어야 할 파괴적 명령이 실행된다."""
+    d, *_ = run_hook(HOOK, bash("echo start\nfalse || git reset --hard HEAD~1"))
+    assert d == "ask"
+
+
+def test_git_chained_operator_inside_quotes_still_asks(run_hook):
+    # 따옴표 안의 && 에서 잘리면 원문이 깨진다. 재파싱 검증이 실패해 ask 로 폴백해야 한다.
+    d, *_ = run_hook(HOOK, bash('echo start\necho "&&" && git reset --hard HEAD~1'))
     assert d == "ask"
 
 

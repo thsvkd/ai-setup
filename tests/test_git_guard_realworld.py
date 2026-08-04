@@ -349,3 +349,30 @@ def test_worktree_remove_force_destroys_work_but_substitution_preserves(repo):
     assert "UNTRACKED" in untracked, "추적 안 된 파일까지 백업돼야 한다(stash create 로는 불가)"
     # 백업은 '사라질 워크트리'를 담아야 한다 — 본 저장소를 잘못 스냅샷하면 PRECIOUS 가 없다.
     assert "PRECIOUS" not in (repo / "tracked.txt").read_text(encoding="utf-8")
+
+
+def test_chained_cd_backup_targets_the_repo_the_command_enters(repo, tmp_path):
+    """`cd <repo> && git reset --hard` 에서 백업이 cd '뒤에' 돌아야 한다. 줄 앞에 놓으면
+    cd 이전 디렉터리(저장소가 아닐 수 있다)를 백업하려다 실패하고, fail-closed 때문에 원본
+    명령까지 못 돌게 된다 — 되돌릴 수 있게 만들려던 장치가 명령을 막아버리는 셈이다."""
+    run_in(repo, "git commit -q --allow-empty -m second")
+    head_before = run_in(repo, "git rev-parse HEAD").stdout.strip()
+
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+    line = f"cd '{repo}' && git reset -q --hard HEAD~1"
+    decision, new_cmd = hook_result(f"cd '{outside}'\n{line}", cwd=str(outside))
+    assert decision == "allow", new_cmd
+    # 백업 줄이 cd 뒤에 와야 한다.
+    lines = new_cmd.splitlines()
+    backup_at = next(i for i, ln in enumerate(lines) if "refs/claude-backups/" in ln)
+    assert lines[backup_at - 1].endswith("&&"), new_cmd
+    assert "cd" in lines[backup_at - 1]
+
+    # 저장소가 아닌 디렉터리에서 실행해도 성공해야 한다(백업이 cd 뒤에서 도니까).
+    result = subprocess.run(new_cmd, cwd=outside, shell=True, capture_output=True, text=True)
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert run_in(repo, "git rev-parse HEAD").stdout.strip() != head_before, "reset 이 실제로 되어야 한다"
+
+    refs = backup_refs(repo)
+    assert any(h == head_before for _, h in refs), f"되돌리기 전 HEAD 가 백업돼야 한다: {refs}"
