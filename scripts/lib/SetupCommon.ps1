@@ -135,11 +135,14 @@ function Invoke-HookProbe {
     $psi.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
 
     $proc = [System.Diagnostics.Process]::Start($psi)
-    # StandardInput 의 StreamWriter 는 .NET Framework 에서 인코딩 preamble(UTF-8 BOM)을 먼저
-    # 흘려보낸다. 그러면 훅이 받는 첫 글자가 U+FEFF 라 json.loads 가 실패하고, 훅은 파싱 실패를
-    # '판정할 수 없는 입력'으로 보고 조용히 exit 0 한다 — 셀프테스트가 아무것도 검증하지 못한
-    # 채 통과하던 진짜 원인이다. StandardInputEncoding 은 .NET Core 2.1+ 전용이라 5.1 에서
-    # 쓸 수 없으므로, StreamWriter 를 건너뛰고 BaseStream 에 BOM 없는 UTF-8 바이트를 쓴다.
+    # 보낼 바이트를 UTF-8 로 못박는다 — StreamWriter 로 쓰면 인코딩이 콘솔 코드페이지에
+    # 딸려가, 한글 경로가 섞인 이벤트에서 무엇이 전달될지 보장할 수 없다.
+    #
+    # 이것이 BOM 을 없애주지는 '않는다'. .NET Framework 의 Process.StandardInput 은 AutoFlush
+    # StreamWriter 라 스트림에 접근하는 순간 인코딩 preamble 을 이미 흘려보내고, 그걸 끄는
+    # StandardInputEncoding 은 .NET Core 2.1+ 전용이라 5.1 에는 없다. 실측으로 확인했다:
+    # BaseStream 으로 바꾼 뒤에도 훅이 받는 첫 글자는 여전히 U+FEFF 였다. BOM 은 받는 쪽에서
+    # 처리한다(각 훅의 read_event_json). 여기를 고쳐서 해결하려 들지 말 것.
     $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($Json)
     $proc.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
     $proc.StandardInput.BaseStream.Flush()
