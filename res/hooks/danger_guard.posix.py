@@ -340,8 +340,72 @@ def emit(decision: str, reason: str, updated_input: dict | None = None) -> None:
     sys.exit(0)
 
 
+# 최상위 명령 구분자. 2글자를 먼저 봐야 `||` 가 `|` 두 개로 쪼개지지 않는다.
+COMMAND_SEPARATORS = ("&&", "||", ";", "|")
+
+
+def separate_operators(line: str) -> str:
+    """따옴표 밖의 &&/||/;/| 앞뒤에 공백을 넣어, shlex 가 이들을 독립 토큰으로 뽑게 한다.
+
+    split_commands() 는 토큰이 구분자와 정확히 일치할 때만 나누는데, shlex 는 구분자가 앞
+    토큰에 붙어 있으면 떼어내지 않는다 — `-Confirm:$false;` 와 `build;ls` 가 각각 한 토큰이
+    된다. 그러면 is_chained 가 False 로 나와 '체이닝 안의 삭제는 자동 치환하지 않는다'는
+    방어선이 발동하지 않고, `-` 로 시작하지 않는 토큰이 전부 휴지통 대상 목록으로 들어간다.
+    실제로 guard.log 에 뒤 명령의 `-C <repo>` 인자 때문에 레포 루트가 삭제 대상에 포함된
+    기록이 남아 있다. send_to_trash.py 는 인자 하나가 실패해도 다음 인자를 계속 처리한다.
+
+    토큰을 사후에 쪼개는 방법은 쓸 수 없다 — shlex 를 거치고 나면 `rm "a;b.txt"` 의 `a;b.txt`
+    와 `rm a;b.txt` 의 `a;b.txt` 를 구별할 수 없어, 따옴표로 감싼 파일명을 잘라버린다. 그래서
+    원문을 문자 단위로 훑어 따옴표·서브셸 밖의 구분자만 떼어낸다.
+
+    반환값은 토크나이즈 전용이다. 원문 줄은 그대로 둬야 _split_line_at_operator 처럼 원문을
+    잘라 쓰는 쪽이 어긋나지 않는다 (공백을 끼우면 offset 이 밀린다).
+    """
+    out = []
+    i = 0
+    n = len(line)
+    quote = ""
+    depth = 0
+    while i < n:
+        ch = line[i]
+        if quote:
+            if quote == '"' and ch == "\\":                   # "..." 안 백슬래시 이스케이프
+                out.append(line[i:i + 2])
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+            out.append(ch)
+            i += 1
+            continue
+
+        if ch == "\\":                                 # 따옴표 밖 이스케이프 (`find … \;`)
+            out.append(line[i:i + 2])
+            i += 2
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            sep = next((s for s in COMMAND_SEPARATORS if line.startswith(s, i)), None)
+            if sep:
+                out.append(" " + sep + " ")
+                i += len(sep)
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
 def split_commands(parts: list) -> list:
-    """shlex 토큰 목록을 &&, ||, ; 기준으로 서브커맨드 리스트로 분리한다."""
+    """shlex 토큰 목록을 &&, ||, ; 기준으로 서브커맨드 리스트로 분리한다.
+
+    구분자가 독립 토큰으로 들어와야 동작한다 — separate_operators() 가 그 조건을 보장한다."""
     commands: list = []
     current: list = []
     for token in parts:
@@ -958,7 +1022,7 @@ def main() -> None:
             emit("deny", "원격/외부 출력을 바로 셸에 파이프 실행하는 패턴입니다. 스크립트를 먼저 저장해 검토한 뒤 실행하세요.")
 
         try:
-            parts = shlex.split(line)
+            parts = shlex.split(separate_operators(line))
         except ValueError:
             log({"line": line, "decision": "pass-unparsed"})
             continue
