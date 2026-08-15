@@ -99,6 +99,18 @@ LOG_PATH = os.path.join(HOOKS_DIR, "guard.log")
 SEND_TO_TRASH = os.path.join(HOOKS_DIR, "send_to_trash.py")
 
 
+def read_event_json() -> str:
+    """stdin 에서 훅 이벤트 JSON 을 읽는다. 선행 BOM(U+FEFF)은 벗겨낸다.
+
+    BOM 이 남아 있으면 json.loads 가 실패하고, 이 훅은 파싱 실패를 '판정할 수 없는 입력'으로
+    보고 조용히 exit 0 한다 — 가드가 통째로 무력화되는데 아무 신호도 남지 않는다. 실제로
+    Windows PowerShell 5.1 의 Process.StandardInput 이 이 상황을 만든다: AutoFlush StreamWriter
+    라 스트림에 접근하는 순간 인코딩 preamble 을 먼저 흘려보내는데, .NET Framework 에는
+    StandardInputEncoding 이 없어 호출부에서 끌 수가 없다. RFC 8259 도 파서가 BOM 을 무시하는
+    것을 허용하므로, 받는 쪽에서 벗기는 것이 옳다."""
+    return sys.stdin.read().lstrip("\ufeff")
+
+
 def send2trash_available() -> bool:
     """send_to_trash.py 파일 존재만으로는 부족하다 — 그 파일이 실제로 삭제를 수행하려면
     send2trash 패키지가 임포트돼야 한다. 패키지가 없으면 send_to_trash.py 는 실행 시점에
@@ -1006,7 +1018,7 @@ def _all_lines_parseable(lines: list, is_bash: bool) -> bool:
 def main() -> None:
     global _INSERT_PLAN
     try:
-        raw = sys.stdin.read()
+        raw = read_event_json()
         data = json.loads(raw) if raw else {}
     except (json.JSONDecodeError, ValueError):
         sys.exit(0)

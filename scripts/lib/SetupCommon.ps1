@@ -100,18 +100,107 @@ function Invoke-SettingsMerge {
     return $exitCode
 }
 
+function Invoke-HookProbe {
+    <#
+    .SYNOPSIS
+        훅에 JSON 이벤트를 stdin 으로 넣고 stdout 을 문자열로 돌려준다.
+    .DESCRIPTION
+        `$json | & python hook.py` 형태의 파이프는 Windows PowerShell 5.1 에서 stdin 에
+        아무것도 전달하지 못하고 빈 결과를 낸다 (pwsh 7 에서는 정상 동작). 설치 스크립트는
+        `powershell` 로 실행되므로 5.1 경로를 타고, 그래서 셀프테스트가 판정을 한 줄도
+        출력하지 못한 채 '통과'처럼 보였다 — 가드가 죽어도 알 수 없는 상태였다.
+        PowerShell 은 `<` 입력 리다이렉트를 지원하지 않으므로 ProcessStartInfo 로 직접
+        stdin 을 연다. 양쪽 버전에서 동일하게 동작한다.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$HookPath,
+        [Parameter(Mandatory)][string]$PyExe,
+        [string[]]$PyArgs = @(),
+        [Parameter(Mandatory)][string]$Json
+    )
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $PyExe
+    # ArgumentList 는 .NET Core 2.1+ 전용이라 Windows PowerShell 5.1(.NET Framework)에는 없다.
+    # 양쪽에서 도는 Arguments 문자열을 직접 만든다 (경로에 공백이 있을 수 있으므로 따옴표).
+    $psi.Arguments = (@($PyArgs) + @("-X", "utf8", $HookPath) |
+        ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }) -join ' '
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    # 훅은 -X utf8 로 UTF-8 을 내보낸다. 콘솔 기본 코드페이지(949)로 읽으면 한국어 사유
+    # 문구가 깨지므로 명시적으로 UTF-8 로 읽는다.
+    $psi.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $psi.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
+
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    # StandardInput 의 StreamWriter 는 .NET Framework 에서 인코딩 preamble(UTF-8 BOM)을 먼저
+    # 흘려보낸다. 그러면 훅이 받는 첫 글자가 U+FEFF 라 json.loads 가 실패하고, 훅은 파싱 실패를
+    # '판정할 수 없는 입력'으로 보고 조용히 exit 0 한다 — 셀프테스트가 아무것도 검증하지 못한
+    # 채 통과하던 진짜 원인이다. StandardInputEncoding 은 .NET Core 2.1+ 전용이라 5.1 에서
+    # 쓸 수 없으므로, StreamWriter 를 건너뛰고 BaseStream 에 BOM 없는 UTF-8 바이트를 쓴다.
+    $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($Json)
+    $proc.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+    $proc.StandardInput.BaseStream.Flush()
+    $proc.StandardInput.Close()
+    $stdout = $proc.StandardOutput.ReadToEnd()
+    $stderr = $proc.StandardError.ReadToEnd()
+    $proc.WaitForExit()
+    return [pscustomobject]@{
+        Stdout   = $stdout.Trim()
+        Stderr   = $stderr.Trim()
+        ExitCode = $proc.ExitCode
+    }
+}
+
 function Invoke-HookSelfTest {
+    <#
+    .SYNOPSIS
+        훅 케이스들을 실행하고 판정을 출력한다. 실패한 케이스 수를 돌려준다.
+    .DESCRIPTION
+        '출력이 비어 있음' 을 성공으로 읽지 않는다. 훅이 죽었거나 stdin 이 전달되지 않으면
+        판정이 없는데, 그걸 조용히 넘기면 셀프테스트가 존재할 이유가 없다. 통과(무판단)를
+        기대하는 케이스는 라벨에 '통과' 를 넣어 구분한다.
+    #>
     param(
         [Parameter(Mandatory)][string]$HookPath,
         [Parameter(Mandatory)][string]$PyExe,
         [string[]]$PyArgs = @(),
         [Parameter(Mandatory)][hashtable[]]$Cases   # @{ Label; Json }
     )
+    $failures = 0
     foreach ($c in $Cases) {
-        $result = $c.Json | & $PyExe @($PyArgs) -X utf8 $HookPath 2>&1
         Write-Host "  🧪 $($c.Label)" -ForegroundColor DarkCyan
-        Write-Host "     $result"
+        $r = Invoke-HookProbe -HookPath $HookPath -PyExe $PyExe -PyArgs $PyArgs -Json $c.Json
+        $expectsPass = $c.Label -match '통과'
+
+        if ($r.ExitCode -ne 0) {
+            $failures++
+            Write-Host "     ❌ 훅이 비정상 종료했습니다 (exit $($r.ExitCode)): $($r.Stderr)" -ForegroundColor Red
+            continue
+        }
+        if (-not $r.Stdout) {
+            if ($expectsPass) {
+                Write-Host "     ✅ 판정 없음 (통과)" -ForegroundColor DarkGray
+            } else {
+                $failures++
+                Write-Host "     ❌ 판정이 비어 있습니다 — 가드가 이 명령을 그대로 흘려보냅니다." -ForegroundColor Red
+            }
+            continue
+        }
+
+        $decision = $null
+        try { $decision = ($r.Stdout | ConvertFrom-Json).hookSpecificOutput.permissionDecision } catch { }
+        if (-not $decision) {
+            $failures++
+            Write-Host "     ❌ 판정을 파싱할 수 없습니다: $($r.Stdout)" -ForegroundColor Red
+            continue
+        }
+        Write-Host "     ✅ $decision" -ForegroundColor DarkGray
+        Write-Host "        $($r.Stdout)" -ForegroundColor DarkGray
     }
+    return $failures
 }
 
 function Write-SetupReport {

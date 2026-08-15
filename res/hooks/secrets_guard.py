@@ -66,9 +66,19 @@ ENV_TEMPLATE_RE = re.compile(
 )
 
 
+def read_event_json() -> str:
+    """stdin 에서 훅 이벤트 JSON 을 읽는다. 선행 BOM(U+FEFF)은 벗겨낸다.
+
+    BOM 이 남아 있으면 json.loads 가 실패하고 훅은 조용히 exit 0 한다 — 게이트가 무력화되는데
+    아무 신호도 남지 않는다. Windows PowerShell 5.1 의 Process.StandardInput 이 실제로 이
+    상황을 만든다(AutoFlush StreamWriter 가 preamble 을 먼저 흘려보내는데 .NET Framework 에는
+    StandardInputEncoding 이 없어 끌 수 없다). RFC 8259 도 파서가 BOM 을 무시하는 것을 허용한다."""
+    return sys.stdin.read().lstrip("\ufeff")
+
+
 def main() -> None:
     try:
-        raw = sys.stdin.read()
+        raw = read_event_json()
         data = json.loads(raw) if raw else {}
     except (json.JSONDecodeError, ValueError):
         sys.exit(0)

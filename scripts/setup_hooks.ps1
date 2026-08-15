@@ -148,7 +148,7 @@ if ($mergeExit -ne 0) {
 Write-Host ""
 Write-Host "[4/4] 셀프테스트 실행..." -ForegroundColor Yellow
 
-Invoke-HookSelfTest -HookPath (Join-Path $hooksDir "danger_guard.py") -PyExe $py.Exe -PyArgs $py.Args -Cases @(
+$selfTestFailures = Invoke-HookSelfTest -HookPath (Join-Path $hooksDir "danger_guard.py") -PyExe $py.Exe -PyArgs $py.Args -Cases @(
     @{ Label = "rm -rf temp/  → 휴지통 치환 기대"; Json = '{"tool_name":"Bash","tool_input":{"command":"rm -rf temp/"}}' },
     @{ Label = "git push --force origin main → ask 기대 (보호 브랜치)"; Json = '{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}' },
     @{ Label = "PowerShell + git push origin feature/x → 통과 기대 (곁다리 브랜치)"; Json = '{"tool_name":"PowerShell","tool_input":{"command":"git push origin feature/x"}}' },
@@ -160,6 +160,12 @@ Invoke-HookSelfTest -HookPath (Join-Path $hooksDir "danger_guard.py") -PyExe $py
     @{ Label = "Remove-Item -Recurse -Force C:\ → deny 기대"; Json = '{"tool_name":"PowerShell","tool_input":{"command":"Remove-Item -Recurse -Force C:\\"}}' },
     @{ Label = "ls -la → 통과(무판단) 기대";          Json = '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' }
 )
+
+# 셀프테스트가 판정을 못 내면 가드가 설치는 됐어도 실제로는 동작하지 않는 상태다. 훅이
+# 유일한 방어선이므로(permissions 에 git deny 규칙을 두지 않는다) 조용히 넘기지 않는다.
+if ($selfTestFailures -gt 0) {
+    throw "셀프테스트 $selfTestFailures 건 실패 — 가드 훅이 정상 동작하지 않습니다. 위 ❌ 항목을 확인하세요."
+}
 
 # --- 6. 리포트 ---
 $depWarning = $null

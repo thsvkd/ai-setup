@@ -105,3 +105,36 @@ def test_hook_runs_on_legacy_interpreter(hook):
 @pytest.mark.parametrize("hook", HOOKS, ids=lambda p: p.name)
 def test_hook_compiles_under_current_interpreter(hook):
     subprocess.run([sys.executable, "-m", "py_compile", str(hook)], check=True, capture_output=True)
+
+
+# --- 회귀: stdin 선행 BOM 을 먹어도 판정을 내야 한다 ---
+#
+# Windows PowerShell 5.1 의 Process.StandardInput 은 AutoFlush StreamWriter 라 스트림에
+# 접근하는 순간 인코딩 preamble(UTF-8 BOM)을 먼저 흘려보낸다. .NET Framework 에는
+# StandardInputEncoding 이 없어 호출부에서 끌 수 없다. BOM 이 남으면 json.loads 가 실패하고
+# 훅은 '판정할 수 없는 입력'으로 보고 조용히 exit 0 한다 — 가드가 통째로 무력화되는데 아무
+# 신호도 남지 않는다. 실제로 설치 셀프테스트가 이 상태로 판정을 한 줄도 못 내고 있었다.
+
+BOM = "\ufeff"
+
+
+@pytest.mark.parametrize("hook,event,expected", [
+    ("danger_guard.windows.py",
+     {"tool_name": "PowerShell", "tool_input": {"command": "Remove-Item -Recurse -Force C:\\"}},
+     "deny"),
+    ("danger_guard.posix.py",
+     {"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}},
+     "deny"),
+    ("secrets_guard.py",
+     {"tool_name": "Read", "tool_input": {"file_path": "/proj/.env"}},
+     "ask"),
+])
+def test_hooks_tolerate_leading_bom(hook, event, expected):
+    proc = subprocess.run(
+        [sys.executable, "-X", "utf8", str(HOOKS_DIR / hook)],
+        input=BOM + json.dumps(event),
+        text=True, capture_output=True, encoding="utf-8",
+    )
+    out = (proc.stdout or "").strip()
+    assert out, f"{hook}: BOM 이 붙었다고 판정을 건너뛰면 안 된다 (stderr={proc.stderr!r})"
+    assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == expected
