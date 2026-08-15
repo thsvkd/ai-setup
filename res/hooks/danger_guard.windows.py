@@ -148,13 +148,31 @@ ROOT_RE = re.compile(
 _HOME_DIR = os.environ.get("USERPROFILE") or os.environ.get("HOME", "")
 
 
+# Git Bash(MSYS)는 드라이브를 `/c/Users/pi` 로 표기한다. 이 훅의 Bash 툴이 곧 Git Bash 이므로
+# 이게 그쪽의 '평범한' 절대경로 표기다. 정규화하지 않으면 같은 홈 디렉터리인데도 `~`, `$HOME`,
+# `"C:\Users\pi"` 는 막히고 `/c/Users/pi` 만 통과한다 — 실제로 그런 구멍이 있었다.
+# 이 훅은 Windows 전용이라 안전한 변환이다 (진짜 POSIX 에서는 /c/... 가 평범한 디렉터리다).
+_MSYS_DRIVE_RE = re.compile(r'^/([A-Za-z])(?=/|$)')
+
+
+def _from_msys_path(path: str) -> str:
+    """`/c/Users/pi` → `C:\\Users\\pi`. MSYS 드라이브 표기가 아니면 원본 그대로."""
+    m = _MSYS_DRIVE_RE.match(path)
+    if not m:
+        return path
+    return m.group(1).upper() + ":\\" + path[m.end():].lstrip("/").replace("/", "\\")
+
+
 def _is_root_or_home_literal(path: str) -> bool:
-    if ROOT_RE.match(path):
-        return True
-    if not _HOME_DIR or _HOME_DIR in ("/", "\\"):
-        return False
-    stripped = path.rstrip("/\\*") if path not in ("/", "\\", "") else path
-    return os.path.normcase(os.path.normpath(stripped)) == os.path.normcase(os.path.normpath(_HOME_DIR))
+    for candidate in (path, _from_msys_path(path)):
+        if ROOT_RE.match(candidate):
+            return True
+        if not _HOME_DIR or _HOME_DIR in ("/", "\\"):
+            continue
+        stripped = candidate.rstrip("/\\*") if candidate not in ("/", "\\", "") else candidate
+        if os.path.normcase(os.path.normpath(stripped)) == os.path.normcase(os.path.normpath(_HOME_DIR)):
+            return True
+    return False
 
 
 def _is_dot_target(path: str) -> bool:
@@ -175,7 +193,7 @@ def _resolves_to_root_or_home(path: str, cwd: str) -> bool:
     해석해야 홈이 되는 경로를 놓친다.
     """
     try:
-        resolved = os.path.realpath(os.path.join(cwd, os.path.expanduser(path)))
+        resolved = os.path.realpath(os.path.join(cwd, os.path.expanduser(_from_msys_path(path))))
     except (OSError, ValueError):
         return False
     tail = os.path.splitdrive(resolved)[1]
