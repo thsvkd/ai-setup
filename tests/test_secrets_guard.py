@@ -28,8 +28,6 @@ SENSITIVE = [
     "/home/u/.pypirc",
     "/home/u/.netrc",
     "/home/u/.git-credentials",
-    "/x/api.key",
-    "/x/db_secret_prod.txt",
     "/home/u/.aws/credentials",
     "C:\\Users\\u\\.aws\\credentials",
     "C:\\Users\\u\\project\\.env",
@@ -48,13 +46,31 @@ BENIGN = [
     "/x/config.yaml",
     "/x/data.json",
     "/x/index.ts",
-    "/x/keyboard.py",       # 'key' 를 포함하지만 .key 확장자가 아님
+    "/x/keyboard.py",
     "/x/tokenizer.py",
 ]
 
 
 @pytest.mark.parametrize("fp", BENIGN)
 def test_benign_files_pass(run_hook, fp):
+    d, *_ = run_hook(HOOK, read(fp))
+    assert d is None, f"expected pass for {fp}"
+
+
+# 완화: 이름만으로는 시크릿 여부를 알 수 없는 패턴(`*_secret*`, `*.key`)을 뺐다. 워크스페이스
+# 전수 검사에서 이 두 패턴의 히트가 전부 라이브러리·테스트 소스코드였다 — 확인 프롬프트만
+# 늘리고 막아주는 건 없었다. 시크릿이 밖으로 새는 방향은 auto mode 분류기가 담당한다.
+NAME_ONLY_AMBIGUOUS = [
+    "/x/crypto_secretbox.py",       # PyNaCl 바인딩
+    "/x/nested_secrets.py",         # pydantic-settings 소스
+    "/x/test_secrets_guard.py",     # 이 레포 자신의 테스트 파일
+    "/x/api.key",                   # 개인키일 수도, 자막·설정·데이터일 수도 있다
+    "/x/subtitles.key",
+]
+
+
+@pytest.mark.parametrize("fp", NAME_ONLY_AMBIGUOUS)
+def test_name_only_ambiguous_files_pass(run_hook, fp):
     d, *_ = run_hook(HOOK, read(fp))
     assert d is None, f"expected pass for {fp}"
 

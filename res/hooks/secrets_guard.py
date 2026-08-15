@@ -16,6 +16,17 @@ import json
 import re
 
 # 파일명(경로 끝 basename) 기준으로 민감 파일을 판정한다.
+#
+# 여기 넣을지 말지의 기준은 "이 이름이면 내용이 시크릿일 수밖에 없는가" 다. 이름만으로는
+# 판단할 수 없는 패턴은 오탐이 실탐보다 훨씬 많아 게이트 자체를 무의미하게 만든다. 실제로
+# 워크스페이스를 전수 검사했을 때 히트 23개 중 6개가 아래 두 패턴에서 나온 소스코드였다:
+#
+#   [^\\/]*_secret[^\\/]*  →  crypto_secretbox.py, crypto_secretstream.py,
+#                             nested_secrets.py, test_secrets_guard.py
+#   [^\\/]*\.key           →  확장자만으로는 개인키인지 자막·설정·데이터인지 알 수 없다
+#
+# 두 패턴은 제거했다. 진짜 시크릿을 담은 파일은 아래 구체적인 이름들로 이미 잡히고, 시크릿이
+# 커밋·PR·외부 전송으로 새는 방향은 auto mode 분류기가 별도로 막는다.
 SENSITIVE_RE = re.compile(
     r'(^|[\\/])('
     r'\.env(\.[^\\/]*)?'
@@ -36,8 +47,6 @@ SENSITIVE_RE = re.compile(
     r'|\.pypirc'
     r'|\.netrc'
     r'|\.git-credentials'
-    r'|[^\\/]*_secret[^\\/]*'
-    r'|[^\\/]*\.key'
     r')$',
     re.IGNORECASE,
 )

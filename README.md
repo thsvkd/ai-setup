@@ -204,8 +204,10 @@ Claude Code에서 `permissions`의 `deny`/`ask` 규칙은 PreToolUse 훅의 `all
 ### secrets_guard — 시크릿 파일
 
 `.env`, `id_rsa`/`id_dsa`/`id_ecdsa`/`id_ed25519`, `*.pem`/`*.pfx`/`*.p12`/`*.p8`/`*.ppk`/`*.jks`/`*.keystore`,
-`credentials.json`, `secrets.y(a)ml`, `.npmrc`/`.pypirc`/`.netrc`/`.git-credentials`, `~/.aws/credentials`, `*_secret*`, `*.key` 등을
+`credentials.json`, `secrets.y(a)ml`, `.npmrc`/`.pypirc`/`.netrc`/`.git-credentials`, `~/.aws/credentials` 를
 **Read / Write / Edit / MultiEdit**로 접근하면 ❓ 확인을 요청한다 (완전 차단이 아닌 확인 게이트).
+
+판정 기준은 "**이 이름이면 내용이 시크릿일 수밖에 없는가**"다. 이름만으로 알 수 없는 패턴은 오탐이 실탐보다 훨씬 많아 게이트 자체를 무의미하게 만든다. 그래서 예전에 있던 `*_secret*` 과 `*.key` 는 제거했다 — 워크스페이스 전수 검사에서 이 두 패턴의 히트가 전부 라이브러리·테스트 소스코드(`crypto_secretbox.py`, `nested_secrets.py`, `test_secrets_guard.py` 등)였다. 시크릿이 커밋·PR·외부 전송으로 **새는** 방향은 auto mode 분류기가 별도로 막으므로, 이 훅은 이름만으로 확실한 파일에만 집중한다.
 
 단, `.env.example`/`.env.sample`/`.env.template`/`.env.dist` 처럼 자리표시자(placeholder)만 담고 커밋을 전제로 하는
 **예시/템플릿 파일은 시크릿이 아니므로 확인 없이 통과**시킨다 (`.env.local.example` 같은 변형도 마지막 확장자로 판정). 실제
