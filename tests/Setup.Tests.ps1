@@ -60,10 +60,33 @@ Describe "실제 설치 경로 (S2)" {
         $script:sandbox = Join-Path $env:TEMP ("cc-pester-real-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $script:sandbox | Out-Null
         $script:oldUP = $env:USERPROFILE
+        $script:oldHome = $env:HOME
+        $script:oldApp = $env:APPDATA
+        $script:oldLocal = $env:LOCALAPPDATA
+        $script:oldVs = $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS
+        $script:oldCur = $env:CLAUDE_SETUP_CURSOR_KEYBINDINGS
+        $script:oldWt = $env:CLAUDE_SETUP_WT_SETTINGS
         $env:USERPROFILE = $script:sandbox
+        $env:HOME = $script:sandbox
+        $env:APPDATA = Join-Path $script:sandbox "appdata"
+        $env:LOCALAPPDATA = Join-Path $script:sandbox "local"
+        New-Item -ItemType Directory -Force -Path $env:APPDATA | Out-Null
+        New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA | Out-Null
+        $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS = Join-Path $script:sandbox "vscode-keybindings.json"
+        $env:CLAUDE_SETUP_CURSOR_KEYBINDINGS = Join-Path $script:sandbox "cursor-keybindings.json"
+        $env:CLAUDE_SETUP_WT_SETTINGS = Join-Path $script:sandbox "wt-settings.json"
+        Set-Content -Path $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS -Value '[]' -Encoding utf8
+        Set-Content -Path $env:CLAUDE_SETUP_CURSOR_KEYBINDINGS -Value '[]' -Encoding utf8
+        Set-Content -Path $env:CLAUDE_SETUP_WT_SETTINGS -Value '{"actions":[]}' -Encoding utf8
     }
     AfterEach {
         $env:USERPROFILE = $script:oldUP
+        if ($null -eq $script:oldHome) { Remove-Item Env:HOME -ErrorAction SilentlyContinue } else { $env:HOME = $script:oldHome }
+        if ($null -eq $script:oldApp) { Remove-Item Env:APPDATA -ErrorAction SilentlyContinue } else { $env:APPDATA = $script:oldApp }
+        if ($null -eq $script:oldLocal) { Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue } else { $env:LOCALAPPDATA = $script:oldLocal }
+        if ($null -eq $script:oldVs) { Remove-Item Env:CLAUDE_SETUP_VSCODE_KEYBINDINGS -ErrorAction SilentlyContinue } else { $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS = $script:oldVs }
+        if ($null -eq $script:oldCur) { Remove-Item Env:CLAUDE_SETUP_CURSOR_KEYBINDINGS -ErrorAction SilentlyContinue } else { $env:CLAUDE_SETUP_CURSOR_KEYBINDINGS = $script:oldCur }
+        if ($null -eq $script:oldWt) { Remove-Item Env:CLAUDE_SETUP_WT_SETTINGS -ErrorAction SilentlyContinue } else { $env:CLAUDE_SETUP_WT_SETTINGS = $script:oldWt }
         Remove-Item -Recurse -Force $script:sandbox -ErrorAction SilentlyContinue
     }
 
@@ -348,5 +371,78 @@ Describe "AGENTS.md 덮어쓰기 (-Force)" {
         $backups.Count | Should -Be 1 -Because "사용자 콘텐츠를 덮어쓸 때는 되돌릴 방법을 남겨야 한다"
         (Get-Content $backups[0].FullName -Raw) | Should -Match "사용자가 손댄 내용"
         (Get-Content $target -Raw) | Should -Not -Match "사용자가 손댄 내용"
+    }
+}
+
+# 줄바꿈 키바인드 디스패처. 실제 프로필을 건드리지 않도록 HOME/APPDATA 와
+# CLAUDE_SETUP_* 경로를 샌드박스로 돌린다.
+Describe "키바인드 디스패처" {
+    BeforeEach {
+        $script:sandbox = Join-Path $env:TEMP ("cc-pester-kb-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        New-Item -ItemType Directory -Force -Path $script:sandbox | Out-Null
+        $script:oldUP = $env:USERPROFILE
+        $script:oldHome = $env:HOME
+        $script:oldApp = $env:APPDATA
+        $script:oldLocal = $env:LOCALAPPDATA
+        $script:oldVs = $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS
+        $script:oldCur = $env:CLAUDE_SETUP_CURSOR_KEYBINDINGS
+        $script:oldWt = $env:CLAUDE_SETUP_WT_SETTINGS
+        $env:USERPROFILE = $script:sandbox
+        $env:HOME = $script:sandbox
+        $env:APPDATA = Join-Path $script:sandbox "appdata"
+        $env:LOCALAPPDATA = Join-Path $script:sandbox "local"
+        New-Item -ItemType Directory -Force -Path $env:APPDATA | Out-Null
+        New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA | Out-Null
+        $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS = Join-Path $script:sandbox "vscode-keybindings.json"
+        $env:CLAUDE_SETUP_CURSOR_KEYBINDINGS = Join-Path $script:sandbox "cursor-keybindings.json"
+        $env:CLAUDE_SETUP_WT_SETTINGS = Join-Path $script:sandbox "wt-settings.json"
+        Set-Content -Path $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS -Value '[]' -Encoding utf8
+        Set-Content -Path $env:CLAUDE_SETUP_CURSOR_KEYBINDINGS -Value '[]' -Encoding utf8
+        Set-Content -Path $env:CLAUDE_SETUP_WT_SETTINGS -Value '{"actions":[]}' -Encoding utf8
+    }
+    AfterEach {
+        $env:USERPROFILE = $script:oldUP
+        if ($null -eq $script:oldHome) { Remove-Item Env:HOME -ErrorAction SilentlyContinue } else { $env:HOME = $script:oldHome }
+        if ($null -eq $script:oldApp) { Remove-Item Env:APPDATA -ErrorAction SilentlyContinue } else { $env:APPDATA = $script:oldApp }
+        if ($null -eq $script:oldLocal) { Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue } else { $env:LOCALAPPDATA = $script:oldLocal }
+        if ($null -eq $script:oldVs) { Remove-Item Env:CLAUDE_SETUP_VSCODE_KEYBINDINGS -ErrorAction SilentlyContinue } else { $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS = $script:oldVs }
+        if ($null -eq $script:oldCur) { Remove-Item Env:CLAUDE_SETUP_CURSOR_KEYBINDINGS -ErrorAction SilentlyContinue } else { $env:CLAUDE_SETUP_CURSOR_KEYBINDINGS = $script:oldCur }
+        if ($null -eq $script:oldWt) { Remove-Item Env:CLAUDE_SETUP_WT_SETTINGS -ErrorAction SilentlyContinue } else { $env:CLAUDE_SETUP_WT_SETTINGS = $script:oldWt }
+        Remove-Item -Recurse -Force $script:sandbox -ErrorAction SilentlyContinue
+    }
+
+    It "-Help 에 -Keybinds 와 -Newline 이 보인다 (covers: Test-15)" {
+        $r = Invoke-Script $script:Setup @("-Help")
+        $r.ExitCode | Should -Be 0
+        $r.Output | Should -Match "Keybinds"
+        $r.Output | Should -Match "Newline"
+    }
+
+    It "-Keybinds -DryRun 은 대상 파일을 쓰지 않고 계획에 경로가 보인다 (covers: Test-10)" {
+        $beforeVs = Get-Content $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS -Raw
+        $beforeWt = Get-Content $env:CLAUDE_SETUP_WT_SETTINGS -Raw
+        $r = Invoke-Script $script:Setup @("-Keybinds", "-DryRun")
+        $r.ExitCode | Should -Be 0
+        (Get-Content $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS -Raw) | Should -Be $beforeVs
+        (Get-Content $env:CLAUDE_SETUP_WT_SETTINGS -Raw) | Should -Be $beforeWt
+        Test-Path (Join-Path $env:USERPROFILE ".claude\settings.json") | Should -Be $false
+        $r.Output | Should -Match "keybindings.json"
+    }
+
+    It "허용되지 않는 -Newline 은 exit 1 이고 파일을 건드리지 않는다 (covers: Test-8)" {
+        $beforeVs = Get-Content $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS -Raw
+        $r = Invoke-Script $script:Setup @("-Keybinds", "-Newline", "foo")
+        $r.ExitCode | Should -Be 1
+        (Get-Content $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS -Raw) | Should -Be $beforeVs
+        $r.Output | Should -Not -Match "parameter cannot be found"
+        $r.Output | Should -Match "Newline|newline|shift-enter"
+    }
+
+    It "-Keybinds 는 훅과 AGENTS.md 를 설치하지 않는다 (covers: Test-6)" {
+        $r = Invoke-Script $script:Setup @("-Keybinds")
+        $r.ExitCode | Should -Be 0
+        Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $false
+        Test-Path (Join-Path $script:sandbox "AGENTS.md") | Should -Be $false
+        Test-Path (Join-Path $env:USERPROFILE ".claude\.claude-code-setup.json") | Should -Be $true
     }
 }

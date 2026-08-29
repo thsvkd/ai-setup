@@ -172,18 +172,26 @@ def test_ci_환경변수는_tty가_있어도_프롬프트를_막는다(tmp_path)
 
 @posix_only
 def test_기본값_그대로_선택하면_전체설치_auto_적용(tmp_path):
+    """covers: Test-1
+    SCOPE=all 기본값: 권한 모드 다음·적용 여부 전에 줄바꿈 키를 묻고,
+    Enter(기본 강조)는 Shift+Enter → NEWLINE_CHORD=shift-enter.
+    질문 순서: 범위 → 권한 → 줄바꿈 키 → 적용.
+    """
     out = tmp_path / "answers"
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER, ENTER, ENTER],
+        keys=[ENTER, ENTER, ENTER, ENTER],
     )
-    assert code == EXIT_OK, screen.decode(errors="replace")
+    text = screen.decode(errors="replace")
+    assert code == EXIT_OK, text
+    assert "Shift+Enter" in text and "Ctrl+Enter" in text, text
     assert read_answers(out) == {
         "SCOPE": "all",
         "DEFAULT_MODE": "auto",
         "OVERWRITE_AGENTSMD": "0",
         "DRY_RUN": "0",
+        "NEWLINE_CHORD": "shift-enter",
     }
 
 
@@ -206,15 +214,17 @@ def test_curl_파이프_설치에서도_프롬프트가_동작한다(tmp_path):
     assert answers["SCOPE"] == "hooks"
     assert answers["DEFAULT_MODE"] == "bypassPermissions"
     assert answers["DRY_RUN"] == "1"
+    assert "NEWLINE_CHORD" not in answers
 
 
 @posix_only
 def test_bypass_선택시_경고를_보여준다(tmp_path):
     out = tmp_path / "answers"
+    # 범위=전체, 권한=bypass, 줄바꿈=기본(Shift+Enter), 적용=기본
     _, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER, DOWN, ENTER, ENTER],
+        keys=[ENTER, DOWN, ENTER, ENTER, ENTER],
     )
     text = screen.decode(errors="replace")
     assert "권한 확인" in text and "생략" in text, text
@@ -222,7 +232,9 @@ def test_bypass_선택시_경고를_보여준다(tmp_path):
 
 @posix_only
 def test_ctrl_c_취소는_비대화형_폴백과_구분된다(tmp_path):
-    """130 과 2 를 뭉뚱그리면 '취소했는데 기본값으로 설치되는' 최악의 동작이 된다."""
+    """covers: Test-4
+    130 과 2 를 뭉뚱그리면 '취소했는데 기본값으로 설치되는' 최악의 동작이 된다.
+    """
     out = tmp_path / "answers"
     code, _ = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out)],
@@ -230,22 +242,75 @@ def test_ctrl_c_취소는_비대화형_폴백과_구분된다(tmp_path):
     )
     assert code == EXIT_CANCELLED
     assert read_answers(out) == {}
+    assert not out.exists() or not out.read_text(encoding="utf-8").strip()
 
 
 @posix_only
 def test_기존_agentsmd가_있을때만_덮어쓰기를_묻는다(tmp_path):
     (tmp_path / "AGENTS.md").write_text("기존 프로젝트 규칙\n", encoding="utf-8")
     out = tmp_path / "answers"
-    # 질문이 하나 늘어난다: 범위 → 권한 → 덮어쓰기 → 적용
+    # 질문이 하나 늘어난다: 범위 → 권한 → 줄바꿈 키 → 덮어쓰기 → 적용
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER, ENTER, ENTER, ENTER],
+        keys=[ENTER, ENTER, ENTER, ENTER, ENTER],
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     assert "덮어쓸까요" in screen.decode(errors="replace")
     # confirm 의 기본값은 '아니오' — 사용자 콘텐츠는 실수로 날아가면 안 된다.
     assert read_answers(out)["OVERWRITE_AGENTSMD"] == "0"
+    assert read_answers(out)["NEWLINE_CHORD"] == "shift-enter"
+
+
+@posix_only
+def test_온보딩에서_CtrlEnter를_고르면_NEWLINE_CHORD는_ctrl_enter다(tmp_path):
+    """covers: Test-1
+    SCOPE=all 에서 줄바꿈 키 두 번째 항목(Ctrl+Enter)을 고르면 답 파일이 ctrl-enter 다.
+    """
+    out = tmp_path / "answers"
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        keys=[ENTER, ENTER, DOWN, ENTER, ENTER],
+    )
+    assert code == EXIT_OK, screen.decode(errors="replace")
+    answers = read_answers(out)
+    assert answers["SCOPE"] == "all"
+    assert answers["NEWLINE_CHORD"] == "ctrl-enter"
+
+
+@posix_only
+def test_SCOPE_hooks이면_NEWLINE_CHORD를_묻지_않는다(tmp_path):
+    """covers: Test-2
+    SCOPE=hooks 이면 줄바꿈 키를 묻지 않고 답 파일에 NEWLINE_CHORD 가 없다.
+    """
+    out = tmp_path / "answers"
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        keys=[DOWN, ENTER, ENTER, ENTER],
+    )
+    assert code == EXIT_OK, screen.decode(errors="replace")
+    answers = read_answers(out)
+    assert answers["SCOPE"] == "hooks"
+    assert "NEWLINE_CHORD" not in answers
+
+
+@posix_only
+def test_SCOPE_agentsmd이면_NEWLINE_CHORD를_묻지_않는다(tmp_path):
+    """covers: Test-2
+    SCOPE=agentsmd 이면 줄바꿈 키를 묻지 않고 답 파일에 NEWLINE_CHORD 가 없다.
+    """
+    out = tmp_path / "answers"
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        keys=[DOWN, DOWN, ENTER, ENTER],
+    )
+    assert code == EXIT_OK, screen.decode(errors="replace")
+    answers = read_answers(out)
+    assert answers["SCOPE"] == "agentsmd"
+    assert "NEWLINE_CHORD" not in answers
 
 
 # ── 벤더링 회귀 방지 ─────────────────────────────────────────────────
@@ -301,6 +366,38 @@ def test_install_ps1이_받은_스위치를_전부_setup에_넘긴다():
     )
 
 
+def test_install_ps1이_Keybinds와_Newline을_setup에_넘긴다():
+    """covers: Test-17
+    install.ps1 param 에 -Keybinds 스위치와 -Newline 문자열이 있고,
+    둘 다 setup.ps1 로 전달돼야 한다. Newline 은 스위치가 아니라 값이다.
+    """
+    import re
+
+    source = (ROOT / "install.ps1").read_text(encoding="utf-8-sig")
+    param_block = source.split("Set-StrictMode", 1)[0]
+    assert re.search(r"\[switch\]\s*\$Keybinds\b", param_block), (
+        "install.ps1 param 에 [switch]$Keybinds 가 없다"
+    )
+    assert re.search(r"\[string\]\s*\$Newline\b", param_block), (
+        "install.ps1 param 에 [string]$Newline 가 없다"
+    )
+
+    forward_line = re.search(r"foreach \(\$k in ([^)]+)\)", source)
+    assert forward_line, "install.ps1 에서 스위치 전달 목록을 찾지 못했다"
+    forwarded = set(re.findall(r"'(\w+)'", forward_line.group(1)))
+    assert "Keybinds" in forwarded, (
+        "install.ps1 이 $Keybinds 를 setup.ps1 전달 목록에 넣지 않았다"
+    )
+
+    # 문자열 값은 스위치 foreach 로 못 넘긴다. BoundParameters 로 값을 실어야 한다.
+    assert re.search(
+        r"\$PSBoundParameters\.ContainsKey\(\s*['\"]Newline['\"]\s*\)",
+        source,
+    ) or re.search(r"\$fwd\[\s*['\"]Newline['\"]\s*\]\s*=", source), (
+        "install.ps1 이 -Newline 값을 setup.ps1 로 넘기지 않는다"
+    )
+
+
 def test_벤더_라이선스가_함께_들어있다():
     licenses = ROOT / "res" / "vendor" / "LICENSES"
     names = {p.name for p in licenses.iterdir()} if licenses.is_dir() else set()
@@ -326,7 +423,8 @@ def test_setup_sh가_온보딩_선택대로_dry_run을_수행한다(tmp_path):
     trash.chmod(0o755)
 
     env = clean_env(HOME=str(home), PATH=f"{stub_bin}{os.pathsep}{os.environ['PATH']}")
-    # 범위=훅만(↓), 권한=auto(기본), 적용=dry-run 먼저(↓)
+    # 범위=훅만(↓), 권한=auto(기본), 적용=dry-run 먼저(↓).
+    # SCOPE=hooks 이므로 줄바꿈 키 질문은 끼지 않는다 (covers: Test-2).
     code, screen = run_in_pty(
         ["bash", str(ROOT / "scripts" / "setup.sh")],
         keys=[DOWN, ENTER, ENTER, DOWN, ENTER],

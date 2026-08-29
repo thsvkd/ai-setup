@@ -87,3 +87,49 @@ teardown() {
     run bash "$REPO_ROOT/scripts/setup.sh" --hooks
     [ "$status" -eq 0 ]
 }
+
+# 줄바꿈 키바인드 디스패처. 실제 ~/.config/Code 를 건드리지 않도록 경로를 샌드박스로 돌린다.
+
+_keybind_sandbox() {
+    mkdir -p "$SANDBOX/vscode" "$SANDBOX/cursor" "$SANDBOX/wt"
+    printf '[]\n' > "$SANDBOX/vscode/keybindings.json"
+    printf '[]\n' > "$SANDBOX/cursor/keybindings.json"
+    printf '{}\n' > "$SANDBOX/wt/settings.json"
+    export CLAUDE_SETUP_VSCODE_KEYBINDINGS="$SANDBOX/vscode/keybindings.json"
+    export CLAUDE_SETUP_CURSOR_KEYBINDINGS="$SANDBOX/cursor/keybindings.json"
+    export CLAUDE_SETUP_WT_SETTINGS="$SANDBOX/wt/settings.json"
+}
+
+@test "setup.sh --help shows --keybinds and --newline (covers: Test-15)" {
+    run bash "$REPO_ROOT/scripts/setup.sh" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--keybinds"* ]]
+    [[ "$output" == *"--newline"* ]]
+}
+
+@test "setup.sh --keybinds --dry-run writes nothing and shows target paths (covers: Test-10)" {
+    _keybind_sandbox
+    run bash "$REPO_ROOT/scripts/setup.sh" --keybinds --dry-run
+    [ "$status" -eq 0 ]
+    [ ! -e "$HOME/.claude/settings.json" ]
+    [[ "$output" == *"keybindings.json"* ]]
+}
+
+@test "setup.sh --keybinds --newline foo exits 1 and leaves files unchanged (covers: Test-8)" {
+    _keybind_sandbox
+    before="$(cat "$CLAUDE_SETUP_VSCODE_KEYBINDINGS")"
+    run bash "$REPO_ROOT/scripts/setup.sh" --keybinds --newline foo
+    [ "$status" -eq 1 ]
+    [ "$(cat "$CLAUDE_SETUP_VSCODE_KEYBINDINGS")" = "$before" ]
+    [[ "$output" != *"알 수 없는 옵션"* ]]
+}
+
+@test "setup.sh --keybinds does not install hooks or AGENTS.md (covers: Test-6)" {
+    _keybind_sandbox
+    cd "$SANDBOX"
+    run bash "$REPO_ROOT/scripts/setup.sh" --keybinds
+    [ "$status" -eq 0 ]
+    [ ! -f "$HOME/.claude/hooks/danger_guard.py" ]
+    [ ! -f "$SANDBOX/AGENTS.md" ]
+    [ -f "$HOME/.claude/.claude-code-setup.json" ]
+}

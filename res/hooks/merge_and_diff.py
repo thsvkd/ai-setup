@@ -566,6 +566,10 @@ def main() -> int:
                 ),
             }
             manifest.update(fold_receipt(previous, receipt))
+            # 훅이 모르는 섹션(keybinds 등)은 덮지 않는다.
+            for key, value in previous.items():
+                if key not in manifest:
+                    manifest[key] = value
             write_json(manifest_path, manifest)
 
     return 1 if violated else 0

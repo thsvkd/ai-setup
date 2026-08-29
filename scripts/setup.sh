@@ -11,6 +11,8 @@
 #   bash setup.sh                       # 온보딩 → 선택대로 실행
 #   bash setup.sh --hooks                # 훅/권한만 (온보딩 없음)
 #   bash setup.sh --agentsmd             # AGENTS.md만 (온보딩 없음)
+#   bash setup.sh --keybinds             # 줄바꿈 키바인딩만 (온보딩 없음)
+#   bash setup.sh --newline ctrl-enter   # 줄바꿈 키를 Ctrl+Enter 로
 #   bash setup.sh --dry-run              # 미리보기 (전체, 온보딩 없음)
 #   bash setup.sh --no-onboard           # 온보딩을 끄고 예전 기본 동작
 #
@@ -27,7 +29,9 @@ claude-code-setup — Claude Code 사용자 레벨 설정
   (옵션 없음)   대화형 온보딩으로 설치 범위/권한 모드를 고른 뒤 실행
   --hooks       전역 가드 훅 + 권한만 설치 (~/.claude)
   --agentsmd    현재 폴더에 AGENTS.md 만 설치
-  --uninstall   가드 훅 제거 + settings.json 등록 해제 (권한은 보존)
+  --keybinds    줄바꿈 키바인딩만 설치 (VS Code/Cursor/Claude/Codex/tmux)
+  --newline VAL 줄바꿈 키 (shift-enter | ctrl-enter). 기본 shift-enter
+  --uninstall   가드 훅 + 관리 키바인딩 제거 (권한·사용자 항목은 보존)
   --dry-run     아무것도 바꾸지 않고 변경 계획만 출력
   --no-onboard  대화형 온보딩을 띄우지 않고 기본값으로 실행
   --help, -h    이 도움말
@@ -35,6 +39,7 @@ claude-code-setup — Claude Code 사용자 레벨 설정
 온보딩에서 고를 수 있는 것:
   · 설치 범위 (전체 / 가드 훅+권한만 / AGENTS.md만)
   · 권한 모드 (auto / bypassPermissions)
+  · 줄바꿈 키 (Shift+Enter / Ctrl+Enter) — 범위=전체일 때만
   · 기존 AGENTS.md 덮어쓰기 여부 (파일이 이미 있을 때만 물음)
   · 지금 적용할지, 변경 계획(--dry-run)만 먼저 볼지
 EOF
@@ -42,25 +47,47 @@ EOF
 
 RUN_HOOKS=0
 RUN_AGENTSMD=0
+RUN_KEYBINDS=0
 DRY_RUN=0
 UNINSTALL=0
 NO_ONBOARD=0
 # 온보딩이 채우는 값들. 비어 있으면 워커가 각자의 기본값을 쓴다.
 DEFAULT_MODE=""
 FORCE_AGENTSMD=0
+NEWLINE_CHORD=""
+NEWLINE_GIVEN=0
 
 HAD_ARGS=0
-for arg in "$@"; do
-    case "$arg" in
-        --hooks) RUN_HOOKS=1; HAD_ARGS=1 ;;
-        --agentsmd) RUN_AGENTSMD=1; HAD_ARGS=1 ;;
-        --uninstall) UNINSTALL=1; HAD_ARGS=1 ;;
-        --dry-run) DRY_RUN=1; HAD_ARGS=1 ;;
-        --no-onboard) NO_ONBOARD=1; HAD_ARGS=1 ;;
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --hooks) RUN_HOOKS=1; HAD_ARGS=1; shift ;;
+        --agentsmd) RUN_AGENTSMD=1; HAD_ARGS=1; shift ;;
+        --keybinds) RUN_KEYBINDS=1; HAD_ARGS=1; shift ;;
+        --newline)
+            if [[ -z "${2:-}" ]]; then
+                echo "--newline 값은 shift-enter 또는 ctrl-enter 여야 합니다." >&2
+                exit 1
+            fi
+            NEWLINE_CHORD="$2"; NEWLINE_GIVEN=1; HAD_ARGS=1; shift 2 ;;
+        --newline=*) NEWLINE_CHORD="${1#*=}"; NEWLINE_GIVEN=1; HAD_ARGS=1; shift ;;
+        --uninstall) UNINSTALL=1; HAD_ARGS=1; shift ;;
+        --dry-run) DRY_RUN=1; HAD_ARGS=1; shift ;;
+        --no-onboard) NO_ONBOARD=1; HAD_ARGS=1; shift ;;
         --help|-h) print_usage; exit 0 ;;
-        *) echo "알 수 없는 옵션: $arg" >&2; echo ""; print_usage >&2; exit 1 ;;
+        *) echo "알 수 없는 옵션: $1" >&2; echo ""; print_usage >&2; exit 1 ;;
     esac
 done
+
+# 값이 비었는지가 아니라 '플래그가 주어졌는지' 로 판정한다. --newline= 처럼 빈 값을 준 경우도
+# 잘못된 값이며, 조용히 기본값으로 흘려보내면 PowerShell 쪽(-Newline "")과 동작이 갈린다.
+if [[ "$NEWLINE_GIVEN" -eq 1 ]]; then
+    case "$NEWLINE_CHORD" in
+        shift-enter|ctrl-enter) ;;
+        *)
+            echo "--newline 값은 shift-enter 또는 ctrl-enter 여야 합니다 (받은 값: $NEWLINE_CHORD)." >&2
+            exit 1 ;;
+    esac
+fi
 
 resolve_python_command() {
     if command -v python3 &>/dev/null; then
@@ -109,16 +136,24 @@ run_onboarding() {
     # eval 대신 한 줄씩 읽어 아는 키만 받는다.
     local key value
     while IFS='=' read -r key value; do
+        # 답 파일이 CRLF 로 쓰였을 때 값 끝의 CR 이 모든 매칭을 깨뜨린다 (Git Bash + Windows python).
+        # onboard.py 가 LF 를 고정하지만, 여기서도 벗겨서 한쪽만 고쳐도 조용히 깨지지 않게 한다.
+        key="${key%$'\r'}"
+        value="${value%$'\r'}"
         case "$key" in
             SCOPE)
                 case "$value" in
-                    all) RUN_HOOKS=1; RUN_AGENTSMD=1 ;;
+                    all) RUN_HOOKS=1; RUN_AGENTSMD=1; RUN_KEYBINDS=1 ;;
                     hooks) RUN_HOOKS=1 ;;
                     agentsmd) RUN_AGENTSMD=1 ;;
                 esac ;;
             DEFAULT_MODE)
                 case "$value" in
                     auto|bypassPermissions|default|acceptEdits|plan) DEFAULT_MODE="$value" ;;
+                esac ;;
+            NEWLINE_CHORD)
+                case "$value" in
+                    shift-enter|ctrl-enter) NEWLINE_CHORD="$value" ;;
                 esac ;;
             OVERWRITE_AGENTSMD) [[ "$value" == "1" ]] && FORCE_AGENTSMD=1 ;;
             DRY_RUN) [[ "$value" == "1" ]] && DRY_RUN=1 ;;
@@ -142,14 +177,33 @@ MODE_FLAG=()
 FORCE_FLAG=()
 [[ "$FORCE_AGENTSMD" -eq 1 ]] && FORCE_FLAG=(--force)
 
-# uninstall 은 훅 전용 (프로젝트 AGENTS.md 는 사용자 콘텐츠라 건드리지 않음).
+NEWLINE_FLAG=()
+[[ -n "$NEWLINE_CHORD" ]] && NEWLINE_FLAG=(--newline "$NEWLINE_CHORD")
+
+# uninstall: --keybinds --uninstall 은 키바인드만. 아니면 훅 다음 키바인드.
+# exec 하면 키바인드 uninstall 이 실행되지 않는다.
 if [[ "$UNINSTALL" -eq 1 ]]; then
-    exec bash "$SCRIPT_DIR/setup_hooks.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"}
+    if [[ "$RUN_KEYBINDS" -eq 1 ]]; then
+        bash "$SCRIPT_DIR/setup_keybinds.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"}
+        exit $?
+    fi
+    # 키바인드를 '먼저' 지운다. 훅 uninstall 이 매니페스트를 통째로 지우는데, 키바인드 제거는
+    # 그 영수증(tmux_added 등)이 있어야 '우리가 넣은 것' 과 사용자 것을 구분할 수 있다.
+    # set -e 아래라 실패해도 나머지가 돌도록 종료 코드를 받아 둔다.
+    kb_exit=0
+    bash "$SCRIPT_DIR/setup_keybinds.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || kb_exit=$?
+    hooks_exit=0
+    bash "$SCRIPT_DIR/setup_hooks.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || hooks_exit=$?
+    [[ "$hooks_exit" -ne 0 ]] && exit "$hooks_exit"
+    exit "$kb_exit"
 fi
 
-if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 ]]; then
+# 범위 플래그가 하나도 없으면 전체 설치 (훅 + AGENTS.md + 키바인드).
+# --hooks 만 / --agentsmd 만 / --keybinds 만이면 그 범위만.
+if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 && "$RUN_KEYBINDS" -eq 0 ]]; then
     RUN_HOOKS=1
     RUN_AGENTSMD=1
+    RUN_KEYBINDS=1
 fi
 
 if [[ "$RUN_HOOKS" -eq 1 ]]; then
@@ -158,4 +212,8 @@ fi
 
 if [[ "$RUN_AGENTSMD" -eq 1 ]]; then
     bash "$SCRIPT_DIR/setup_agentsmd.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} ${FORCE_FLAG[@]+"${FORCE_FLAG[@]}"}
+fi
+
+if [[ "$RUN_KEYBINDS" -eq 1 ]]; then
+    bash "$SCRIPT_DIR/setup_keybinds.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} ${NEWLINE_FLAG[@]+"${NEWLINE_FLAG[@]}"}
 fi

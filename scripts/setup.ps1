@@ -17,6 +17,8 @@
 param(
     [switch]$Hooks,
     [switch]$AgentsMd,
+    [switch]$Keybinds,
+    [string]$Newline = "",
     [switch]$Uninstall,
     [switch]$DryRun,
     [switch]$NoOnboard,
@@ -37,7 +39,9 @@ claude-code-setup — Claude Code 사용자 레벨 설정
   (옵션 없음)   대화형 온보딩으로 설치 범위/권한 모드를 고른 뒤 실행
   -Hooks        전역 가드 훅 + 권한만 설치 (~/.claude)
   -AgentsMd     현재 폴더에 AGENTS.md 만 설치
-  -Uninstall    가드 훅 제거 + settings.json 등록 해제 (권한은 보존)
+  -Keybinds     줄바꿈 키바인딩만 설치 (VS Code/Cursor/Claude/Codex)
+  -Newline VAL  줄바꿈 키 (shift-enter | ctrl-enter). 기본 shift-enter
+  -Uninstall    가드 훅 + 관리 키바인딩 제거 (권한·사용자 항목은 보존)
   -DryRun       아무것도 바꾸지 않고 변경 계획만 출력
   -NoOnboard    대화형 온보딩을 띄우지 않고 기본값으로 실행
   -Help         이 도움말
@@ -45,6 +49,7 @@ claude-code-setup — Claude Code 사용자 레벨 설정
 온보딩에서 고를 수 있는 것:
   · 설치 범위 (전체 / 가드 훅+권한만 / AGENTS.md만)
   · 권한 모드 (auto / bypassPermissions)
+  · 줄바꿈 키 (Shift+Enter / Ctrl+Enter) — 범위=전체일 때만
   · 기존 AGENTS.md 덮어쓰기 여부 (파일이 이미 있을 때만 물음)
   · 지금 적용할지, 변경 계획(-DryRun)만 먼저 볼지
 "@
@@ -58,7 +63,14 @@ $defaultMode = ""
 $forceAgentsMd = $false
 $runHooks = [bool]$Hooks
 $runAgentsMd = [bool]$AgentsMd
+$runKeybinds = [bool]$Keybinds
 $dryRun = [bool]$DryRun
+$newlineChord = $Newline
+
+if ($PSBoundParameters.ContainsKey("Newline") -and $newlineChord -notin @("shift-enter", "ctrl-enter")) {
+    Write-Host "--Newline 값은 shift-enter 또는 ctrl-enter 여야 합니다 (받은 값: $newlineChord)." -ForegroundColor Red
+    exit 1
+}
 
 function Resolve-PythonForOnboard {
     # Get-Command 존재만으로는 부족하다. Windows 에서 `py` 가 런처가 아니라 python.exe
@@ -116,12 +128,12 @@ function Invoke-Onboarding {
     }
 }
 
-$hadArgs = $Hooks -or $AgentsMd -or $Uninstall -or $DryRun -or $NoOnboard
+$hadArgs = $Hooks -or $AgentsMd -or $Keybinds -or $Uninstall -or $DryRun -or $NoOnboard -or $PSBoundParameters.ContainsKey("Newline")
 if (-not $hadArgs) {
     $answers = Invoke-Onboarding
     if ($answers) {
         switch ($answers["SCOPE"]) {
-            "all"      { $runHooks = $true; $runAgentsMd = $true }
+            "all"      { $runHooks = $true; $runAgentsMd = $true; $runKeybinds = $true }
             "hooks"    { $runHooks = $true }
             "agentsmd" { $runAgentsMd = $true }
         }
@@ -129,20 +141,35 @@ if (-not $hadArgs) {
             $answers["DEFAULT_MODE"] -in @("auto", "bypassPermissions", "default", "acceptEdits", "plan")) {
             $defaultMode = $answers["DEFAULT_MODE"]
         }
+        if ($answers.ContainsKey("NEWLINE_CHORD") -and
+            $answers["NEWLINE_CHORD"] -in @("shift-enter", "ctrl-enter") -and
+            -not $PSBoundParameters.ContainsKey("Newline")) {
+            $newlineChord = $answers["NEWLINE_CHORD"]
+        }
         if ($answers["OVERWRITE_AGENTSMD"] -eq "1") { $forceAgentsMd = $true }
         if ($answers["DRY_RUN"] -eq "1") { $dryRun = $true }
     }
 }
 
-# uninstall 은 훅 전용 (프로젝트 AGENTS.md 는 사용자 콘텐츠라 건드리지 않음).
+# uninstall: -Keybinds -Uninstall 은 키바인드만. 아니면 훅 다음 키바인드.
 if ($Uninstall) {
+    if ($Keybinds) {
+        & (Join-Path $PSScriptRoot "setup_keybinds.ps1") -Uninstall -DryRun:$dryRun
+        exit $LASTEXITCODE
+    }
+    # 키바인드를 '먼저' 지운다. 훅 uninstall 이 매니페스트를 통째로 지우는데, 키바인드 제거는
+    # 그 영수증(tmux_added 등)이 있어야 '우리가 넣은 것' 과 사용자 것을 구분할 수 있다.
+    & (Join-Path $PSScriptRoot "setup_keybinds.ps1") -Uninstall -DryRun:$dryRun
+    $kbExit = $LASTEXITCODE
     & (Join-Path $PSScriptRoot "setup_hooks.ps1") -Uninstall -DryRun:$dryRun
-    exit $LASTEXITCODE
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    exit $kbExit
 }
 
-if (-not ($runHooks -or $runAgentsMd)) {
+if (-not ($runHooks -or $runAgentsMd -or $runKeybinds)) {
     $runHooks = $true
     $runAgentsMd = $true
+    $runKeybinds = $true
 }
 
 if ($runHooks) {
@@ -152,6 +179,13 @@ if ($runHooks) {
 
 if ($runAgentsMd) {
     & (Join-Path $PSScriptRoot "setup_agentsmd.ps1") -DryRun:$dryRun -Force:$forceAgentsMd
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
+if ($runKeybinds) {
+    $kbParams = @{ DryRun = $dryRun }
+    if ($newlineChord) { $kbParams["Newline"] = $newlineChord }
+    & (Join-Path $PSScriptRoot "setup_keybinds.ps1") @kbParams
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 

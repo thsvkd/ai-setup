@@ -25,6 +25,8 @@
 param(
     [switch]$Hooks,
     [switch]$AgentsMd,
+    [switch]$Keybinds,
+    [string]$Newline,
     [switch]$Uninstall,
     [switch]$DryRun,
     [switch]$NoOnboard,
@@ -126,6 +128,8 @@ function Invoke-Install {
     param(
         [switch]$Hooks,
         [switch]$AgentsMd,
+        [switch]$Keybinds,
+        [string]$Newline,
         [switch]$Uninstall,
         [switch]$DryRun,
         [switch]$NoOnboard,
@@ -185,8 +189,16 @@ claude-code-setup 원격 설치 부트스트랩 (Windows)
         # setup_agentsmd 는 현재 작업 디렉터리에 AGENTS.md 를 설치하므로 cwd 를 유지한 채 실행한다.
         # 스위치는 반드시 해시테이블 스플랫으로 넘긴다 (배열 스플랫 @Rest 는 스위치 바인딩 실패).
         $fwd = @{}
-        foreach ($k in 'Hooks', 'AgentsMd', 'Uninstall', 'DryRun', 'NoOnboard') {
+        foreach ($k in 'Hooks', 'AgentsMd', 'Uninstall', 'DryRun', 'NoOnboard', 'Keybinds') {
             if ($PSBoundParameters[$k]) { $fwd[$k] = $true }
+        }
+        if ($PSBoundParameters.ContainsKey('Newline')) {
+            $fwd['Newline'] = $Newline
+        }
+        # 남은 인자는 setup 으로 넘어가지 않는다. 조용히 버리면 오타(-Keybind)가 '전체 설치' 로
+        # 둔갑한다 — POSIX install.sh 는 알 수 없는 옵션에서 exit 1 이므로 여기서도 거절한다.
+        if ($Rest -and $Rest.Count -gt 0) {
+            throw "알 수 없는 옵션: $($Rest -join ' ')"
         }
         & $setup @fwd
     } finally {

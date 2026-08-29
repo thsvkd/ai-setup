@@ -2,10 +2,11 @@
 
 Claude Code를 **더 안전하게** 쓰기 위한 사용자 레벨(user-level) 설정 번들.
 위험한 명령을 자동으로 막거나 휴지통 이동으로 치환하는 **가드 훅**, 합리적인 **권한(permissions)**,
-그리고 프로젝트용 **AGENTS.md**를 Windows / macOS / Linux에 한 번에 설치한다.
+프로젝트용 **AGENTS.md**, 그리고 OS·터미널·에이전트마다 제각각인 **줄바꿈 키**를 Windows / macOS / Linux에 한 번에 설치한다.
 
 - 🛡️ **가드 훅** — `rm`을 휴지통 이동으로 치환, 디스크 포맷·`curl | bash` 등 되돌릴 수 없는 명령을 차단, `git push`는 브랜치 이름으로 판단(곁다리 브랜치는 통과, 보호 브랜치는 확인), `git reset --hard`/`clean`/`stash drop` 등 되돌릴 수 없는 git 명령은 `refs/claude-backups/`에 백업한 뒤 그대로 실행, 시크릿 파일 접근 시 확인 요청
 - 🧩 **외과적 병합** — 권한/훅을 추가하고 `model`·`effortLevel`·`language`는 **없을 때만** 채운다. 사용자가 이미 고른 값과 그 외 키(env, statusLine 등)는 100% 보존
+- ⏎ **줄바꿈 키 통일** — Claude Code / Codex / Grok CLI에서 Shift+Enter(또는 Ctrl+Enter)로 줄을 넣고, Enter는 그대로 전송. VS Code·Cursor 통합 터미널, tmux, Windows Terminal, 에이전트 키맵까지 한 번에 맞춘다
 - 🔁 **멱등성 · dry-run** — 몇 번을 실행해도 안전하고, `--dry-run`으로 실제 적용 전에 바뀔 내용을 미리 확인
 - 🖥️ **크로스 플랫폼** — Windows(PowerShell)와 POSIX(bash) 양쪽을 단일 소스로 관리
 
@@ -45,19 +46,28 @@ irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/
    AGENTS.md 만 (현재 폴더)
 ```
 
-이어서 **권한 모드**(`auto` / `bypassPermissions`), 기존 `AGENTS.md`가 있다면 **덮어쓸지**, 그리고 **지금 적용할지 변경 계획만 먼저 볼지**를 묻는다. `curl … | sh`로 실행해도 프롬프트가 정상 동작한다 — 자세한 사정은 [아래 절](#curl--sh에서-대화형-프롬프트가-동작하는-이유)에 있다.
+이어서 **권한 모드**(`auto` / `bypassPermissions`), **줄바꿈 키**(`Shift+Enter` / `Ctrl+Enter` — 범위가 '전체'일 때만), 기존 `AGENTS.md`가 있다면 **덮어쓸지**, 그리고 **지금 적용할지 변경 계획만 먼저 볼지**를 묻는다. `curl … | sh`로 실행해도 프롬프트가 정상 동작한다 — 자세한 사정은 [아래 절](#curl--sh에서-대화형-프롬프트가-동작하는-이유)에 있다.
 
-플래그를 하나라도 주면 온보딩을 건너뛰고 예전과 똑같이 동작하므로, 기존 자동화 호출은 그대로 쓰면 된다. PowerShell에서 `irm | iex`는 인자를 넘기기 어려우므로, 플래그가 필요하면 아래처럼 `scriptblock` 형태로 감싸서 쓴다.
+플래그를 하나라도 주면 온보딩을 건너뛰고 예전과 똑같이 동작하므로, 기존 자동화 호출은 그대로 쓰면 된다. PowerShell에서 `irm | iex`는 인자를 넘기기 어려우므로, 플래그가 필요하면 `scriptblock` 형태로 감싸서 쓴다:
+
+```powershell
+& ([scriptblock]::Create((irm -Headers @{Authorization="Bearer $(gh auth token)"} `
+    https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -Keybinds -Newline ctrl-enter
+```
 
 | 플래그 (POSIX / PowerShell)  | 동작                                                                                             |
 | ----------------------------- | -------------------------------------------------------------------------------------------------- |
 | (없음)                       | 대화형 온보딩 → 고른 대로 설치 (터미널이 없으면 전체 설치로 폴백)                                 |
 | `--hooks` / `-Hooks`         | 가드 훅 + 권한만 설치 (전역, `~/.claude`)                                                         |
 | `--agentsmd` / `-AgentsMd`   | 현재 폴더에 `AGENTS.md`만 설치                                                                    |
+| `--keybinds` / `-Keybinds`   | 줄바꿈 키바인딩만 설치 (VS Code·Cursor·Claude·Codex·tmux·Windows Terminal)                        |
+| `--newline <값>` / `-Newline <값>` | 줄바꿈 키를 고른다 — `shift-enter`(기본) 또는 `ctrl-enter`                                  |
 | `--dry-run` / `-DryRun`      | 아무것도 바꾸지 않고 변경 계획만 출력                                                             |
 | `--no-onboard` / `-NoOnboard`| 온보딩을 띄우지 않고 기본값(전체 설치)으로 실행                                                   |
 | `--uninstall` / `-Uninstall` | 설치가 추가한 것만 정밀 복원 (아래 참고)                                                          |
 | `--help` / `-Help`           | 도움말                                                                                             |
+
+`--newline`은 다른 플래그와 조합할 수 있다 — `--keybinds --newline ctrl-enter`는 키바인딩만 Ctrl+Enter로, `--no-onboard --newline ctrl-enter`는 전체 설치를 Ctrl+Enter로 한다. 재실행 시 `--newline`을 주지 않으면 매니페스트에 기록된 이전 선택을 그대로 쓰고, 기록이 없으면 `shift-enter`다. 값이 둘 중 하나가 아니면 아무것도 쓰지 않고 종료 코드 1로 끝난다.
 
 온보딩이 직접 쓰는 하위 옵션도 워커에 그대로 열려 있다 — `setup_hooks`의 `--default-mode <모드>`(`auto`/`bypassPermissions`/`default`/`acceptEdits`/`plan`)와 `setup_agentsmd`의 `--force`(기존 `AGENTS.md`를 `.bak.<타임스탬프>`로 백업한 뒤 덮어쓰기)다.
 
@@ -73,7 +83,12 @@ curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN:-$(gh auth token)}" \
   https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --uninstall
 ```
 
-`--uninstall`은 설치 시 기록한 매니페스트(`~/.claude/.claude-code-setup.json`)를 근거로 우리가 추가한 훅·allow/deny 항목·`model`/`effortLevel`/`language`만 제거하고, `defaultMode`를 이전 값으로 원복하며, 설치가 제거했던 구버전 규칙이 있다면 다시 넣어 준다. 사용자가 원래 갖고 있던 설정과 그 외 키는 그대로 보존되며 변경 전 `settings.json.bak.<타임스탬프>`를 남긴다. `settings.json`을 설치가 새로 만든 경우, 되돌린 뒤 비면 파일도 제거한다.
+`--uninstall`은 설치 시 기록한 매니페스트(`~/.claude/.claude-code-setup.json`)를 근거로 우리가 추가한 훅·allow/deny 항목·`model`/`effortLevel`/`language`만 제거하고, `defaultMode`를 이전 값으로 원복하며, 설치가 제거했던 구버전 규칙이 있다면 다시 넣어 준다. 사용자가 원래 갖고 있던 설정과 그 외 키는 그대로 보존되며 변경 전 `settings.json.bak.<타임스탬프>`를 남긴다. `settings.json`을 설치가 새로 만든 경우, 되돌린 뒤 비면 파일도 제거한다. 줄바꿈 키바인딩도 함께 되돌리는데, **무엇을 '우리 것'으로 볼지는 대상마다 다르다.**
+
+- **시그니처로 식별**(VS Code·Cursor·Windows Terminal·Claude·Codex): 명령 + `when` + 시퀀스가 우리가 쓰는 것과 정확히 같은 항목만 제거한다. 이 조합은 이 설치가 만들어내는 형태라, 누가 먼저 넣었든 같은 항목이다 — 예컨대 Claude `/terminal-setup`이 넣어둔 `shift+enter` → `sendSequence` 항목도 제거 대상이다. 시퀀스가 다른 사용자 항목(에디터·노트북의 Shift+Enter, WT에 직접 건 다른 `sendInput`)은 그대로 둔다.
+- **영수증으로만 식별**(tmux): `extended-keys` 같은 줄은 사용자가 직접 쓰는 흔한 설정이라 문자열만 같다고 우리 것이라 볼 수 없다. 매니페스트에 '설치가 넣었다'는 기록이 있는 줄만 지우고, 기록이 없으면 `~/.tmux.conf`를 건드리지 않는다.
+
+Codex의 기존 `ctrl-j` 처럼 우리가 넣지 않은 키는 남는다. 우리 키만 빠져 `insert_newline`이 비면 그 줄과 빈 `[tui.keymap.editor]` 테이블까지 지운다 — 빈 배열을 남기면 설치 전에 없던 '줄바꿈 전면 언바인드'라는 새 설정을 만드는 셈이기 때문이다. `--keybinds --uninstall`이면 키바인딩만 제거하고 훅은 건드리지 않는다.
 
 레포를 clone해서 로컬로 실행할 수도 있다:
 
@@ -93,8 +108,38 @@ bash scripts/setup.sh --dry-run   # 또는 .\scripts\setup.ps1 -DryRun
 | `~/.claude/hooks/send_to_trash.py` | (Windows) 휴지통 이동 헬퍼                                                           |
 | `~/.claude/settings.json`          | 권한 + PreToolUse 훅 등록 + `model`/`effortLevel`/`language`·`env.CLAUDE_CODE_SCROLL_SPEED` 기본값(없을 때만) |
 | `./AGENTS.md`                      | (`--agentsmd` 시) 현재 폴더에 프로젝트 워크플로 규칙 — 이미 있으면 건너뜀 (`--force`면 백업 후 덮어쓰기) |
+| `~/.claude/keybindings.json`       | (줄바꿈 키) Claude Code의 `Chat` 컨텍스트에 고른 키 → `chat:newline`                     |
+| `~/.codex/config.toml`             | (줄바꿈 키) `[tui.keymap.editor] insert_newline`에 고른 키를 **합집합**으로 추가         |
+| VS Code / Cursor `keybindings.json` | (줄바꿈 키) 통합 터미널(`when: terminalFocus`)에 고른 키 → `sendSequence`. 경로는 OS별 — Windows `%APPDATA%\Code\User\`, macOS `~/Library/Application Support/Code/User/`, Linux `~/.config/Code/User/` |
+| `~/.tmux.conf`                     | (줄바꿈 키, POSIX) `extended-keys on` + `terminal-features …extkeys` — 없을 때만 추가    |
+| Windows Terminal `settings.json`   | (줄바꿈 키, `ctrl-enter`를 고른 경우만) `Ctrl+Enter` → `sendInput`                        |
 
 `settings.json`에는 `permissions.defaultMode: "auto"`, 핵심 툴 `allow`(`Bash`, `PowerShell`, `Read(*)`, `Edit(*)`, `Write(*)`, `Agent(*)`, `WebFetch(*)` 등), `ask`(위험 스킬만 — git 관련 규칙은 없음), `hooks.PreToolUse` 등록, 그리고 없을 때만 채우는 `model: "opus"` / `effortLevel: "xhigh"` / `language: "korean"` 과 `env.CLAUDE_CODE_SCROLL_SPEED: "3"`(마우스 휠 스크롤 속도, `/scroll-speed` 대응)이 병합된다. git 관련 deny/ask를 `permissions`에 두지 않는 이유와 그 대가는 [아래 절](#git-정책을-permissions가-아니라-훅이-담당하는-이유-그리고-그-대가)에서 설명한다. 사용자가 이미 고른 값과 그 외 최상위 키(`statusLine` 등), 그리고 사용자의 기존 `env` 키/값은 건드리지 않는다(우리가 관리하는 `env` 키만 없을 때 추가). 단일 소스는 [`res/settings.json`](res/settings.json)이며, 설치 시 python 실행 명령과 훅 경로만 치환된다.
+
+---
+
+## 줄바꿈 키
+
+CLI 에이전트의 프롬프트에서 **줄을 넣고 전송하지 않는** 키를 세 OS에서 같은 의미로 만든다. 값은 `shift-enter`(기본) 또는 `ctrl-enter` 하나다. **Enter 단독은 계속 전송**이고, 고르지 않은 쪽 수정 Enter는 각 에이전트 기본값 그대로 둔다.
+
+대상은 Claude Code CLI · Codex CLI · Grok Build CLI다. Gemini CLI와 Cursor/VS Code의 IDE 챗 입력창은 범위 밖이다(그쪽은 이미 Shift+Enter가 줄바꿈이다).
+
+### 두 층으로 맞춘다
+
+1. **터미널 층** — Shift+Enter를 Enter와 구분하지 못하는 터미널(VS Code·Cursor 통합 터미널)에 `고른 키 → 줄바꿈 시퀀스` 바인딩을 넣는다. 시퀀스는 `ESC` + `CR` (바이트 `0x1B 0x0D`) 하나로 고정돼 있고, `when`은 `terminalFocus`만 걸어 에디터·노트북의 Shift+Enter는 건드리지 않는다. POSIX에서는 `~/.tmux.conf`에 `extended-keys`가 없을 때만 추가한다 — 이게 꺼져 있으면 tmux가 수정 Enter를 통째로 삼킨다.
+2. **에이전트 층** — Claude `~/.claude/keybindings.json`의 `Chat` 컨텍스트에 `chat:newline`을, Codex `~/.codex/config.toml`의 `insert_newline`에 고른 키를 **합집합**으로 넣는다. Grok은 키맵을 리맵할 수 없으므로 파일을 만들지 않는다 — 터미널이 보내는 시퀀스에만 의존한다.
+
+Windows Terminal·iTerm2·Ghostty·Kitty·WezTerm 같은 터미널은 Shift+Enter를 이미 Enter와 다르게 보낸다. 여기에 Shift+Enter 시퀀스를 **덧붙이면 줄바꿈이 두 번** 생기므로, `shift-enter`를 고른 경우 Windows Terminal에는 줄바꿈 바인딩을 **넣지 않는다**(이전 설치가 넣어둔 관리 항목이 있으면 그것만 정리한다). `ctrl-enter`를 고른 경우에만 `Ctrl+Enter` 번역을 넣는다.
+
+### 파일을 어떻게 고치나
+
+바꾸기 전 원본을 `<파일>.bak.<타임스탬프>`로 남기고, 임시 파일에 쓴 뒤 교체한다 — 쓰기 도중 끊겨도 원본이 반쯤 잘리지 않는다. `keybindings.json`은 파싱 후 다시 직렬화하므로 **파일 안의 주석과 들여쓰기 서식은 사라진다**(설정 값과 항목은 전부 보존된다). VS Code가 허용하는 트레일링 콤마는 우리도 읽는다. 그래도 읽지 못한 대상이 있으면 그 사실을 목록으로 알리고 **0이 아닌 종료 코드**로 끝낸다 — 적용되지 않았는데 '완료'라고 말하지 않기 위해서다.
+
+### 안 되는 것
+
+- **gnome-terminal 등 Shift+Enter를 구분하지 못하는 터미널** — 로컬 세션에서는 맞출 수 없다. 설치는 실패하지 않고 경고만 남긴다. Linux는 로컬 gnome-terminal 대신 Windows Terminal/Cursor에서 `ssh`로 붙는 경로를 쓰면 그대로 동작한다.
+- **Grok의 `/multiline`(`/ml`, `Ctrl+M`) 모드** — 이 토글이 켜지면 Enter와 Shift+Enter의 의미가 **반대**가 된다(Enter=줄바꿈, Shift+Enter=전송). Grok은 키를 리맵할 수 없어 이 상태를 Claude/Codex와 한 키로 맞추는 것이 불가능하다. 설치기는 그 토글을 켜거나 끄지 않고 리포트에 한 줄 경고만 한다. 기준은 **Grok 기본 프롬프트(multiline 꺼짐)** 다.
+- **에이전트가 아예 없을 때** — 바이너리와 설정 디렉터리가 **둘 다** 없으면 그 에이전트는 건너뛰고 설치는 성공한다. 하나라도 있으면 키맵을 쓴다.
 
 ---
 
@@ -240,6 +285,8 @@ res/
   settings.json             # 실제 settings.json 조각 (SSoT, {{PY}}·{{HOOKS_DIR}} 자리표시자)
   onboard.py                # 대화형 온보딩 TUI (인자 없이 실행할 때만 뜸)
   vendor/                   # 온보딩 의존성 (questionary·prompt_toolkit·wcwidth, 벤더링)
+  keybinds/
+    apply.py                # 줄바꿈 키바인딩 외과적 병합 (VS Code·Cursor·Claude·Codex·WT·tmux)
   hooks/
     danger_guard.windows.py # Windows용 (Bash + PowerShell)
     danger_guard.posix.py   # macOS/Linux용 (Bash)
@@ -250,6 +297,7 @@ scripts/
   setup.{ps1,sh}            # CLI 디스패처 (엔트리포인트)
   setup_hooks.{ps1,sh}      # 가드 훅 + 권한 설치 / uninstall 워커
   setup_agentsmd.{ps1,sh}   # AGENTS.md 설치 워커
+  setup_keybinds.{ps1,sh}   # 줄바꿈 키바인딩 설치 / uninstall 워커
   test.{ps1,sh}             # 테스트 러너 (pytest + bats + Pester 통합 실행)
   lib/                      # 공용 오케스트레이션 함수
 install.{ps1,sh}            # 원격 설치 부트스트랩 (curl | sh / irm | iex)

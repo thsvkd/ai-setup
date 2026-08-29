@@ -9,6 +9,8 @@ scripts/setup.sh (와 setup.ps1) 가 **인자 없이** 호출됐을 때만 실�
 
   SCOPE=all|hooks|agentsmd     설치 범위
   DEFAULT_MODE=auto|bypassPermissions
+  NEWLINE_CHORD=shift-enter|ctrl-enter
+                               줄바꿈 키 (SCOPE=all 일 때만 기록)
   OVERWRITE_AGENTSMD=0|1       기존 AGENTS.md 를 덮어쓸지
   DRY_RUN=0|1                  실제 적용 전에 변경 계획만 볼지
 
@@ -182,6 +184,23 @@ def ask_all(questionary, project_dir):
             print("     훅이 판단하지 않는 명령은 확인 없이 실행됩니다.")
             print("")
 
+    # 줄바꿈 키는 전체 설치에만 포함된다. 훅/AGENTS.md 단독 범위에서는 묻지 않는다.
+    if scope == SCOPE_ALL:
+        chord = questionary.select(
+            "줄바꿈 키는 어떤 조합으로 할까요?",
+            choices=[
+                questionary.Choice(
+                    "Shift+Enter — 줄을 넣고 전송하지 않음 (기본)", value="shift-enter"
+                ),
+                questionary.Choice("Ctrl+Enter — 줄을 넣고 전송하지 않음", value="ctrl-enter"),
+            ],
+            style=style,
+            instruction="(↑↓ 이동, Enter 선택)",
+        ).ask()
+        if chord is None:
+            return None
+        answers["NEWLINE_CHORD"] = chord
+
     # AGENTS.md 는 프로젝트별로 손보는 파일이라 기본이 '건너뛰기'다. 이미 있을 때만 묻는다.
     if scope in (SCOPE_ALL, SCOPE_AGENTSMD):
         target = os.path.join(project_dir, "AGENTS.md")
@@ -212,8 +231,11 @@ def ask_all(questionary, project_dir):
 
 
 def write_answers(out_path, answers):
+    # newline="\n" 을 고정한다. Windows python 은 기본 텍스트 모드에서 \n 을 \r\n 으로 바꾸는데,
+    # 이 파일을 읽는 setup.sh 의 `read` 는 CR 을 값에 그대로 남긴다. 그러면 SCOPE·NEWLINE_CHORD 는
+    # 물론 DRY_RUN=1 도 매칭에 실패해서, 미리보기를 고른 사용자에게 실제 쓰기가 일어난다.
     lines = ["%s=%s\n" % (k, v) for k, v in answers.items()]
-    with open(out_path, "w", encoding="utf-8") as f:
+    with open(out_path, "w", encoding="utf-8", newline="\n") as f:
         f.writelines(lines)
 
 
