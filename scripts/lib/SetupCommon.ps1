@@ -18,13 +18,20 @@ function Resolve-PythonCommand {
     $candidates = @(
         @{ Exe = "python";  Args = @() },
         @{ Exe = "python3"; Args = @() },
-        @{ Exe = "py";      Args = @("-3") }
+        @{ Exe = "py";      Args = @("-3") },
+        @{ Exe = "py";      Args = @() }   # 런처가 아닌 py.exe (= CPython) 는 -3 을 모른다
     )
     foreach ($c in $candidates) {
         $cmd = Get-Command $c.Exe -ErrorAction SilentlyContinue
         if ($cmd) {
-            & $c.Exe @($c.Args) -c "print(1)" *> $null
-            if ($LASTEXITCODE -eq 0) {
+            $ok = $false
+            try {
+                & $c.Exe @($c.Args) -c "print(1)" *> $null
+                $ok = ($LASTEXITCODE -eq 0)
+            } catch {
+                $ok = $false
+            }
+            if ($ok) {
                 return @{ Exe = $c.Exe; Args = $c.Args }
             }
         }

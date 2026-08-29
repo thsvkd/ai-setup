@@ -156,6 +156,93 @@ Describe "네이티브 명령 오류 승격 방어 회귀 (S1)" {
     }
 }
 
+# 온보딩은 인자 없이 실행할 때만 파이썬을 찾는다. Windows 런처 `py -3` 을 Get-Command 존재만으로
+# 고르면, `py` 가 실제로는 python.exe(또는 python.exe 와 같은 바이너리)인 머신에서
+# `Unknown option: -3` 이 stderr 로 나오고, Windows PowerShell 5.1 은 그걸 NativeCommandError
+# 로 승격시켜 설치 전체가 죽는다 (실측: setup.ps1:95). pwsh 7 은 *> $null 로 삼키고 온보딩만
+# 건너뛰므로, 이 회귀는 5.1 로 돌려야 사용자 증상을 재현한다.
+#
+# python 이 PATH 에 남아 있으면 리졸버가 py 보다 python 을 먼저 고르므로 스텁이 실행되지 않는다.
+# 그래서 python/python3 은 실패 스텁으로 가리고, py.cmd 만 -3 을 거부한 뒤 나머지 인자는 진짜
+# 인터프리터로 넘긴다 — try/catch 와 `py` 빈 Args 후보가 둘 다 실제로 밟힌다.
+Describe "온보딩 파이썬 탐지 (py -3 NativeCommandError 회귀)" {
+    BeforeEach {
+        $script:realPython = (Get-Command python -CommandType Application -ErrorAction SilentlyContinue).Source
+        $script:sandbox = Join-Path $env:TEMP ("cc-pester-py3-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        New-Item -ItemType Directory -Force -Path $script:sandbox | Out-Null
+        $script:stub = Join-Path $script:sandbox "stubbin"
+        New-Item -ItemType Directory -Force -Path $script:stub | Out-Null
+        Set-Content -Path (Join-Path $script:stub "python.cmd") -Value "@echo off`r`nexit /b 1" -Encoding ascii
+        Set-Content -Path (Join-Path $script:stub "python3.cmd") -Value "@echo off`r`nexit /b 1" -Encoding ascii
+        if ($script:realPython) {
+            $pyCmd = @(
+                "@echo off",
+                "if `"%~1`"==`"-3`" (",
+                "  echo Unknown option: -3 1>&2",
+                "  exit /b 2",
+                ")",
+                "`"$($script:realPython)`" %*"
+            ) -join "`r`n"
+            Set-Content -Path (Join-Path $script:stub "py.cmd") -Value $pyCmd -Encoding ascii
+        }
+
+        $script:oldUP = $env:USERPROFILE
+        $script:oldHome = $env:HOME
+        $script:oldApp = $env:APPDATA
+        $script:oldLocal = $env:LOCALAPPDATA
+        $script:oldPath = $env:PATH
+        $script:oldCI = $env:CI
+        $script:oldLoc = Get-Location
+        $script:oldVs = $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS
+        $script:oldCur = $env:CLAUDE_SETUP_CURSOR_KEYBINDINGS
+        $script:oldWt = $env:CLAUDE_SETUP_WT_SETTINGS
+        $env:USERPROFILE = $script:sandbox
+        $env:HOME = $script:sandbox
+        $env:APPDATA = Join-Path $script:sandbox "appdata"
+        $env:LOCALAPPDATA = Join-Path $script:sandbox "local"
+        $env:CI = "1"
+        New-Item -ItemType Directory -Force -Path $env:APPDATA | Out-Null
+        New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA | Out-Null
+        $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS = Join-Path $script:sandbox "vscode-keybindings.json"
+        $env:CLAUDE_SETUP_CURSOR_KEYBINDINGS = Join-Path $script:sandbox "cursor-keybindings.json"
+        $env:CLAUDE_SETUP_WT_SETTINGS = Join-Path $script:sandbox "wt-settings.json"
+        Set-Content -Path $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS -Value '[]' -Encoding utf8
+        Set-Content -Path $env:CLAUDE_SETUP_CURSOR_KEYBINDINGS -Value '[]' -Encoding utf8
+        Set-Content -Path $env:CLAUDE_SETUP_WT_SETTINGS -Value '{"actions":[]}' -Encoding utf8
+        $env:PATH = "$($script:stub);$($script:oldPath)"
+        Set-Location $script:sandbox
+    }
+    AfterEach {
+        Set-Location $script:oldLoc
+        $env:USERPROFILE = $script:oldUP
+        $env:PATH = $script:oldPath
+        if ($null -eq $script:oldCI) { Remove-Item Env:CI -ErrorAction SilentlyContinue } else { $env:CI = $script:oldCI }
+        if ($null -eq $script:oldHome) { Remove-Item Env:HOME -ErrorAction SilentlyContinue } else { $env:HOME = $script:oldHome }
+        if ($null -eq $script:oldApp) { Remove-Item Env:APPDATA -ErrorAction SilentlyContinue } else { $env:APPDATA = $script:oldApp }
+        if ($null -eq $script:oldLocal) { Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue } else { $env:LOCALAPPDATA = $script:oldLocal }
+        if ($null -eq $script:oldVs) { Remove-Item Env:CLAUDE_SETUP_VSCODE_KEYBINDINGS -ErrorAction SilentlyContinue } else { $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS = $script:oldVs }
+        if ($null -eq $script:oldCur) { Remove-Item Env:CLAUDE_SETUP_CURSOR_KEYBINDINGS -ErrorAction SilentlyContinue } else { $env:CLAUDE_SETUP_CURSOR_KEYBINDINGS = $script:oldCur }
+        if ($null -eq $script:oldWt) { Remove-Item Env:CLAUDE_SETUP_WT_SETTINGS -ErrorAction SilentlyContinue } else { $env:CLAUDE_SETUP_WT_SETTINGS = $script:oldWt }
+        Remove-Item -Recurse -Force $script:sandbox -ErrorAction SilentlyContinue
+    }
+
+    It "powershell.exe 5.1 에서 py -3 이 Unknown option 이어도 빈 Args 로 넘어가 설치가 산다" -Skip:(-not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) {
+        if (-not $script:realPython) {
+            Set-ItResult -Skipped -Because "PATH 에 진짜 python 이 있어야 스텁 py 가 -3 이외를 위임할 수 있음"
+            return
+        }
+        $out = powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script:Setup 2>&1 | Out-String
+        # 온보딩 리졸버가 py.cmd 를 고르면 이후 셀프테스트의 Process.Start('py') 는
+        # .cmd 를 찾지 못해 실패할 수 있다. 이 케이스가 잠그는 건 그 셀프테스트가 아니라
+        # 'py -3 NativeCommandError 로 setup.ps1 이 즉시 죽는가' 이므로, 훅 파일이 남았는지와
+        # NativeCommandError 부재로 판정한다.
+        $out | Should -Not -Match "NativeCommandError" -Because "py -3 실패는 try/catch 로 삼키고 다음 후보로 넘어가야 함"
+        $out | Should -Not -Match "Python을 찾을 수 없습니다"
+        Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $true `
+            -Because "원래 크래시는 훅 설치 전에 죽었음. 파일이 남으면 온보딩 탐지가 산 것"
+    }
+}
+
 # 온보딩(res/onboard.py)은 인자 없이 실행할 때만 뜬다. 여기서 지키려는 건 두 가지다:
 # 콘솔이 없을 때 아무것도 골라버리지 않을 것, 그리고 기존 플래그 호출이 멈추지 않을 것.
 Describe "온보딩 연결" {

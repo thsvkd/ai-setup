@@ -61,9 +61,27 @@ $runAgentsMd = [bool]$AgentsMd
 $dryRun = [bool]$DryRun
 
 function Resolve-PythonForOnboard {
-    foreach ($candidate in @(@{ Exe = "py"; Args = @("-3") }, @{ Exe = "python"; Args = @() }, @{ Exe = "python3"; Args = @() })) {
-        $cmd = Get-Command $candidate.Exe -ErrorAction SilentlyContinue
-        if ($cmd) { return $candidate }
+    # Get-Command 존재만으로는 부족하다. Windows 에서 `py` 가 런처가 아니라 python.exe
+    # 자체이면 `py -3` 이 "Unknown option: -3" 을 stderr 로 내고, PS 5.1 은 그걸
+    # NativeCommandError 로 승격시켜 설치가 죽는다. 각 후보를 실제로 실행해 3.8+ 인지
+    # 확인하고, 실패하면 다음 후보로 넘어간다. 순서는 SetupCommon.Resolve-PythonCommand
+    # 와 같다 (python → python3 → py -3 → py).
+    $candidates = @(
+        @{ Exe = "python";  Args = @() },
+        @{ Exe = "python3"; Args = @() },
+        @{ Exe = "py";      Args = @("-3") },
+        @{ Exe = "py";      Args = @() }   # 런처가 아닌 py.exe (= CPython) 는 -3 을 모른다
+    )
+    foreach ($c in $candidates) {
+        if (-not (Get-Command $c.Exe -ErrorAction SilentlyContinue)) { continue }
+        $ok = $false
+        try {
+            & $c.Exe @($c.Args) -c "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)" *> $null
+            $ok = ($LASTEXITCODE -eq 0)
+        } catch {
+            $ok = $false
+        }
+        if ($ok) { return $c }
     }
     return $null
 }
@@ -77,11 +95,6 @@ function Invoke-Onboarding {
 
     $py = Resolve-PythonForOnboard
     if (-not $py) { return $null }
-
-    # python 이 2.x 면 onboard.py 는 파싱 단계에서 SyntaxError 로 죽고, 그 traceback 이
-    # 그대로 사용자에게 보여 설치가 실패한 것처럼 읽힌다. 먼저 조용히 걸러낸다.
-    & $py.Exe @($py.Args) -c "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)" *> $null
-    if ($LASTEXITCODE -ne 0) { return $null }
 
     $answersPath = [System.IO.Path]::GetTempFileName()
     try {
