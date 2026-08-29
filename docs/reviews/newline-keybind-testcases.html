@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>줄바꿈 키 통일 — 테스트 케이스 검수</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --card: #ffffff;
+      --ink: #1c1f26;
+      --muted: #5c6570;
+      --line: #e3e6eb;
+      --accent: #2b6cb0;
+      --ok: #2f6f4e;
+      --ok-bg: #e7f6ee;
+      --bad: #9b2c2c;
+      --bad-bg: #fdecec;
+      --warn: #8a5a00;
+      --warn-bg: #fff6e5;
+      --chip: #eef3f8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 16px/1.55 "Segoe UI", "Pretendard", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    header {
+      position: sticky; top: 0; z-index: 5;
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+      padding: 16px 24px;
+    }
+    header h1 { margin: 0 0 6px; font-size: 1.25rem; }
+    header p { margin: 0; color: var(--muted); font-size: 0.95rem; }
+    main { max-width: 980px; margin: 0 auto; padding: 24px; }
+    section {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 18px 20px;
+      margin-bottom: 16px;
+    }
+    h2 { margin: 0 0 12px; font-size: 1.05rem; }
+    ul.decisions { margin: 0; padding-left: 1.2em; }
+    ul.decisions li { margin: 6px 0; }
+    .toolbar {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      margin-bottom: 12px;
+    }
+    .chip {
+      background: var(--chip); border-radius: 999px; padding: 4px 10px;
+      font-size: 0.85rem; color: var(--muted);
+    }
+    button {
+      border: 1px solid var(--line); background: #fff; border-radius: 8px;
+      padding: 6px 10px; cursor: pointer; font: inherit;
+    }
+    button:hover { border-color: var(--accent); color: var(--accent); }
+    .case {
+      border-top: 1px solid var(--line);
+      padding: 12px 0;
+    }
+    .case:first-of-type { border-top: none; }
+    .case-head {
+      display: flex; gap: 10px; align-items: flex-start;
+    }
+    .id {
+      font-weight: 700; color: var(--accent); white-space: nowrap;
+      min-width: 4.6rem;
+    }
+    .verdict {
+      display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap;
+    }
+    .verdict label {
+      display: flex; align-items: center; gap: 4px;
+      font-size: 0.9rem; padding: 3px 8px; border-radius: 6px;
+      border: 1px solid var(--line); cursor: pointer; background: #fff;
+    }
+    .verdict label.ok input:checked + span { color: var(--ok); }
+    .verdict label.bad input:checked + span { color: var(--bad); }
+    .verdict label.edit input:checked + span { color: var(--warn); }
+    textarea {
+      width: 100%; margin-top: 8px; min-height: 52px;
+      border: 1px solid var(--line); border-radius: 8px;
+      padding: 8px; font: inherit; display: none;
+    }
+    .case.has-note textarea { display: block; }
+    .gate {
+      position: sticky; bottom: 0;
+      background: #fff; border-top: 1px solid var(--line);
+      padding: 14px 24px;
+    }
+    .gate inner, .gate .row {
+      max-width: 980px; margin: 0 auto;
+      display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+      justify-content: space-between;
+    }
+    .counts span { margin-right: 10px; font-size: 0.95rem; }
+    .ok-pill { color: var(--ok); }
+    .bad-pill { color: var(--bad); }
+    .wait-pill { color: var(--muted); }
+    .banner { padding: 10px 12px; border-radius: 8px; margin-top: 10px; }
+    .banner.ready { background: var(--ok-bg); color: var(--ok); }
+    .banner.block { background: var(--bad-bg); color: var(--bad); }
+    .banner.wait { background: var(--warn-bg); color: var(--warn); }
+    code { font-family: ui-monospace, Consolas, monospace; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>줄바꿈 키 통일 — 테스트 케이스 검수</h1>
+    <p>이 목록이 통과하면 완료다. 빠진 케이스가 있으면 표시해 달라. 코드는 아직 없다 (R1).</p>
+  </header>
+  <main>
+    <section>
+      <h2>잠긴 결정</h2>
+      <ul class="decisions">
+        <li>대상: Claude Code, Codex, Grok CLI. Gemini·IDE 챗창 제외.</li>
+        <li>줄바꿈 키: 온보딩에서 Shift+Enter / Ctrl+Enter 중 선택. 기본·비대화형은 Shift+Enter.</li>
+        <li>Enter는 전송. 고르지 않은 수정 Enter는 건드리지 않음.</li>
+        <li>전체 설치에 포함 + <code>--keybinds</code>. <code>--hooks</code>에는 안 넣음. 온보딩은 SCOPE=all일 때만 물음.</li>
+        <li>Linux 실측: 로컬 gnome-terminal이 아니라 SSH (WT/Cursor → linux-host). gnome-terminal은 경고만.</li>
+        <li>Grok은 키 리맵 불가 → 터미널 시퀀스에 의존. <code>/multiline</code>은 범위 밖(켜면 Enter↔Shift+Enter가 반대). 설치기는 그 토글을 건드리지 않고 경고만 한다.</li>
+        <li>테스트 코드는 격리 HOME + APPDATA 픽스처만. 특정 SSH 호스트·실제 TUI 창은 Test-N이 아니다.</li>
+      </ul>
+    </section>
+
+    <section>
+      <div class="toolbar">
+        <span class="chip" id="progress">0 / 0 충분</span>
+        <button type="button" data-mark="ok">남은 항목 전부 충분</button>
+        <button type="button" id="reset">표시 초기화</button>
+        <button type="button" id="export">검수 메모 복사</button>
+      </div>
+      <p style="margin:0;color:var(--muted);font-size:0.92rem;">
+        각 케이스에 충분 / 빠짐 / 수정 필요를 고른다. 수정·빠짐이면 메모를 적는다.
+      </p>
+    </section>
+
+    <section data-group="A">
+      <h2>A. CLI · 온보딩</h2>
+    </section>
+    <section data-group="B">
+      <h2>B. 파일 · 스킵</h2>
+      <p style="margin-top:-6px;color:var(--muted);font-size:0.92rem;">
+        “줄바꿈 설치 결과(C)”는 VS Code·Cursor·Claude·Codex·WT 픽스처를 한 묶음으로 본다.
+        파일이 맞다고 TUI가 줄바꿈된다고 말하지 않는다.
+      </p>
+    </section>
+
+    <section>
+      <h2>R3 실측 — 테스트 코드로 작성하지 않음</h2>
+      <p style="margin:0 0 8px;color:var(--muted);font-size:0.92rem;">
+        이 작업 환경(현재 Windows, <code>ssh linux-host</code>, <code>ssh mac-host</code>)에서만 가능한 확인이다.
+        CI나 다른 개발 머신에서 실패하는 테스트가 되므로 Test-N이 아니다. R3 증거 번들로만 남긴다.
+      </p>
+      <ul class="decisions">
+        <li>Windows Terminal + Claude / Codex / Grok: 고른 키 줄바꿈, Enter 전송</li>
+        <li>Cursor 통합 터미널 + 위 세 에이전트: 동일</li>
+        <li>SSH 원격 에이전트(linux-host, mac-host): 로컬 터미널에서 고른 키가 줄바꿈</li>
+        <li>Ctrl+Enter 선택 설치 후 세 에이전트에서 Ctrl+Enter 줄바꿈</li>
+        <li>Shift+Enter 선택 후 Grok Ctrl+Enter 기본 유지, Claude/Codex Ctrl+J 폴백 유지</li>
+        <li>Grok <code>/multiline</code> 켠 상태는 맞추지 않음 (키가 반대인 것이 정상)</li>
+      </ul>
+    </section>
+  </main>
+
+  <div class="gate">
+    <div class="row">
+      <div class="counts" id="counts"></div>
+    </div>
+    <div class="row">
+      <div class="banner wait" id="banner">모든 케이스를 표시해야 이 게이트를 닫을 수 있다.</div>
+    </div>
+  </div>
+
+  <script>
+    const CASES = [
+      ["A", "Test-1", "인자 없는 온보딩, SCOPE=all이면 권한 모드 다음·적용 여부 전에 줄바꿈 키를 Shift+Enter / Ctrl+Enter 중 고른다. 기본 선택은 Shift+Enter. 답 파일에 `NEWLINE_CHORD=shift-enter|ctrl-enter`."],
+      ["A", "Test-2", "SCOPE=hooks 또는 agentsmd이면 묻지 않고 키바인딩을 설치하지 않는다."],
+      ["A", "Test-3", "온보딩에서 Ctrl+Enter를 고르면 줄바꿈 설치 결과(ctrl-enter)다 (VS Code·Cursor·Claude·Codex·WT 픽스처 한 묶음)."],
+      ["A", "Test-4", "온보딩 Ctrl+C → 종료 130, 키바인드 포함 아무 파일도 쓰지 않는다."],
+      ["A", "Test-5", "TTY 없음/CI → 온보딩 생략, 전체 설치는 줄바꿈 설치 결과(shift-enter)."],
+      ["A", "Test-6", "`--keybinds` / `-Keybinds`는 키바인딩만 설치하고 훅·AGENTS.md는 건드리지 않는다. 훅이 없어도 매니페스트를 만든다."],
+      ["A", "Test-7", "`--keybinds --newline ctrl-enter`와 `--newline shift-enter`는 각각 줄바꿈 설치 결과(C). `--no-onboard --newline ctrl-enter` 전체 설치도 ctrl-enter 결과다."],
+      ["A", "Test-8", "`--newline` 허용 값이 아니면 exit 1, 대상 파일 불변."],
+      ["A", "Test-9", "`--hooks`, `--agentsmd`, `--hooks --newline ctrl-enter`는 키바인드 대상 파일을 쓰지 않는다."],
+      ["A", "Test-10", "`--keybinds --dry-run`은 쓰지 않고, 계획에 키바인드 대상 경로가 보인다."],
+      ["A", "Test-11", "온보딩 스킵 전체 설치 = 훅 + AGENTS.md + 줄바꿈 설치 결과(shift-enter)."],
+      ["A", "Test-12", "`setup.sh --uninstall`은 훅과 관리 키바인드를 제거한다. `--keybinds --uninstall`은 키바인드만. 사용자 원래 항목은 남긴다."],
+      ["A", "Test-13", "두 번 설치해도 관리 바인딩이 늘지 않는다. 동일 바인딩이 있어도 재추가하지 않는다. 영수증이 비지 않는다."],
+      ["A", "Test-14", "재실행에 `--newline`이 없으면 매니페스트의 이전 선택. `--keybinds`만으로도 기록이 된다. 없으면 Shift+Enter."],
+      ["A", "Test-15", "`setup.sh --help`와 `setup.ps1 -Help`에 `--keybinds`/`-Keybinds`와 `--newline`이 보인다."],
+      ["A", "Test-16", "한 코드로 설치한 뒤 다른 `--newline`으로 재실행하면 관리 바인딩이 교체된다. 이전 코드 항목이 남지 않는다."],
+      ["A", "Test-17", "`install.ps1`이 `-Keybinds`와 `-Newline` 값을 setup까지 전달한다."],
+      ["B", "Test-18", "VS Code/Cursor 픽스처의 기존 다른 키바인딩은 설치 후에도 그대로다."],
+      ["B", "Test-19", "기존 Claude `keybindings.json`이면 Chat에 고른 키 → `chat:newline`만 합치고 나머지는 보존한다."],
+      ["B", "Test-20", "Codex 다른 키/테이블 보존, `insert_newline`에 고른 키 합집합, 기존 `ctrl-j` 등 삭제 금지."],
+      ["B", "Test-21", "Grok 설정 디렉터리가 있어도 키맵 파일을 만들지 않는다. multiline 관련 키를 쓰거나 지우지 않는다."],
+      ["B", "Test-22", "바이너리와 설정 디렉터리가 둘 다 없으면 skip, exit 0. 하나만 있으면 skip하지 않고 키맵을 쓴다."],
+      ["B", "Test-23", "tmux.conf에 extended-keys / extkeys terminal-features가 없으면 추가, 있으면 중복하지 않는다."],
+      ["B", "Test-24", "불가 터미널 감지는 픽스처로 주입. 설치는 실패하지 않고 경고. 실제 gnome-terminal 불필요."],
+      ["B", "Test-25", "관리 바인딩 `when`은 `terminalFocus`를 포함한다. 에디터/노트북 Shift+Enter 바인딩은 그대로다."],
+      ["B", "Test-26", "격리 WT 픽스처: Shift+Enter면 sendInput 없음, Ctrl+Enter면 SSoT 시퀀스. iTerm2 등 다른 에뮬레이터 파일은 만들지 않는다."],
+      ["B", "Test-27", "WT settings.json 대상 파일이 없으면 WT skip, exit 0."]
+    ];
+
+    const KEY = "newline-keybind-review-v2";
+    const state = JSON.parse(localStorage.getItem(KEY) || "{}");
+
+    function save() { localStorage.setItem(KEY, JSON.stringify(state)); }
+
+    function render() {
+      document.querySelectorAll("section[data-group]").forEach((sec) => {
+        sec.querySelectorAll(".case").forEach((n) => n.remove());
+      });
+      for (const [group, id, text] of CASES) {
+        const sec = document.querySelector(`section[data-group="${group}"]`);
+        const st = state[id] || { v: "", note: "" };
+        const div = document.createElement("div");
+        div.className = "case" + (st.v === "bad" || st.v === "edit" ? " has-note" : "");
+        div.dataset.id = id;
+        div.innerHTML = `
+          <div class="case-head">
+            <div class="id">${id}</div>
+            <div>${text.replace(/`([^`]+)`/g, "<code>$1</code>")}</div>
+          </div>
+          <div class="verdict">
+            <label class="ok"><input type="radio" name="${id}" value="ok" ${st.v==="ok"?"checked":""}><span>충분</span></label>
+            <label class="bad"><input type="radio" name="${id}" value="bad" ${st.v==="bad"?"checked":""}><span>빠짐</span></label>
+            <label class="edit"><input type="radio" name="${id}" value="edit" ${st.v==="edit"?"checked":""}><span>수정 필요</span></label>
+          </div>
+          <textarea placeholder="빠지거나 고칠 내용을 적어 주세요">${st.note || ""}</textarea>
+        `;
+        sec.appendChild(div);
+      }
+      update();
+    }
+
+    function update() {
+      let ok = 0, bad = 0, edit = 0, wait = 0;
+      for (const [, id] of CASES) {
+        const v = (state[id] || {}).v;
+        if (v === "ok") ok++;
+        else if (v === "bad") bad++;
+        else if (v === "edit") edit++;
+        else wait++;
+      }
+      const total = CASES.length;
+      document.getElementById("progress").textContent = `${ok} / ${total} 충분`;
+      document.getElementById("counts").innerHTML =
+        `<span class="ok-pill">충분 ${ok}</span>` +
+        `<span class="bad-pill">빠짐 ${bad}</span>` +
+        `<span class="wait-pill">수정 ${edit} · 미표시 ${wait}</span>`;
+      const banner = document.getElementById("banner");
+      if (wait) {
+        banner.className = "banner wait";
+        banner.textContent = "모든 케이스를 표시해야 이 게이트를 닫을 수 있다. 이 게이트는 인간만 닫는다.";
+      } else if (bad || edit) {
+        banner.className = "banner block";
+        banner.textContent = "빠짐/수정 표시가 있다. 메모를 반영한 뒤 다시 검수한다. 구현으로 넘어가지 않는다.";
+      } else {
+        banner.className = "banner ready";
+        banner.textContent = "27개 전부 충분. 이 목록(Test-1..27)이 테스트 코드의 완료 정의다. R3 실측은 Test-N이 아니다. 채팅에서 승인해 주면 R2로 간다.";
+      }
+    }
+
+    document.body.addEventListener("change", (e) => {
+      const t = e.target;
+      if (t.name && t.type === "radio") {
+        state[t.name] = state[t.name] || {};
+        state[t.name].v = t.value;
+        const caseEl = t.closest(".case");
+        caseEl.classList.toggle("has-note", t.value === "bad" || t.value === "edit");
+        save(); update();
+      }
+    });
+    document.body.addEventListener("input", (e) => {
+      if (e.target.tagName === "TEXTAREA") {
+        const id = e.target.closest(".case").dataset.id;
+        state[id] = state[id] || {};
+        state[id].note = e.target.value;
+        save();
+      }
+    });
+    document.querySelector("[data-mark='ok']").onclick = () => {
+      for (const [, id] of CASES) {
+        if (!state[id] || !state[id].v) state[id] = { ...(state[id]||{}), v: "ok" };
+      }
+      save(); render();
+    };
+    document.getElementById("reset").onclick = () => {
+      for (const k of Object.keys(state)) delete state[k];
+      save(); render();
+    };
+    document.getElementById("export").onclick = async () => {
+      const lines = CASES.map(([, id, text]) => {
+        const st = state[id] || {};
+        const tag = st.v === "ok" ? "충분" : st.v === "bad" ? "빠짐" : st.v === "edit" ? "수정" : "미표시";
+        return `${id} [${tag}] ${text}${st.note ? " — " + st.note : ""}`;
+      });
+      await navigator.clipboard.writeText(lines.join("\n"));
+      document.getElementById("export").textContent = "복사됨";
+      setTimeout(() => { document.getElementById("export").textContent = "검수 메모 복사"; }, 1200);
+    };
+
+    render();
+  </script>
+</body>
+</html>
