@@ -68,6 +68,16 @@ def manifest(home):
 
 # --- setup.sh: 실제 설치 경로 (빈 배열 확장 회귀) ---
 
+def test_setup_help_lists_keybinds_and_newline(sandbox_home, stub_bin):
+    """covers: Test-15
+    setup.sh --help 에 --keybinds 와 --newline 이 보여야 한다.
+    """
+    proc = run_script(["bash", str(ROOT / "scripts" / "setup.sh"), "--help"], sandbox_home, stub_bin)
+    assert proc.returncode == 0, proc.stderr
+    assert "--keybinds" in proc.stdout, proc.stdout
+    assert "--newline" in proc.stdout, proc.stdout
+
+
 def test_setup_hooks_installs_for_real(sandbox_home, stub_bin):
     proc = run_script(["bash", str(ROOT / "scripts" / "setup.sh"), "--hooks"], sandbox_home, stub_bin)
     assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"

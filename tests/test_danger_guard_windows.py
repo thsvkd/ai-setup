@@ -723,9 +723,23 @@ def test_dot_targets_denied_powershell(run_hook, cmd):
 
 
 def test_resolved_home_denied():
-    """문자열로는 홈처럼 보이지 않지만 cwd 기준으로 풀면 홈인 경로도 막아야 한다."""
-    rel = os.path.relpath(os.path.expanduser("~"), "/tmp")
+    """문자열로는 홈처럼 보이지 않지만 cwd 기준으로 풀면 홈인 경로도 막아야 한다.
+
+    Bash 페이로드에는 POSIX 구분자를 쓴다. Windows 에서 os.path.relpath 는 백슬래시를 주는데,
+    bash 에서 백슬래시는 구분자가 아니라 이스케이프라 `..\\Users\\이름` 은 `..Users이름` 이라는
+    존재하지 않는 이름이 된다 — 그건 홈을 지우는 명령이 아니므로 막을 대상도 아니다.
+    """
+    rel = os.path.relpath(os.path.expanduser("~"), "/tmp").replace(os.sep, "/")
     assert decision_of(run_guard(bash(f"rm -rf {rel}"), cwd="/tmp")) == "deny"
+
+
+def test_resolved_home_denied_powershell():
+    """PowerShell 은 백슬래시가 실제 구분자다. 그쪽 표기도 cwd 기준으로 풀어 막아야 한다."""
+    rel = os.path.relpath(os.path.expanduser("~"), "/tmp")
+    assert decision_of(run_guard(ps(f"Remove-Item -Recurse -Force {rel}"), cwd="/tmp")) == "deny"
+    assert decision_of(
+        run_guard(ps(f"Remove-Item -Recurse -Force {rel.replace(os.sep, chr(47))}"), cwd="/tmp")
+    ) == "deny"
 
 
 def test_glob_expanded_to_concrete_paths(tmp_path):

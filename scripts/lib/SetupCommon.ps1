@@ -292,7 +292,6 @@ function Uninstall-Hooks {
     $targets = @()
     foreach ($f in $files) { $targets += (Join-Path $HooksDir $f) }
     $targets += (Join-Path $HooksDir "guard.log")   # 설치 셀프테스트가 생성
-    $targets += $manifestPath
     foreach ($target in $targets) {
         if (Test-Path $target) {
             if ($DryRun) {
@@ -300,6 +299,30 @@ function Uninstall-Hooks {
             } else {
                 Remove-Item -Force $target -ErrorAction SilentlyContinue
                 Write-Host "  🗑️  제거: $target"
+            }
+        }
+    }
+
+    # 매니페스트: keybinds 영수증이 남아 있으면 그 섹션만 남기고 훅 흔적만 지운다.
+    # 통째로 지우면 키바인드 uninstall 이 '우리가 넣은 tmux 줄' 을 식별할 근거를 잃는다.
+    if (Test-Path $manifestPath) {
+        if ($DryRun) {
+            Write-Host "  🧪 (dry-run) 제거 예정: $manifestPath"
+        } else {
+            $keptKeybinds = $null
+            try {
+                $m = Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                if ($m -and $m.PSObject.Properties.Name -contains "keybinds" -and $m.keybinds) {
+                    $keptKeybinds = $m.keybinds
+                }
+            } catch { $keptKeybinds = $null }
+            if ($null -ne $keptKeybinds) {
+                $payload = [ordered]@{ keybinds = $keptKeybinds }
+                Set-Content -Path $manifestPath -Value ($payload | ConvertTo-Json -Depth 20) -Encoding UTF8
+                Write-Host "  🧾 유지: $manifestPath (키바인드 영수증만 남김)"
+            } else {
+                Remove-Item -Force $manifestPath -ErrorAction SilentlyContinue
+                Write-Host "  🗑️  제거: $manifestPath"
             }
         }
     }

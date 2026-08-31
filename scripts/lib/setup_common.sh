@@ -111,8 +111,8 @@ uninstall_hooks() {
         fi
     done <<< "$files"
 
-    # guard.log(설치 셀프테스트가 생성) + 매니페스트 제거.
-    for target in "$hooks_dir/guard.log" "$manifest"; do
+    # guard.log(설치 셀프테스트가 생성) 제거.
+    for target in "$hooks_dir/guard.log"; do
         [[ -f "$target" ]] || continue
         if [[ "$dry_run" -eq 1 ]]; then
             echo "  🧪 (dry-run) 제거 예정: $target"
@@ -121,6 +121,21 @@ uninstall_hooks() {
             echo "  🗑️  제거: $target"
         fi
     done
+
+    # 매니페스트: keybinds 영수증이 남아 있으면 그 섹션만 남기고 훅 흔적만 지운다.
+    # 통째로 지우면 키바인드 uninstall 이 '우리가 넣은 tmux 줄' 을 식별할 근거를 잃는다.
+    if [[ -f "$manifest" ]]; then
+        if [[ "$dry_run" -eq 1 ]]; then
+            echo "  🧪 (dry-run) 제거 예정: $manifest"
+        else
+            "$py_exe" -c "import json,os,sys; p=sys.argv[1]; d=json.load(open(p,encoding='utf-8')); kb=d.get('keybinds') if isinstance(d,dict) else None; json.dump({'keybinds':kb},open(p,'w',encoding='utf-8'),ensure_ascii=False,indent=2) if kb else os.remove(p)" "$manifest" 2>/dev/null || rm -f "$manifest"
+            if [[ -f "$manifest" ]]; then
+                echo "  🧾 유지: $manifest (키바인드 영수증만 남김)"
+            else
+                echo "  🗑️  제거: $manifest"
+            fi
+        fi
+    fi
 }
 
 run_hook_self_test() {

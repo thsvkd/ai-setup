@@ -869,8 +869,12 @@ def test_dot_targets_denied(run_hook, target):
 
 
 def test_resolved_home_denied(tmp_path):
-    """문자열로는 홈처럼 보이지 않지만 cwd 기준으로 풀면 홈인 경로도 막아야 한다."""
-    rel = os.path.relpath(os.path.expanduser("~"), "/tmp")
+    """문자열로는 홈처럼 보이지 않지만 cwd 기준으로 풀면 홈인 경로도 막아야 한다.
+
+    Bash 명령이므로 POSIX 구분자를 쓴다 — Windows 에서 relpath 가 주는 백슬래시는 bash 에서
+    구분자가 아니라 이스케이프라 아예 다른(존재하지 않는) 이름이 된다.
+    """
+    rel = os.path.relpath(os.path.expanduser("~"), "/tmp").replace(os.sep, "/")
     payload = run_guard(f"rm -rf {rel}", cwd="/tmp", path_prefix=_stub(tmp_path, "trash-put"))
     assert decision_of(payload) == "deny"
 

@@ -180,15 +180,18 @@ def test_posix_quoted_separator_is_not_a_chain():
 
 HOME = os.path.expanduser("~")
 _drive, _tail = os.path.splitdrive(HOME)
-MSYS_HOME = "/" + _drive[0].lower() + _tail.replace("\\", "/")
+# POSIX 홈에는 드라이브 문자가 없다. 아래 테스트는 skipif 로 걸러지지만 MSYS 표기를 모듈
+# 로드 시점에 계산하면 수집 단계에서 터져 스위트 전체가 멈춘다 — 그래서 빈 값으로 둔다.
+_msys_drive = _drive[0].lower() if _drive else ""
+MSYS_HOME = ("/" + _msys_drive + _tail.replace("\\", "/")) if _drive else ""
 
 
 @pytest.mark.skipif(not _drive, reason="드라이브 문자가 있는 홈 경로에서만 의미가 있다")
 @pytest.mark.parametrize("target", [
     MSYS_HOME,                    # /c/Users/<이름>
     MSYS_HOME + "/",              # 끝 슬래시
-    "/" + _drive[0].lower(),      # 드라이브 루트 자체: /c
-    "/" + _drive[0].lower() + "/",
+    "/" + _msys_drive,            # 드라이브 루트 자체: /c
+    "/" + _msys_drive + "/",
 ])
 def test_msys_style_home_and_root_denied(run_hook, target):
     d, *_ = run_hook(WIN, bash(f"rm -rf {target}"))
