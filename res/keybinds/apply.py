@@ -124,6 +124,21 @@ BACKUP_SUFFIX = ".bak."
 TMP_SUFFIX = ".tmp-claude-code-setup"
 
 
+def real_target(path: Path) -> Path:
+    """심볼릭 링크면 그 실체를 돌려준다.
+
+    dotfile 관리자(chezmoi, stow, dotbot …)는 설정을 링크로 걸어둔다. 링크 자체를
+    os.replace 로 갈아치우면 일반 파일이 되어 관리에서 떨어져 나간다 — 링크는 남기고
+    가리키는 실체를 고쳐야 한다.
+    """
+    try:
+        if path.is_symlink():
+            return Path(os.path.realpath(str(path)))
+    except OSError:
+        pass
+    return path
+
+
 def backup_file(path: Path) -> None:
     """바꾸기 전 원본을 .bak.<타임스탬프> 로 남긴다 (훅 설치와 같은 철학)."""
     if not path.is_file():
@@ -142,19 +157,27 @@ def write_text_atomic(path: Path, text: str) -> None:
 
     바꾸기 전 백업을 남긴다. 사용자가 직접 관리하던 설정 파일이므로 되돌릴 수단이 있어야 한다.
     """
+    target = real_target(path)
     # 내용이 같으면 아무것도 하지 않는다. 이 검사가 없으면 멱등 재실행마다 백업이 쌓인다.
-    if path.is_file():
+    if target.is_file():
         try:
-            if path.read_text(encoding="utf-8") == text:
+            if target.read_text(encoding="utf-8") == text:
                 return
         except OSError:
             pass
-    path.parent.mkdir(parents=True, exist_ok=True)
-    backup_file(path)
-    tmp = path.with_name(path.name + TMP_SUFFIX)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    backup_file(target)
+    tmp = target.with_name(target.name + TMP_SUFFIX)
     try:
         tmp.write_text(text, encoding="utf-8")
-        os.replace(str(tmp), str(path))
+        # 새로 만든 임시 파일은 기본 권한(대개 0644)을 갖는다. 0600 설정 파일을
+        # 교체하면 권한이 넓어져 내용이 노출된다 — 있던 권한을 그대로 옮긴다.
+        if target.exists():
+            try:
+                shutil.copymode(str(target), str(tmp))
+            except OSError:
+                pass
+        os.replace(str(tmp), str(target))
     finally:
         if tmp.exists():
             try:
@@ -217,17 +240,34 @@ def default_cursor_path(home: Path, platform=_UNSET, appdata=_UNSET) -> Path:
     return default_ide_path(home, "Cursor", platform, appdata)
 
 
-def default_wt_path() -> Path | None:
-    local = os.environ.get("LOCALAPPDATA")
+WT_PACKAGES = (
+    "Microsoft.WindowsTerminal_8wekyb3d8bbwe",          # Stable
+    "Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe",   # Preview
+    "Microsoft.WindowsTerminalCanary_8wekyb3d8bbwe",    # Canary
+)
+
+
+def default_wt_paths(local=_UNSET) -> list:
+    """설치돼 있을 수 있는 Windows Terminal settings.json 을 전부 돌려준다.
+
+    Stable 패키지 하나만 보면 Preview/Canary 나 비패키지(unpackaged) 설치에서는
+    아무 일도 일어나지 않은 채 성공으로 끝난다. 포터블 모드는 실행 파일 옆에 설정을
+    두어 위치를 알 수 없으므로 대상이 아니다.
+    """
+    local = os.environ.get("LOCALAPPDATA") if local is _UNSET else local
     if not local:
-        return None
-    return (
-        Path(local)
-        / "Packages"
-        / "Microsoft.WindowsTerminal_8wekyb3d8bbwe"
-        / "LocalState"
-        / "settings.json"
-    )
+        return []
+    base = Path(local)
+    paths = [base / "Packages" / pkg / "LocalState" / "settings.json" for pkg in WT_PACKAGES]
+    paths.append(base / "Microsoft" / "Windows Terminal" / "settings.json")
+    return paths
+
+
+def default_wt_path() -> Path | None:
+    for path in default_wt_paths():
+        if path.is_file():
+            return path
+    return None
 
 
 def binary_on_path(name: str) -> bool:
@@ -393,7 +433,7 @@ def apply_ide_keybindings(path: Path, chord: str, uninstall: bool, dry_run: bool
 
 
 def apply_claude_keybindings(path: Path, chord: str, uninstall: bool, dry_run: bool,
-                             prev_keys=None) -> list:
+                             prev_keys=None, prev_overwrote=None):
     """Chat 에 고른 키 → chat:newline. 다른 context/bindings 보존."""
     added = []
     if path.is_file():
@@ -401,10 +441,10 @@ def apply_claude_keybindings(path: Path, chord: str, uninstall: bool, dry_run: b
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             note_skipped(path, "Claude keybindings.json 을 읽지 못해 건너뜁니다")
-            return []
+            return [], {}
         if not isinstance(data, dict):
             note_skipped(path, "Claude keybindings.json 최상위가 객체가 아니라 건너뜁니다")
-            return []
+            return [], {}
     else:
         data = {}
 
@@ -415,16 +455,23 @@ def apply_claude_keybindings(path: Path, chord: str, uninstall: bool, dry_run: b
 
     if uninstall:
         changed = False
-        for key in ("shift+enter", "ctrl+enter"):
+        # 영수증에 있는 키만 지운다. `chat:newline` 은 사용자도 똑같이 쓸 수 있는 값이라,
+        # 값이 같다는 이유로 지우면 남의 바인딩을 지운다 (Test-12 "사용자 원래 항목은 남긴다").
+        for key in sorted(set(prev_keys or [])):
             if chat.get(key) == "chat:newline":
                 del chat[key]
                 changed = True
+        # 설치가 덮어쓴 값이 있으면 되돌린다. 안 그러면 제거가 원상 복구가 아니다.
+        for key, value in (prev_overwrote or {}).items():
+            if key not in chat:
+                chat[key] = value
+                changed = True
         if dry_run:
-            print(f"  {path} (Claude keybindings.json) — chat:newline 관리 키 제거")
-            return []
+            print(f"  {path} (Claude keybindings.json) — 설치가 넣은 키 제거 + 덮어쓴 값 복원")
+            return [], {}
         if changed:
             write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
-        return []
+        return [], {}
 
     want = vscode_key(chord)
     other = vscode_other_key(chord)
@@ -432,13 +479,23 @@ def apply_claude_keybindings(path: Path, chord: str, uninstall: bool, dry_run: b
     # 기록이 없으면 사용자가 직접 넣은 것이므로 그대로 둔다.
     if other in set(prev_keys or []) and chat.get(other) == "chat:newline":
         del chat[other]
+    # 고른 키에 사용자가 다른 명령을 걸어두었으면 그 값을 영수증에 남긴다 —
+    # 기록해 두지 않으면 --uninstall 이 되돌릴 수 없다.
+    overwrote = dict(prev_overwrote or {})
+    prior = chat.get(want)
+    if prior is not None and prior != "chat:newline" and want not in overwrote:
+        overwrote[want] = prior
+        print(f"  ℹ️ Claude Chat[{want}] 의 기존 값 {prior!r} 을 줄바꿈으로 바꿉니다 "
+              f"(--uninstall 시 되돌립니다).")
+    # 이미 사용자가 같은 값을 걸어 두었다면 우리가 넣은 것이 아니다 — 영수증에 적으면
+    # uninstall 이 남의 바인딩을 지운다.
+    added = [] if prior == "chat:newline" and want not in set(prev_keys or []) else [want]
     chat[want] = "chat:newline"
-    added = [want]
     if dry_run:
         print(f"  {path} (Claude keybindings.json) — Chat[{want}]=chat:newline")
-        return added
+        return added, overwrote
     write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
-    return added
+    return added, overwrote
 
 
 def _parse_toml_str_list(src: str) -> list:
@@ -498,25 +555,99 @@ def _consume_insert_newline(lines: list, start: int):
     return items, indent, i, comment
 
 
+EDITOR_PATH = ("tui", "keymap", "editor")
+INSERT_KEY = "insert_newline"
+
+
+def split_toml_key(raw: str) -> tuple:
+    """점 표기 키를 부분으로 나눈다. 따옴표로 감싼 부분 안의 점은 구분자가 아니다."""
+    parts = []
+    buf = ""
+    in_str = False
+    quote = ""
+    for ch in raw.strip():
+        if in_str:
+            if ch == quote:
+                in_str = False
+            else:
+                buf += ch
+            continue
+        if ch in (chr(34), chr(39)):
+            in_str = True
+            quote = ch
+            continue
+        if ch == ".":
+            parts.append(buf.strip())
+            buf = ""
+            continue
+        buf += ch
+    parts.append(buf.strip())
+    return tuple(p for p in parts if p)
+
+
+def toml_section_path(code: str):
+    """`[a.b.c]` 면 경로 튜플. 테이블 헤더가 아니면 None, 배열 테이블이면 ARRAY_TABLE."""
+    stripped = code.strip()
+    if not (stripped.startswith("[") and stripped.endswith("]")):
+        return None
+    if stripped.startswith("[["):
+        return ARRAY_TABLE
+    return split_toml_key(stripped[1:-1])
+
+
+ARRAY_TABLE = ("\x00array-table",)
+
+
+def format_insert_newline(items: list, indent: str = "", prefix: tuple = (),
+                          comment: str = "") -> str:
+    name = ".".join(prefix + (INSERT_KEY,))
+    inner = ", ".join('"%s"' % x for x in items)
+    tail = ("  " + comment) if comment else ""
+    return "%s%s = [%s]%s\n" % (indent, name, inner, tail)
+
+
+def codex_insert_newline_items(text: str) -> list:
+    """현재 tui.keymap.editor.insert_newline 의 항목. 없으면 빈 리스트."""
+    lines = text.splitlines(keepends=True)
+    section = ()
+    i = 0
+    while i < len(lines):
+        code, _ = split_toml_comment(lines[i])
+        sec = toml_section_path(code)
+        if sec is not None:
+            section = sec
+            i += 1
+            continue
+        if "=" in code and section is not ARRAY_TABLE:
+            full = tuple(section) + split_toml_key(code.split("=", 1)[0])
+            if full == EDITOR_PATH + (INSERT_KEY,):
+                items, _indent, _next, _comment = _consume_insert_newline(lines, i)
+                return items
+        i += 1
+    return []
+
+
 def edit_codex_insert_newline(text: str, add_key: str | None, remove_keys) -> str:
-    """[tui.keymap.editor] insert_newline 만 고친다. 다른 키/테이블은 그대로."""
+    """tui.keymap.editor.insert_newline 만 고친다. 다른 키/테이블은 그대로.
+
+    TOML 에서 그 키는 여러 형태로 쓸 수 있고 전부 유효하다:
+
+        [tui.keymap.editor]        tui.keymap.editor.insert_newline = [...]
+        insert_newline = [...]
+
+        [tui.keymap]               [tui]
+        editor.insert_newline = [] keymap.editor.insert_newline = [...]
+
+    헤더 형태만 알아보면, 점 표기로 쓴 사용자의 파일에 `[tui.keymap.editor]` 헤더를 새로
+    덧붙이게 된다. 같은 테이블을 두 번 선언하는 것이라 TOML 파서가 파일 전체를 거부한다.
+    """
     remove_keys = set(remove_keys or [])
     if not text.strip():
         if not add_key:
             return text
-        return f'[tui.keymap.editor]\ninsert_newline = ["{add_key}"]\n'
+        return "[tui.keymap.editor]\ninsert_newline = [\"%s\"]\n" % add_key
 
     lines = text.splitlines(keepends=True)
-    out = []
-    i = 0
-    in_editor = False
-    found_insert = False
-
-    def current_section(raw: str) -> str | None:
-        stripped = raw.split("#", 1)[0].strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            return stripped
-        return None
 
     def updated_items(items: list) -> list:
         kept = [x for x in items if x not in remove_keys]
@@ -524,54 +655,75 @@ def edit_codex_insert_newline(text: str, add_key: str | None, remove_keys) -> st
             kept.append(add_key)
         return kept
 
-    def format_list(items: list, indent: str, comment: str = "") -> str:
-        inner = ", ".join(f'"{x}"' for x in items)
-        tail = ("  " + comment) if comment else ""
-        return f"{indent}insert_newline = [{inner}]{tail}\n"
+    out = []
+    i = 0
+    section = ()
+    found = False
+    # 헤더 `[tui.keymap.editor]` 안에서 키를 못 찾은 채 섹션을 벗어날 때 쓸 위치.
+    in_editor_header = False
+    # 점 표기로 이미 이 테이블을 만들어 둔 스코프가 있으면 헤더를 새로 쓰면 안 된다.
+    dotted_scope = None
 
-    while i < len(lines):
-        line = lines[i]
-        section = current_section(line)
-        if section is not None:
-            if in_editor and not found_insert:
+    for raw in lines:
+        code, _ = split_toml_comment(raw)
+        sec = toml_section_path(code)
+        if sec is not None and sec is not ARRAY_TABLE:
+            if in_editor_header and not found:
                 items = updated_items([])
                 if add_key or items:
                     if out and not out[-1].endswith("\n"):
                         out[-1] += "\n"
-                    out.append(format_list(items, ""))
-                    found_insert = True
-            in_editor = section == "[tui.keymap.editor]"
-            out.append(line)
+                    out.append(format_insert_newline(items))
+                    found = True
+            section = sec
+            in_editor_header = sec == EDITOR_PATH
+            out.append(raw)
             i += 1
             continue
-        if in_editor and re.match(r"^\s*insert_newline\s*=", line):
-            items, indent, i, comment = _consume_insert_newline(lines, i)
-            items = updated_items(items)
-            # 빈 리스트를 남기면 "줄바꿈 전면 언바인드" 라는 새 설정을 만드는 것이다.
-            # 우리 키만 빠지고 남은 게 없으면 줄 자체를 지운다 (원상 복구).
-            if items or add_key:
-                out.append(format_list(items, indent, comment))
-            found_insert = True
+        if sec is ARRAY_TABLE:
+            section = ARRAY_TABLE
+            in_editor_header = False
+            out.append(raw)
+            i += 1
             continue
-        out.append(line)
+        if "=" in code and section is not ARRAY_TABLE:
+            full = tuple(section) + split_toml_key(code.split("=", 1)[0])
+            if full == EDITOR_PATH + (INSERT_KEY,):
+                items, indent, i, comment = _consume_insert_newline(lines, i)
+                items = updated_items(items)
+                prefix = full[len(section):-1]
+                # 빈 리스트를 남기면 "줄바꿈 전면 언바인드" 라는 새 설정을 만드는 것이다.
+                if items or add_key:
+                    out.append(format_insert_newline(items, indent, prefix, comment))
+                found = True
+                continue
+            if len(full) > len(EDITOR_PATH) and full[:len(EDITOR_PATH)] == EDITOR_PATH \
+                    and tuple(section) != EDITOR_PATH:
+                dotted_scope = tuple(section)
+        out.append(raw)
         i += 1
 
-    if in_editor and not found_insert:
+    if not found and in_editor_header:
         items = updated_items([])
         if add_key or items:
             # 파일이 개행 없이 끝나면 마지막 줄에 붙어버려 TOML 이 깨진다.
             if out and not out[-1].endswith("\n"):
                 out[-1] += "\n"
-            out.append(format_list(items, ""))
-            found_insert = True
+            out.append(format_insert_newline(items))
+            found = True
 
-    if not found_insert and add_key:
+    if not found and add_key:
         if out and not out[-1].endswith("\n"):
             out[-1] += "\n"
-        if out and out[-1].strip():
-            out.append("\n")
-        out.append("[tui.keymap.editor]\n")
-        out.append(format_list([add_key], ""))
+        if dotted_scope is not None:
+            # 점 표기로 이미 만들어진 테이블이다. 같은 스코프에 형제 키로 붙인다.
+            prefix = EDITOR_PATH[len(dotted_scope):]
+            out.append(format_insert_newline([add_key], "", prefix))
+        else:
+            if out and out[-1].strip():
+                out.append("\n")
+            out.append("[tui.keymap.editor]\n")
+            out.append(format_insert_newline([add_key]))
 
     return "".join(out)
 
@@ -604,8 +756,10 @@ def apply_codex_toml(path: Path, chord: str, uninstall: bool, dry_run: bool,
     existed = path.is_file()
     text = path.read_text(encoding="utf-8") if existed else ""
     if uninstall:
+        # 영수증에 있는 코드만 뺀다. insert_newline 의 "shift-enter" 는 사용자가 직접
+        # 쓰는 값과 글자까지 같아서, 기록 없이 지우면 남의 설정을 지운다.
         new_text = drop_empty_editor_table(
-            edit_codex_insert_newline(text, None, {"shift-enter", "ctrl-enter"})
+            edit_codex_insert_newline(text, None, set(prev_keys or []))
         )
         if dry_run:
             print(f"  {path} (codex config.toml) — insert_newline 관리 키 제거")
@@ -617,13 +771,16 @@ def apply_codex_toml(path: Path, chord: str, uninstall: bool, dry_run: bool,
     # 고르지 않은 코드는 우리가 넣은 기록이 있을 때만 뺀다 (핵심 결정 5).
     other = vscode_other_codex(chord)
     remove = {other} if other in set(prev_keys or []) else set()
+    # 이미 있던 코드는 우리가 넣은 것이 아니다. 영수증에 적으면 uninstall 이 지운다.
+    already = chord in codex_insert_newline_items(text)
+    added = [] if already else [chord]
     new_text = edit_codex_insert_newline(text, chord, remove)
     if dry_run:
         print(f"  {path} (codex config.toml) — insert_newline += {chord}")
-        return [chord]
+        return added
     if new_text != text or not existed:
         write_text_atomic(path, new_text)
-    return [chord]
+    return added
 
 
 def vscode_other_codex(chord: str) -> str:
@@ -669,8 +826,18 @@ def is_managed_wt(item) -> bool:
     return is_ssot_sequence(_wt_input(item))
 
 
-def apply_wt_settings(path: Path | None, chord: str, uninstall: bool, dry_run: bool) -> bool:
-    """대상 파일이 없으면 skip. Shift+Enter 선택 시 shift+enter sendInput 을 넣지 않는다."""
+def wt_key(chord: str) -> str:
+    return "shift+enter" if chord == "shift-enter" else "ctrl+enter"
+
+
+def apply_wt_settings(path: Path | None, chord: str, uninstall: bool, dry_run: bool,
+                      prev_chord=None, prev_managed=False) -> bool:
+    """대상 파일이 없으면 skip. Shift+Enter 선택 시 shift+enter sendInput 을 넣지 않는다.
+
+    지울 수 있는 것은 (a) 지금 우리가 쓰는 키와 (b) 영수증이 우리 것이라고 말하는 이전
+    코드의 키뿐이다. 시퀀스가 같더라도 사용자가 직접 건 다른 키는 건드리지 않는다
+    (핵심 결정 5 — 고르지 않은 키는 바인딩하지도 언바인드하지도 않는다).
+    """
     if path is None or not path.is_file():
         if dry_run:
             print("  Windows Terminal settings.json — 대상 없음, skip")
@@ -686,7 +853,26 @@ def apply_wt_settings(path: Path | None, chord: str, uninstall: bool, dry_run: b
 
     actions_key = "actions" if "actions" in data else ("keybindings" if "keybindings" in data else "actions")
     actions = list(data.get(actions_key) or [])
-    kept = [a for a in actions if not is_managed_wt(a)]
+
+    # 우리가 손댈 자격이 있는 키만 모은다.
+    ours = set()
+    if uninstall:
+        if prev_chord:
+            ours.add(wt_key(prev_chord))
+        if prev_managed:
+            ours.update(("shift+enter", "ctrl+enter"))
+    else:
+        ours.add(wt_key(chord))
+        if prev_chord and prev_managed:
+            ours.add(wt_key(prev_chord))
+
+    def removable(item) -> bool:
+        if not is_managed_wt(item):
+            return False
+        keys = _wt_keys(item)
+        return keys in ours or keys.replace("return", "enter") in ours
+
+    kept = [a for a in actions if not removable(a)]
     managed = False
 
     if not uninstall and chord == "ctrl-enter":
@@ -695,6 +881,16 @@ def apply_wt_settings(path: Path | None, chord: str, uninstall: bool, dry_run: b
             "keys": "ctrl+enter",
         })
         managed = True
+
+    if not uninstall and chord == "shift-enter":
+        # 우리는 넣지 않았지만 사용자가 직접 걸어둔 Shift+Enter sendInput 이 남아 있으면
+        # WT 는 이미 이 키를 구분하므로 줄이 두 번 생긴다. 지우지는 않고 알린다.
+        leftover = [a for a in kept
+                    if is_managed_wt(a)
+                    and _wt_keys(a).replace("return", "enter") == "shift+enter"]
+        if leftover:
+            print("  ⚠️ Windows Terminal 에 사용자가 직접 건 Shift+Enter sendInput 이 있습니다 — "
+                  "줄바꿈이 두 번 될 수 있습니다. 지우지 않았으니 필요하면 직접 제거하세요.")
 
     if dry_run:
         print(f"  {path} (Windows Terminal settings.json)")
@@ -739,10 +935,14 @@ def apply_tmux(path: Path, uninstall: bool, dry_run: bool, previously_added) -> 
             write_text_atomic(path, new_text)
         return []
 
+    # 주석까지 세면 `# extended-keys disabled` 한 줄이 설치를 통째로 막는다.
+    # 실제 tmux 명령이 있는 줄만 본다.
+    active = [split_toml_comment(line)[0] for line in text.splitlines()]
+    active_text = "\n".join(active)
     to_add = []
-    if "extended-keys" not in text:
+    if "extended-keys" not in active_text:
         to_add.append(TMUX_EXTENDED_LINE)
-    if "extkeys" not in text:
+    if "extkeys" not in active_text:
         to_add.append(TMUX_EXTKEYS_LINE)
     if dry_run:
         print(f"  {path} (tmux.conf)")
@@ -753,8 +953,8 @@ def apply_tmux(path: Path, uninstall: bool, dry_run: bool, previously_added) -> 
     if new_text and not new_text.endswith("\n"):
         new_text += "\n"
     new_text += "\n".join(to_add) + "\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(new_text, encoding="utf-8")
+    # 백업과 원자적 교체는 tmux.conf 에도 똑같이 필요하다 — 사용자가 직접 쓰는 파일이다.
+    write_text_atomic(path, new_text)
     return to_add
 
 
@@ -800,6 +1000,19 @@ def resolve_chord(explicit: str | None, manifest: dict) -> str:
 
 def should_apply_agent(name: str, config_dir: Path) -> bool:
     return binary_on_path(name) or config_dir.is_dir()
+
+
+def union_receipt(previous, current) -> list:
+    """영수증은 덮어쓰지 않고 합집합으로 쌓는다.
+
+    사용자가 우리 줄 하나만 지운 뒤 재실행하면 그 한 줄만 다시 넣는다. 그때 영수증을
+    덮어쓰면 나머지 한 줄의 소유권 기록을 잃고, uninstall 이 그 줄을 남긴다.
+    """
+    out = []
+    for item in list(previous or []) + list(current or []):
+        if item not in out:
+            out.append(item)
+    return out
 
 
 def report_result(done_message: str) -> int:
@@ -853,11 +1066,13 @@ def run(args) -> int:
         apply_ide_keybindings(cursor_path, "shift-enter", True, args.dry_run)
         if claude_kb.is_file() or claude_apply:
             apply_claude_keybindings(claude_kb, "shift-enter", True, args.dry_run,
-                                     prev_kb.get("claude_keys_added"))
+                                     prev_kb.get("claude_keys_added"),
+                                     prev_kb.get("claude_overwrote"))
         if codex_toml.is_file() or codex_apply:
             apply_codex_toml(codex_toml, "shift-enter", True, args.dry_run,
                              prev_kb.get("codex_keys_added"))
-        apply_wt_settings(wt_path, "shift-enter", True, args.dry_run)
+        apply_wt_settings(wt_path, "shift-enter", True, args.dry_run,
+                          prev_kb.get("newline_chord"), bool(prev_kb.get("wt_managed")))
         apply_tmux(tmux_conf, True, args.dry_run, prev_kb.get("tmux_added"))
         if not args.dry_run:
             strip_keybinds_from_manifest(home)
@@ -882,16 +1097,20 @@ def run(args) -> int:
     cursor_managed = apply_ide_keybindings(cursor_path, chord, False, args.dry_run)
 
     claude_keys = []
+    claude_overwrote = dict(prev_kb.get("claude_overwrote") or {})
     if claude_apply:
-        claude_keys = apply_claude_keybindings(claude_kb, chord, False, args.dry_run,
-                                              prev_kb.get("claude_keys_added"))
+        claude_keys, claude_overwrote = apply_claude_keybindings(
+            claude_kb, chord, False, args.dry_run,
+            prev_kb.get("claude_keys_added"), prev_kb.get("claude_overwrote"))
 
     codex_keys = []
     if codex_apply:
         codex_keys = apply_codex_toml(codex_toml, chord, False, args.dry_run,
                                       prev_kb.get("codex_keys_added"))
 
-    wt_managed = apply_wt_settings(wt_path, chord, False, args.dry_run)
+    wt_managed = apply_wt_settings(wt_path, chord, False, args.dry_run,
+                                   prev_kb.get("newline_chord"),
+                                   bool(prev_kb.get("wt_managed")))
     tmux_added = apply_tmux(tmux_conf, False, args.dry_run, prev_kb.get("tmux_added"))
     if not tmux_added and isinstance(prev_kb.get("tmux_added"), list) and not args.uninstall:
         # 이미 있는 줄은 다시 안 넣지만, 이전에 우리가 넣은 기록은 유지한다 (uninstall 근거).
@@ -910,9 +1129,12 @@ def run(args) -> int:
         "cursor_managed": bool(cursor_managed) or bool(prev_kb.get("cursor_managed")),
         "wt_managed": (bool(wt_managed) or bool(prev_kb.get("wt_managed")))
         if chord == "ctrl-enter" else False,
-        "tmux_added": tmux_added if tmux_added else list(prev_kb.get("tmux_added") or []),
-        "claude_keys_added": claude_keys,
-        "codex_keys_added": codex_keys,
+        "tmux_added": union_receipt(prev_kb.get("tmux_added"), tmux_added),
+        "claude_keys_added": union_receipt(prev_kb.get("claude_keys_added"), claude_keys)
+        if chord == prev_kb.get("newline_chord") else claude_keys,
+        "claude_overwrote": claude_overwrote,
+        "codex_keys_added": union_receipt(prev_kb.get("codex_keys_added"), codex_keys)
+        if chord == prev_kb.get("newline_chord") else codex_keys,
     })
     return report_result("줄바꿈 키바인딩 설치 완료.")
 

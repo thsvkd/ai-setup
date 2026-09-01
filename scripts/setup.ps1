@@ -151,18 +151,27 @@ if (-not $hadArgs) {
     }
 }
 
-# uninstall: -Keybinds -Uninstall 은 키바인드만. 아니면 훅 다음 키바인드.
+# 제거도 설치와 같은 범위 규칙을 따른다. 범위를 지정했으면 그것만 지운다 —
+# -Hooks -Uninstall 이 키바인딩까지 지우면 "-Hooks 는 키바인딩을 건드리지 않는다"
+# (핵심 결정 4)를 제거 쪽에서만 어기는 것이 된다.
 if ($Uninstall) {
-    if ($Keybinds) {
-        & (Join-Path $PSScriptRoot "setup_keybinds.ps1") -Uninstall -DryRun:$dryRun
-        exit $LASTEXITCODE
-    }
-    # 키바인드를 '먼저' 지운다. 훅 uninstall 이 매니페스트를 통째로 지우는데, 키바인드 제거는
+    $hadScope = $Hooks -or $AgentsMd -or $Keybinds
+    $unKeybinds = if ($hadScope) { [bool]$Keybinds } else { $true }
+    $unHooks = if ($hadScope) { [bool]$Hooks } else { $true }
+
+    # 키바인드를 '먼저' 지운다. 훅 uninstall 이 매니페스트를 손보는데, 키바인드 제거는
     # 그 영수증(tmux_added 등)이 있어야 '우리가 넣은 것' 과 사용자 것을 구분할 수 있다.
-    & (Join-Path $PSScriptRoot "setup_keybinds.ps1") -Uninstall -DryRun:$dryRun
-    $kbExit = $LASTEXITCODE
-    & (Join-Path $PSScriptRoot "setup_hooks.ps1") -Uninstall -DryRun:$dryRun
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $kbExit = 0
+    $hooksExit = 0
+    if ($unKeybinds) {
+        & (Join-Path $PSScriptRoot "setup_keybinds.ps1") -Uninstall -DryRun:$dryRun
+        $kbExit = $LASTEXITCODE
+    }
+    if ($unHooks) {
+        & (Join-Path $PSScriptRoot "setup_hooks.ps1") -Uninstall -DryRun:$dryRun
+        $hooksExit = $LASTEXITCODE
+    }
+    if ($hooksExit -ne 0) { exit $hooksExit }
     exit $kbExit
 }
 
