@@ -14,6 +14,7 @@
     powershell -ExecutionPolicy Bypass -File setup.ps1 -NoOnboard            # 온보딩 끄기
 #>
 
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$Hooks,
     [switch]$AgentsMd,
@@ -22,7 +23,18 @@ param(
     [switch]$Uninstall,
     [switch]$DryRun,
     [switch]$NoOnboard,
-    [switch]$Help
+    [Alias("h")]
+    [switch]$Help,
+    # setup.sh 와 같은 `--dry-run` 식 긴 표기를 받아내는 자리.
+    #
+    # PowerShell 은 이름에 하이픈이 들어간 플래그를 파라미터로 인식하지 못한다. 게다가
+    # 셸에서 `setup.ps1 --help` 처럼 직접 실행하면 (`-File` 로 넘길 때와 달리) `--help`
+    # 조차 파라미터가 아닌 '위치 인자' 로 들어온다. 위치 바인딩이 켜져 있으면 그게 전부
+    # 첫 번째 비-스위치 파라미터인 -Newline 으로 빨려 들어가서, 도움말을 부른 사용자에게
+    # "값은 shift-enter 또는 ctrl-enter 여야 합니다 (받은 값: --help)" 라는 엉뚱한 오류가
+    # 나갔다. 그래서 위치 바인딩을 끄고, 남은 토큰은 여기 모아 아래에서 직접 읽는다.
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$Rest = @()
 )
 
 Set-StrictMode -Version Latest
@@ -31,7 +43,7 @@ $ErrorActionPreference = "Stop"
 # 빌드/프로필이 있음). 이 스크립트들은 실패를 $LASTEXITCODE 로 직접 판정하므로 명시적으로 끈다.
 $PSNativeCommandUseErrorActionPreference = $false
 
-if ($Help) {
+function Show-Usage {
     Write-Host @"
 claude-code-setup — Claude Code 사용자 레벨 설정
 
@@ -52,8 +64,46 @@ claude-code-setup — Claude Code 사용자 레벨 설정
   · 줄바꿈 키 (Shift+Enter / Ctrl+Enter) — 범위=전체일 때만
   · 기존 AGENTS.md 덮어쓰기 여부 (파일이 이미 있을 때만 물음)
   · 지금 적용할지, 변경 계획(-DryRun)만 먼저 볼지
+
+setup.sh 와 같은 긴 표기도 그대로 받습니다:
+  --hooks  --agentsmd  --keybinds  --newline VAL  --uninstall  --dry-run
+  --no-onboard  --help
 "@
+}
+
+# param 블록의 $Rest 로 흘러든 토큰을 setup.sh 와 같은 규칙으로 해석한다. 조용히 버리면
+# 오타(--keybind)가 '전체 설치' 로 둔갑하므로, 모르는 것은 사용법과 함께 거절한다.
+$newlineGiven = $PSBoundParameters.ContainsKey("Newline")
+$unknownArgs = @()
+for ($i = 0; $i -lt $Rest.Count; $i++) {
+    switch -Regex ($Rest[$i]) {
+        '^(--help|-help|/[?h])$' { $Help = $true }
+        '^--hooks$'              { $Hooks = $true }
+        '^--agents-?md$'         { $AgentsMd = $true }
+        '^--keybinds$'           { $Keybinds = $true }
+        '^--uninstall$'          { $Uninstall = $true }
+        '^--dry-run$'            { $DryRun = $true }
+        '^--no-onboard$'         { $NoOnboard = $true }
+        '^--newline=(.*)$'       { $Newline = $Matches[1]; $newlineGiven = $true }
+        '^--newline$' {
+            # 값이 없으면 빈 문자열로 둬서 아래 검증에 걸리게 한다 (--newline "" 도 오류다).
+            $newlineGiven = $true
+            $Newline = if ($i + 1 -lt $Rest.Count) { $Rest[++$i] } else { "" }
+        }
+        default { $unknownArgs += $Rest[$i] }
+    }
+}
+
+if ($Help) {
+    Show-Usage
     exit 0
+}
+
+if ($unknownArgs.Count -gt 0) {
+    Write-Host "알 수 없는 옵션: $($unknownArgs -join ' ')" -ForegroundColor Red
+    Write-Host ""
+    Show-Usage
+    exit 1
 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -67,8 +117,8 @@ $runKeybinds = [bool]$Keybinds
 $dryRun = [bool]$DryRun
 $newlineChord = $Newline
 
-if ($PSBoundParameters.ContainsKey("Newline") -and $newlineChord -notin @("shift-enter", "ctrl-enter")) {
-    Write-Host "--Newline 값은 shift-enter 또는 ctrl-enter 여야 합니다 (받은 값: $newlineChord)." -ForegroundColor Red
+if ($newlineGiven -and $newlineChord -notin @("shift-enter", "ctrl-enter")) {
+    Write-Host "-Newline (--newline) 값은 shift-enter 또는 ctrl-enter 여야 합니다 (받은 값: $newlineChord)." -ForegroundColor Red
     exit 1
 }
 
@@ -128,7 +178,7 @@ function Invoke-Onboarding {
     }
 }
 
-$hadArgs = $Hooks -or $AgentsMd -or $Keybinds -or $Uninstall -or $DryRun -or $NoOnboard -or $PSBoundParameters.ContainsKey("Newline")
+$hadArgs = $Hooks -or $AgentsMd -or $Keybinds -or $Uninstall -or $DryRun -or $NoOnboard -or $newlineGiven
 if (-not $hadArgs) {
     $answers = Invoke-Onboarding
     if ($answers) {
@@ -143,7 +193,7 @@ if (-not $hadArgs) {
         }
         if ($answers.ContainsKey("NEWLINE_CHORD") -and
             $answers["NEWLINE_CHORD"] -in @("shift-enter", "ctrl-enter") -and
-            -not $PSBoundParameters.ContainsKey("Newline")) {
+            -not $newlineGiven) {
             $newlineChord = $answers["NEWLINE_CHORD"]
         }
         if ($answers["OVERWRITE_AGENTSMD"] -eq "1") { $forceAgentsMd = $true }

@@ -8,8 +8,9 @@
     끊기면 잘린 스크립트가 iex 로 파싱될 때 함수 정의만 있고 호출부가 없어 아무것도 실행되지 않는다.
     플래그(-DryRun 등)는 최상위 param 블록에서 [switch] 로 받아 해시테이블 스플랫으로 setup.ps1
     에 넘긴다 — 배열 스플랫(@Rest)은 '-DryRun' 을 위치 인자로 취급해 스위치 바인딩이 안 된다.
-    스위치를 새로 추가할 때는 param 블록과 아래 $fwd 목록 **양쪽** 에 넣어야 한다. 한쪽만 넣으면
-    조용히 무시된다 (install.sh 는 "$@" 로 전부 넘기므로 이 비대칭이 POSIX 쪽에선 안 보인다).
+    스위치를 새로 추가할 때는 param 블록, 긴 표기(--dry-run) 해석 테이블, 아래 $fwd 목록
+    **셋 다** 에 넣어야 한다. 한 곳만 빠뜨려도 조용히 무시된다
+    (install.sh 는 "$@" 로 전부 넘기므로 이 비대칭이 POSIX 쪽에선 안 보인다).
 .EXAMPLE
     irm https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1 | iex
 .EXAMPLE
@@ -22,6 +23,11 @@
     받을 때도 irm -Headers @{Authorization="Bearer $env:GITHUB_TOKEN"} 로 넘겨야 한다.)
 #>
 
+# PositionalBinding 을 끄지 않으면 scriptblock 형태로 직접 실행할 때 `--help` 나
+# `--dry-run` 같은 토큰이 파라미터가 아닌 '위치 인자' 로 들어와 첫 번째 비-스위치
+# 파라미터인 -Newline 에 통째로 바인딩된다. 그러면 아래 $Rest 검사는 아무것도 보지
+# 못한 채 setup.ps1 에 Newline='--help' 가 넘어가 엉뚱한 오류가 났다.
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$Hooks,
     [switch]$AgentsMd,
@@ -30,6 +36,7 @@ param(
     [switch]$Uninstall,
     [switch]$DryRun,
     [switch]$NoOnboard,
+    [Alias("h")]
     [switch]$Help,
     [Parameter(ValueFromRemainingArguments = $true)] $Rest
 )
@@ -133,11 +140,35 @@ function Invoke-Install {
         [switch]$Uninstall,
         [switch]$DryRun,
         [switch]$NoOnboard,
+        [Alias("h")]
         [switch]$Help,
         [Parameter(ValueFromRemainingArguments = $true)] $Rest
     )
 
-    if ($Help -or ($Rest -and ($Rest -contains "-h" -or $Rest -contains "--help"))) {
+    # 남은 토큰을 install.sh 와 같은 긴 표기로 해석한다. PowerShell 은 이름에 하이픈이
+    # 들어간 플래그(--dry-run)를 파라미터로 인식하지 못하므로 여기서 직접 읽는다.
+    $restTokens = @($Rest)
+    $newlineGiven = $PSBoundParameters.ContainsKey("Newline")
+    $unknownArgs = @()
+    for ($i = 0; $i -lt $restTokens.Count; $i++) {
+        switch -Regex ([string]$restTokens[$i]) {
+            '^(--help|-help|/[?h])$' { $Help = $true }
+            '^--hooks$'              { $Hooks = $true }
+            '^--agents-?md$'         { $AgentsMd = $true }
+            '^--keybinds$'           { $Keybinds = $true }
+            '^--uninstall$'          { $Uninstall = $true }
+            '^--dry-run$'            { $DryRun = $true }
+            '^--no-onboard$'         { $NoOnboard = $true }
+            '^--newline=(.*)$'       { $Newline = $Matches[1]; $newlineGiven = $true }
+            '^--newline$' {
+                $newlineGiven = $true
+                $Newline = if ($i + 1 -lt $restTokens.Count) { [string]$restTokens[++$i] } else { "" }
+            }
+            default { $unknownArgs += $restTokens[$i] }
+        }
+    }
+
+    if ($Help) {
         Write-Host @"
 claude-code-setup 원격 설치 부트스트랩 (Windows)
 
@@ -148,6 +179,9 @@ claude-code-setup 원격 설치 부트스트랩 (Windows)
   & ([scriptblock]::Create((irm .../install.ps1))) -DryRun               # 미리보기
   & ([scriptblock]::Create((irm .../install.ps1))) -NoOnboard            # 온보딩 없이 전체 설치
 
+install.sh 와 같은 긴 표기(--hooks / --agentsmd / --keybinds / --newline VAL /
+--uninstall / --dry-run / --no-onboard / --help)도 그대로 받습니다.
+
 플래그 없이 실행하면 설치 범위·권한 모드(auto/bypassPermissions)를 고르는 온보딩이 뜹니다.
 콘솔이 없는 환경(CI 등)에서는 온보딩을 건너뛰고 전체 설치로 진행합니다.
 
@@ -156,6 +190,13 @@ claude-code-setup 원격 설치 부트스트랩 (Windows)
   `$env:GITHUB_TOKEN / `$env:GH_TOKEN — 비공개 레포 다운로드용 PAT (있으면 자동 사용)
 "@
         return
+    }
+
+    # 남은 인자는 setup 으로 넘어가지 않는다. 조용히 버리면 오타(--keybind)가 '전체 설치' 로
+    # 둔갑한다 — POSIX install.sh 는 알 수 없는 옵션에서 exit 1 이므로 여기서도 거절한다.
+    # 다운로드 전에 판정한다: 오타 하나 때문에 레포를 통째로 받을 이유가 없다.
+    if ($unknownArgs.Count -gt 0) {
+        throw "알 수 없는 옵션: $($unknownArgs -join ' ')"
     }
 
     $repo = if ($env:CLAUDE_SETUP_REPO) { $env:CLAUDE_SETUP_REPO } else { "thsvkd/claude-code-setup" }
@@ -188,17 +229,14 @@ claude-code-setup 원격 설치 부트스트랩 (Windows)
 
         # setup_agentsmd 는 현재 작업 디렉터리에 AGENTS.md 를 설치하므로 cwd 를 유지한 채 실행한다.
         # 스위치는 반드시 해시테이블 스플랫으로 넘긴다 (배열 스플랫 @Rest 는 스위치 바인딩 실패).
+        # $PSBoundParameters 가 아니라 변수에서 읽는다 — 위 긴 표기(--dry-run) 해석 결과는
+        # $PSBoundParameters 에 남지 않는다.
         $fwd = @{}
         foreach ($k in 'Hooks', 'AgentsMd', 'Uninstall', 'DryRun', 'NoOnboard', 'Keybinds') {
-            if ($PSBoundParameters[$k]) { $fwd[$k] = $true }
+            if (Get-Variable -Name $k -ValueOnly) { $fwd[$k] = $true }
         }
-        if ($PSBoundParameters.ContainsKey('Newline')) {
+        if ($newlineGiven) {
             $fwd['Newline'] = $Newline
-        }
-        # 남은 인자는 setup 으로 넘어가지 않는다. 조용히 버리면 오타(-Keybind)가 '전체 설치' 로
-        # 둔갑한다 — POSIX install.sh 는 알 수 없는 옵션에서 exit 1 이므로 여기서도 거절한다.
-        if ($Rest -and $Rest.Count -gt 0) {
-            throw "알 수 없는 옵션: $($Rest -join ' ')"
         }
         & $setup @fwd
     } finally {

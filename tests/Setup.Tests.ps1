@@ -13,6 +13,15 @@ BeforeAll {
         $out = pwsh -NoProfile -File $Path @ScriptArgs 2>&1 | Out-String
         return [pscustomobject]@{ Output = $out; ExitCode = $LASTEXITCODE }
     }
+
+    # `-File` 로 넘기면 PowerShell 이 `--help` 를 -Help 로 붙여주지만, 사용자가 셸에서 직접
+    # 치는 `.\setup.ps1 --help` 는 파라미터가 아닌 위치 인자로 들어온다.
+    # 위치 바인딩 회귀는 후자로만 재현되므로 그 경로를 그대로 흉내 낸다.
+    function Invoke-ScriptInline {
+        param([string]$Path, [string]$ArgString)
+        $out = pwsh -NoProfile -Command "& '$Path' $ArgString; exit `$LASTEXITCODE" 2>&1 | Out-String
+        return [pscustomobject]@{ Output = $out; ExitCode = $LASTEXITCODE }
+    }
 }
 
 Describe "setup.ps1 dispatcher" {
@@ -43,6 +52,37 @@ Describe "setup.ps1 dispatcher" {
         $r.ExitCode | Should -Be 0
         Test-Path (Join-Path $env:USERPROFILE ".claude\settings.json") | Should -Be $false
     }
+
+    # 회귀: 셸에서 직접 실행하면 `--help` 가 위치 인자로 들어와 -Newline 에 바인딩됐고,
+    # 도움말 대신 "값은 shift-enter 또는 ctrl-enter 여야 합니다 (받은 값: --help)" 가 나왔다.
+    It "셸에서 직접 실행한 --help 도 도움말을 낸다" {
+        $r = Invoke-ScriptInline $script:Setup "--help"
+        $r.ExitCode | Should -Be 0
+        $r.Output | Should -Match "사용법"
+        $r.Output | Should -Match "--no-onboard"
+    }
+
+    It "setup.sh 식 --hooks --dry-run 도 받고 훅 범위만 실행한다" {
+        $r = Invoke-ScriptInline $script:Setup "--hooks --dry-run"
+        $r.ExitCode | Should -Be 0
+        $r.Output | Should -Not -Match "AGENTS.md"      # --hooks 범위가 지켜졌다
+        Test-Path (Join-Path $env:USERPROFILE ".claude\settings.json") | Should -Be $false
+    }
+
+    It "잘못된 --newline 값은 표기와 무관하게 exit 1 이다" {
+        $r = Invoke-ScriptInline $script:Setup "--keybinds --newline foo"
+        $r.ExitCode | Should -Be 1
+        $r.Output | Should -Match "shift-enter"
+    }
+
+    # 조용히 무시하면 오타(--keybind)가 '전체 설치' 로 둔갑한다.
+    It "알 수 없는 옵션은 exit 1 이고 사용법을 함께 보여준다" {
+        $r = Invoke-ScriptInline $script:Setup "--keybind"
+        $r.ExitCode | Should -Be 1
+        $r.Output | Should -Match "알 수 없는 옵션"
+        $r.Output | Should -Match "사용법"
+        Test-Path (Join-Path $env:USERPROFILE ".claude\settings.json") | Should -Be $false
+    }
 }
 
 Describe "install.ps1 bootstrap" {
@@ -50,6 +90,22 @@ Describe "install.ps1 bootstrap" {
         $r = Invoke-Script (Join-Path $script:RepoRoot "install.ps1") @("-Help")
         $r.ExitCode | Should -Be 0
         $r.Output | Should -Match "부트스트랩"
+    }
+
+    # scriptblock 형태(= 셸 직접 실행)에서 --help 가 -Newline 에 바인딩되던 회귀.
+    It "셸에서 직접 실행한 --help 도 도움말을 낸다" {
+        $r = Invoke-ScriptInline (Join-Path $script:RepoRoot "install.ps1") "--help"
+        $r.ExitCode | Should -Be 0
+        $r.Output | Should -Match "부트스트랩"
+    }
+
+    # --dry-run 은 알아듣고 --bogus 만 거절해야 한다. 거절은 다운로드 전에 일어나므로
+    # 이 테스트는 네트워크를 타지 않는다.
+    It "알 수 없는 옵션만 거절하고 긴 표기는 소비한다" {
+        $r = Invoke-ScriptInline (Join-Path $script:RepoRoot "install.ps1") "--dry-run --bogus"
+        $r.ExitCode | Should -Not -Be 0
+        $r.Output | Should -Match "--bogus"
+        $r.Output | Should -Not -Match "--dry-run"
     }
 }
 

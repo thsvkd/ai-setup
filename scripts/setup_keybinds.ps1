@@ -25,7 +25,7 @@ $PSNativeCommandUseErrorActionPreference = $false
 
 # 값이 비었는지가 아니라 '인자가 주어졌는지' 로 판정한다 — -Newline "" 도 잘못된 값이다.
 if ($PSBoundParameters.ContainsKey("Newline") -and $Newline -notin @("shift-enter", "ctrl-enter")) {
-    Write-Host "--Newline 값은 shift-enter 또는 ctrl-enter 여야 합니다 (받은 값: $Newline)." -ForegroundColor Red
+    Write-Host "-Newline (--newline) 값은 shift-enter 또는 ctrl-enter 여야 합니다 (받은 값: $Newline)." -ForegroundColor Red
     exit 1
 }
 
