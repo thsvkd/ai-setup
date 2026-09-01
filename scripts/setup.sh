@@ -203,17 +203,26 @@ NEWLINE_FLAG=()
 # uninstall: --keybinds --uninstall 은 키바인드만. 아니면 훅 다음 키바인드.
 # exec 하면 키바인드 uninstall 이 실행되지 않는다.
 if [[ "$UNINSTALL" -eq 1 ]]; then
-    if [[ "$RUN_KEYBINDS" -eq 1 ]]; then
-        bash "$SCRIPT_DIR/setup_keybinds.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"}
-        exit $?
+    # 제거도 설치와 같은 범위 규칙을 따른다. 범위를 지정했으면 그것만 지운다 —
+    # --hooks --uninstall 이 키바인딩까지 지우면 "--hooks 는 키바인딩을 건드리지
+    # 않는다"(핵심 결정 4)를 제거 쪽에서만 어기는 것이 된다.
+    UN_KEYBINDS="$RUN_KEYBINDS"
+    UN_HOOKS="$RUN_HOOKS"
+    if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 && "$RUN_KEYBINDS" -eq 0 ]]; then
+        UN_KEYBINDS=1
+        UN_HOOKS=1
     fi
-    # 키바인드를 '먼저' 지운다. 훅 uninstall 이 매니페스트를 통째로 지우는데, 키바인드 제거는
+    # 키바인드를 '먼저' 지운다. 훅 uninstall 이 매니페스트를 손보는데, 키바인드 제거는
     # 그 영수증(tmux_added 등)이 있어야 '우리가 넣은 것' 과 사용자 것을 구분할 수 있다.
-    # set -e 아래라 실패해도 나머지가 돌도록 종료 코드를 받아 둔다.
+    # set -e 아래라 한쪽이 실패해도 나머지가 돌도록 종료 코드를 받아 둔다.
     kb_exit=0
-    bash "$SCRIPT_DIR/setup_keybinds.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || kb_exit=$?
     hooks_exit=0
-    bash "$SCRIPT_DIR/setup_hooks.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || hooks_exit=$?
+    if [[ "$UN_KEYBINDS" -eq 1 ]]; then
+        bash "$SCRIPT_DIR/setup_keybinds.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || kb_exit=$?
+    fi
+    if [[ "$UN_HOOKS" -eq 1 ]]; then
+        bash "$SCRIPT_DIR/setup_hooks.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || hooks_exit=$?
+    fi
     [[ "$hooks_exit" -ne 0 ]] && exit "$hooks_exit"
     exit "$kb_exit"
 fi

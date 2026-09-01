@@ -357,16 +357,33 @@ def test_SCOPE_hooks이면_하네스를_묻지_않는다(tmp_path):
 def test_벤더링된_questionary가_실제로_프롬프트를_만들_수_있다():
     """`prompt_toolkit-*.dist-info/METADATA` 를 지우면 여기서 걸린다.
 
-    questionary 는 프롬프트를 만들기 전에 is_prompt_toolkit_3() 을 호출하고, 그 값은
-    설치 메타데이터에서 온다. import 만으로는 드러나지 않고 실제로 프롬프트를 구성할 때
-    PackageNotFoundError 로 터진다.
+    prompt_toolkit 의 __version__ 은 importlib.metadata 에서 읽는다. 벤더링하면서 dist-info 를
+    빠뜨리면 import 는 멀쩡히 되고, 프롬프트를 만들 때가 되어서야 터진다 — 온보딩이 첫 화면에서
+    죽는 형태라 import 검사만으로는 잡히지 않는다.
+
+    콘솔을 요구하지 않는다. 예전에는 questionary.select 를 그냥 호출했는데, 그러면
+    prompt_toolkit 이 실제 출력 장치를 찾아 나서서 진짜 Windows 콘솔 스크린 버퍼가 없는
+    환경(CI, 출력을 파이프로 받는 러너)에서만 NoConsoleScreenBufferError 로 실패했다.
+    검증하려는 것은 장치가 아니라 '프롬프트를 구성할 수 있는가' 이므로, prompt_toolkit 이
+    이 용도로 제공하는 파이프 입력과 DummyOutput 을 물려 같은 코드 경로를 그대로 지난다.
+
+    온보딩이 실제로 쓰는 네 가지(select, confirm, Choice, Style)를 모두 만들어 본다.
     """
     code = (
         "import sys; sys.path.insert(0, %r)\n"
         "import questionary\n"
         "from questionary.utils import is_prompt_toolkit_3\n"
+        "from prompt_toolkit.application import create_app_session\n"
+        "from prompt_toolkit.input import create_pipe_input\n"
+        "from prompt_toolkit.output import DummyOutput\n"
         "assert is_prompt_toolkit_3(), 'prompt_toolkit 3 이 아님'\n"
-        "questionary.select('t', choices=['a', 'b'])\n"
+        "style = questionary.Style([('qmark', 'fg:#00b0ff bold')])\n"
+        "with create_pipe_input() as inp:\n"
+        "    with create_app_session(input=inp, output=DummyOutput()):\n"
+        "        questionary.select('t', choices=[questionary.Choice('a', value='a'),\n"
+        "                                        questionary.Choice('b', value='b')],\n"
+        "                           style=style, instruction='(x)')\n"
+        "        questionary.confirm('t?', default=True, style=style)\n"
         "print('OK')\n" % str(ROOT / "res" / "vendor")
     )
     proc = subprocess.run([sys.executable, "-X", "utf8", "-c", code],

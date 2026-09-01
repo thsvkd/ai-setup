@@ -1740,3 +1740,208 @@ def test_불가_터미널_주입이_없으면_경고하지_않는다(kb_sandbox)
     proc = run_setup(["--keybinds"], kb_sandbox)
     assert_ok(proc)
     assert "구분하지 못합니다" not in combined_output(proc), combined_output(proc)
+
+
+# ── Codex 리뷰 회귀 — docs/reviews/newline-keybind-codex-review.md ──────────────
+#
+# 앞선 정적 검토와 같은 패턴이 반복됐다: 확정 결함 아홉 개가 전부 어떤 픽스처도
+# 시드하지 않는 분기에 있었다. 아래는 그 분기를 직접 만들어 고정한다.
+
+
+def test_설치가_덮어쓴_Claude값을_uninstall이_되돌린다(kb_sandbox):
+    """covers: Test-12 (사용자 원래 항목은 남긴다)
+
+    고른 키에 사용자가 다른 명령을 걸어두었으면 설치는 그것을 덮어쓴다. 되돌릴 기록을
+    남기지 않으면 uninstall 이 원상 복구가 아니라 삭제가 된다.
+    """
+    claude_kb = kb_sandbox.home / ".claude" / "keybindings.json"
+    claude_kb.write_text(json.dumps({"Chat": {
+        "shift+enter": "chat:submit",
+        "ctrl+enter": "chat:newline",
+    }}, indent=2), encoding="utf-8")
+
+    assert_ok(run_setup(["--keybinds", "--newline", "shift-enter"], kb_sandbox))
+    assert_ok(run_setup(["--keybinds", "--uninstall"], kb_sandbox))
+
+    chat = claude_chat_map(json.loads(claude_kb.read_text(encoding="utf-8")))
+    assert chat.get("shift+enter") == "chat:submit", (
+        f"설치가 덮어쓴 값을 되돌리지 않았다: {chat!r}"
+    )
+    assert chat.get("ctrl+enter") == "chat:newline", (
+        f"사용자가 직접 넣은 고르지 않은 키를 지웠다: {chat!r}"
+    )
+
+
+def test_uninstall은_영수증에_없는_Codex코드를_지우지_않는다(kb_sandbox):
+    """covers: Test-12 (사용자 원래 항목은 남긴다)
+
+    insert_newline 의 "shift-enter" 는 사용자가 직접 쓰는 값과 글자까지 같다.
+    영수증 없이 값만 보고 지우면 남의 설정을 지운다.
+    """
+    codex = kb_sandbox.home / ".codex" / "config.toml"
+    codex.write_text(
+        '[tui.keymap.editor]\ninsert_newline = ["shift-enter", "ctrl-enter", "ctrl-j"]\n',
+        encoding="utf-8")
+
+    assert_ok(run_setup(["--keybinds", "--newline", "shift-enter"], kb_sandbox))
+    assert_ok(run_setup(["--keybinds", "--uninstall"], kb_sandbox))
+
+    parsed, text = load_toml(codex)
+    insert = (((parsed.get("tui") or {}).get("keymap") or {}).get("editor") or {}
+              ).get("insert_newline") or []
+    for key in ("shift-enter", "ctrl-enter", "ctrl-j"):
+        assert key in insert, f"사용자가 갖고 있던 {key} 가 사라졌다: {insert!r}\n{text}"
+
+
+@pytest.mark.parametrize("source", [
+    'tui.keymap.editor.insert_newline = ["ctrl-j"]\n',
+    '[tui]\nkeymap.editor.insert_newline = ["ctrl-j"]\n',
+    '[tui.keymap]\neditor.insert_newline = ["ctrl-j"]\n',
+    'tui.keymap.editor.indent = ["tab"]\n',
+])
+def test_점표기_codex_toml도_유효하게_남는다(kb_sandbox, source):
+    """covers: Test-20 (다른 키/테이블 보존)
+
+    TOML 에서 `a.b.c.key = ...` 는 그 테이블을 만든다. 헤더 형태만 알아보면 이미 만들어진
+    테이블에 [tui.keymap.editor] 헤더를 덧붙이게 되고, 같은 테이블 이중 선언이라 파서가
+    파일 전체를 거부한다.
+    """
+    codex = kb_sandbox.home / ".codex" / "config.toml"
+    codex.write_text(source, encoding="utf-8")
+
+    assert_ok(run_setup(["--keybinds", "--newline", "shift-enter"], kb_sandbox))
+
+    parsed, text = load_toml(codex)
+    assert parsed is not None, f"TOML 이 깨졌다:\n{text}"
+    insert = (((parsed.get("tui") or {}).get("keymap") or {}).get("editor") or {}
+              ).get("insert_newline") or []
+    assert "shift-enter" in insert, f"{insert!r}\n{text}"
+
+
+def test_고르지_않은_키의_WT_사용자항목은_남는다(kb_sandbox):
+    """covers: Test-26 / 핵심 결정 5
+
+    시퀀스만 보면 사용자가 Ctrl+Enter 에 직접 건 항목도 '우리 것' 으로 읽힌다.
+    지금 쓰는 키도 아니고 영수증에도 없으면 우리 것이 아니다.
+    """
+    kb_sandbox.wt.write_text(json.dumps({"actions": [
+        {"command": {"action": "sendInput", "input": "\u001b\r"}, "keys": "ctrl+enter"},
+        {"command": "copy", "keys": WT_FOREIGN_KEYS},
+    ]}, indent=2), encoding="utf-8")
+
+    assert_ok(run_setup(["--keybinds", "--newline", "shift-enter"], kb_sandbox))
+
+    raw = kb_sandbox.wt.read_text(encoding="utf-8")
+    settings = json.loads(raw)
+    sends = wt_send_bindings(settings)
+    assert any(entry[0] in ("ctrl+enter", "ctrl+return") for entry in sends), (
+        f"사용자가 직접 건 ctrl+enter sendInput 이 사라졌다:\n{raw}"
+    )
+    assert WT_FOREIGN_KEYS in raw
+
+
+def test_WT_기본경로는_Stable말고도_찾는다():
+    """covers: R4 회귀 (Test-26/27 은 env 주입으로만 돌아 실제 해석기를 못 본다)"""
+    apply = load_apply_module()
+    # LOCALAPPDATA 를 인자로 준다 — 플랫폼과 무관하게 해석기 자체를 본다.
+    names = [str(p) for p in apply.default_wt_paths(local="X:/Local")]
+    assert any("WindowsTerminalPreview" in n for n in names), names
+    assert any("WindowsTerminalCanary" in n for n in names), names
+    assert any(n.endswith(str(Path("Microsoft") / "Windows Terminal" / "settings.json"))
+               for n in names), names
+
+
+def test_tmux_주석은_설정으로_세지_않는다(kb_sandbox):
+    """covers: Test-23 (없으면 추가, 있으면 중복하지 않는다)
+
+    문자열 검사가 주석까지 세면 `# extended-keys disabled` 한 줄이 설치를 통째로 막는다.
+    """
+    if sys.platform == "win32":
+        pytest.skip("tmux.conf 는 POSIX 설치 대상")
+    apply = load_apply_module()
+    tmux = kb_sandbox.home / ".tmux.conf"
+    tmux.write_text("# extended-keys disabled\n# extkeys experiment\nset -g mouse on\n",
+                    encoding="utf-8")
+
+    assert_ok(run_setup(["--keybinds"], kb_sandbox))
+
+    text = tmux.read_text(encoding="utf-8")
+    assert apply.TMUX_EXTENDED_LINE in text, f"주석이 설치를 막았다:\n{text}"
+    assert apply.TMUX_EXTKEYS_LINE in text, f"주석이 설치를 막았다:\n{text}"
+
+
+@tmux_only
+def test_부분_복구_뒤에도_영수증이_두_줄을_모두_기억한다(kb_sandbox):
+    """covers: Test-12/13 (영수증이 빈 값으로 덮이지 않는다)
+
+    사용자가 우리 줄 하나만 지운 뒤 재실행하면 그 한 줄만 다시 넣는다. 영수증을 덮어쓰면
+    나머지 한 줄의 소유권 기록을 잃고, uninstall 이 우리 줄을 남긴다.
+    """
+    apply = load_apply_module()
+    tmux = kb_sandbox.home / ".tmux.conf"
+    tmux.write_text(TMUX_SENTINEL + "\n", encoding="utf-8")
+
+    assert_ok(run_setup(["--keybinds"], kb_sandbox))
+    kept = [ln for ln in tmux.read_text(encoding="utf-8").splitlines()
+            if ln != apply.TMUX_EXTKEYS_LINE]
+    tmux.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+    assert_ok(run_setup(["--keybinds"], kb_sandbox))
+    assert_ok(run_setup(["--keybinds", "--uninstall"], kb_sandbox))
+
+    text = tmux.read_text(encoding="utf-8")
+    assert apply.TMUX_EXTENDED_LINE not in text, f"우리가 넣은 줄이 남았다:\n{text}"
+    assert apply.TMUX_EXTKEYS_LINE not in text, f"우리가 넣은 줄이 남았다:\n{text}"
+    assert TMUX_SENTINEL in text, "사용자 줄까지 지웠다"
+
+
+@tmux_only
+def test_tmux도_백업을_남긴다(kb_sandbox):
+    """covers: R4 회귀 (핵심 결정 8 — 백업은 tmux.conf 에도 적용된다)"""
+    tmux = kb_sandbox.home / ".tmux.conf"
+    tmux.write_text(TMUX_SENTINEL + "\n", encoding="utf-8")
+
+    assert_ok(run_setup(["--keybinds"], kb_sandbox))
+
+    backups = list(tmux.parent.glob(".tmux.conf.bak.*"))
+    assert backups, "tmux.conf 를 바꾸면서 백업을 남기지 않았다"
+    assert TMUX_SENTINEL in backups[0].read_text(encoding="utf-8")
+
+
+@posix_only
+def test_심볼릭_링크를_끊지_않고_권한을_보존한다(kb_sandbox):
+    """covers: R4 회귀 (핵심 결정 8)
+
+    dotfile 관리자는 설정을 링크로 건다. 링크를 os.replace 로 갈아치우면 일반 파일이 되어
+    관리에서 떨어져 나가고, 새 파일의 기본 권한이 0600 설정을 0644 로 넓힌다.
+    """
+    codex = kb_sandbox.home / ".codex" / "config.toml"
+    real = kb_sandbox.home / ".codex" / "real-config.toml"
+    if codex.exists():
+        codex.unlink()
+    real.write_text('model = "%s"\n' % CODEX_SENTINEL_MODEL, encoding="utf-8")
+    os.chmod(real, 0o600)
+    os.symlink(str(real), str(codex))
+
+    assert_ok(run_setup(["--keybinds"], kb_sandbox))
+
+    assert codex.is_symlink(), "심볼릭 링크가 일반 파일로 바뀌었다"
+    assert "shift-enter" in real.read_text(encoding="utf-8"), "링크가 가리키는 실체가 안 바뀌었다"
+    assert oct(real.stat().st_mode & 0o777) == "0o600", (
+        f"권한이 넓어졌다: {oct(real.stat().st_mode & 0o777)}"
+    )
+
+
+def test_hooks_uninstall은_키바인딩을_건드리지_않는다(kb_sandbox):
+    """covers: Test-9 / 핵심 결정 4
+
+    --hooks 는 키바인딩을 설치하지 않는다. 제거 쪽에서만 그 경계를 무시하면 안 된다.
+    """
+    assert_ok(run_setup(["--keybinds"], kb_sandbox))
+    before = len(managed_sendsequences(load_keybindings(kb_sandbox.vscode)))
+    assert before == 1
+
+    assert_ok(run_setup(["--hooks", "--uninstall"], kb_sandbox))
+
+    after = len(managed_sendsequences(load_keybindings(kb_sandbox.vscode)))
+    assert after == before, "--hooks --uninstall 이 관리 키바인딩을 지웠다"
