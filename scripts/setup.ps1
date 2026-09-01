@@ -18,6 +18,7 @@ param(
     [switch]$Hooks,
     [switch]$AgentsMd,
     [switch]$Keybinds,
+    [string[]]$Harness = @(),
     [string]$Newline = "",
     [switch]$Uninstall,
     [switch]$DryRun,
@@ -38,7 +39,9 @@ claude-code-setup — Claude Code 사용자 레벨 설정
 사용법: .\setup.ps1 [옵션]
   (옵션 없음)   대화형 온보딩으로 설치 범위/권한 모드를 고른 뒤 실행
   -Hooks        전역 가드 훅 + 권한만 설치 (~/.claude)
-  -AgentsMd     현재 폴더에 AGENTS.md 만 설치
+  -AgentsMd     현재 폴더에 프로젝트 지침만 설치
+  -Harness L    지침을 설치할 하네스 (쉼표 구분: claude,codex,grok,opencode,all)
+                claude 를 고르면 CLAUDE.md 도 함께 설치된다. 기본값은 all.
   -Keybinds     줄바꿈 키바인딩만 설치 (VS Code/Cursor/Claude/Codex)
   -Newline VAL  줄바꿈 키 (shift-enter | ctrl-enter). 기본 shift-enter
   -Uninstall    가드 훅 + 관리 키바인딩 제거 (권한·사용자 항목은 보존)
@@ -66,6 +69,7 @@ $runAgentsMd = [bool]$AgentsMd
 $runKeybinds = [bool]$Keybinds
 $dryRun = [bool]$DryRun
 $newlineChord = $Newline
+$harnesses = $Harness
 
 if ($PSBoundParameters.ContainsKey("Newline") -and $newlineChord -notin @("shift-enter", "ctrl-enter")) {
     Write-Host "--Newline 값은 shift-enter 또는 ctrl-enter 여야 합니다 (받은 값: $newlineChord)." -ForegroundColor Red
@@ -128,7 +132,7 @@ function Invoke-Onboarding {
     }
 }
 
-$hadArgs = $Hooks -or $AgentsMd -or $Keybinds -or $Uninstall -or $DryRun -or $NoOnboard -or $PSBoundParameters.ContainsKey("Newline")
+$hadArgs = $Hooks -or $AgentsMd -or $Keybinds -or $Uninstall -or $DryRun -or $NoOnboard -or $PSBoundParameters.ContainsKey("Newline") -or $PSBoundParameters.ContainsKey("Harness")
 if (-not $hadArgs) {
     $answers = Invoke-Onboarding
     if ($answers) {
@@ -145,6 +149,13 @@ if (-not $hadArgs) {
             $answers["NEWLINE_CHORD"] -in @("shift-enter", "ctrl-enter") -and
             -not $PSBoundParameters.ContainsKey("Newline")) {
             $newlineChord = $answers["NEWLINE_CHORD"]
+        }
+        # onboard.py writes a controlled set, but a stray value must not reach
+        # the worker, whose ValidateSet-free parameter would pass it through.
+        if ($answers.ContainsKey("HARNESSES") -and
+            $answers["HARNESSES"] -match "^[a-z,-]+$" -and
+            -not $PSBoundParameters.ContainsKey("Harness")) {
+            $harnesses = $answers["HARNESSES"] -split ","
         }
         if ($answers["OVERWRITE_AGENTSMD"] -eq "1") { $forceAgentsMd = $true }
         if ($answers["DRY_RUN"] -eq "1") { $dryRun = $true }
@@ -178,7 +189,13 @@ if ($runHooks) {
 }
 
 if ($runAgentsMd) {
-    & (Join-Path $PSScriptRoot "setup_agentsmd.ps1") -DryRun:$dryRun -Force:$forceAgentsMd
+    # An empty selection means "not specified", so the worker applies its own
+    # default rather than being handed an empty array it would have to reject.
+    if ($harnesses.Count -gt 0) {
+        & (Join-Path $PSScriptRoot "setup_agentsmd.ps1") -DryRun:$dryRun -Force:$forceAgentsMd -Harness $harnesses
+    } else {
+        & (Join-Path $PSScriptRoot "setup_agentsmd.ps1") -DryRun:$dryRun -Force:$forceAgentsMd
+    }
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 

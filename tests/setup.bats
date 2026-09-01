@@ -133,3 +133,103 @@ _keybind_sandbox() {
     [ ! -f "$SANDBOX/AGENTS.md" ]
     [ -f "$HOME/.claude/.claude-code-setup.json" ]
 }
+
+# 프로젝트 지침 설치는 고른 하네스에 따라 산출물이 달라진다. Codex/Grok/OpenCode 는
+# 루트 AGENTS.md 를 직접 읽고, Claude Code 는 CLAUDE.md 를 통해서만 읽는다.
+# Windows 쪽 같은 계약은 tests/Setup.Tests.ps1 의 "프로젝트 지침 하네스 선택" 에 있다.
+
+@test "setup_agentsmd.sh with no args installs every harness artifact" {
+    cd "$SANDBOX"
+    run bash "$REPO_ROOT/scripts/setup_agentsmd.sh"
+    [ "$status" -eq 0 ]
+    [ -f "$SANDBOX/AGENTS.md" ]
+    [ -f "$SANDBOX/CLAUDE.md" ]
+}
+
+@test "setup_agentsmd.sh --harness codex leaves CLAUDE.md alone" {
+    cd "$SANDBOX"
+    run bash "$REPO_ROOT/scripts/setup_agentsmd.sh" --harness codex
+    [ "$status" -eq 0 ]
+    [ -f "$SANDBOX/AGENTS.md" ]
+    [ ! -f "$SANDBOX/CLAUDE.md" ]
+}
+
+@test "setup_agentsmd.sh --harness grok,opencode leaves CLAUDE.md alone" {
+    cd "$SANDBOX"
+    run bash "$REPO_ROOT/scripts/setup_agentsmd.sh" --harness grok,opencode
+    [ "$status" -eq 0 ]
+    [ -f "$SANDBOX/AGENTS.md" ]
+    [ ! -f "$SANDBOX/CLAUDE.md" ]
+}
+
+@test "setup_agentsmd.sh --harness claude,codex installs both artifacts" {
+    cd "$SANDBOX"
+    run bash "$REPO_ROOT/scripts/setup_agentsmd.sh" --harness claude,codex
+    [ "$status" -eq 0 ]
+    [ -f "$SANDBOX/AGENTS.md" ]
+    [ -f "$SANDBOX/CLAUDE.md" ]
+    grep -q "@AGENTS.md" "$SANDBOX/CLAUDE.md"
+}
+
+@test "setup_agentsmd.sh rejects an unknown harness without writing anything" {
+    cd "$SANDBOX"
+    run bash "$REPO_ROOT/scripts/setup_agentsmd.sh" --harness cursor
+    [ "$status" -eq 1 ]
+    [ ! -f "$SANDBOX/AGENTS.md" ]
+    [ ! -f "$SANDBOX/CLAUDE.md" ]
+}
+
+@test "setup_agentsmd.sh --dry-run writes nothing whichever harness is chosen" {
+    cd "$SANDBOX"
+    run bash "$REPO_ROOT/scripts/setup_agentsmd.sh" --harness claude,codex --dry-run
+    [ "$status" -eq 0 ]
+    [ ! -f "$SANDBOX/AGENTS.md" ]
+    [ ! -f "$SANDBOX/CLAUDE.md" ]
+}
+
+@test "setup_agentsmd.sh keeps an existing CLAUDE.md without --force" {
+    cd "$SANDBOX"
+    printf 'user content\n' > "$SANDBOX/CLAUDE.md"
+    run bash "$REPO_ROOT/scripts/setup_agentsmd.sh" --harness claude
+    [ "$status" -eq 0 ]
+    grep -q "user content" "$SANDBOX/CLAUDE.md"
+}
+
+@test "setup_agentsmd.sh warns when an existing CLAUDE.md does not import AGENTS.md" {
+    # 건너뛰기 자체는 옳다 — 사용자 콘텐츠다. 다만 그 파일이 AGENTS.md 를 불러오지
+    # 않으면 Claude Code 는 방금 설치한 지침을 영영 읽지 않는다.
+    cd "$SANDBOX"
+    printf 'project rules only\n' > "$SANDBOX/CLAUDE.md"
+    run bash "$REPO_ROOT/scripts/setup_agentsmd.sh" --harness claude
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"@AGENTS.md"* ]]
+    [[ "$output" == *"읽지 않습니다"* ]]
+    grep -q "project rules only" "$SANDBOX/CLAUDE.md"
+}
+
+@test "setup_agentsmd.sh stays quiet when the existing CLAUDE.md already imports it" {
+    cd "$SANDBOX"
+    printf '@AGENTS.md\n\n## project specific\n' > "$SANDBOX/CLAUDE.md"
+    run bash "$REPO_ROOT/scripts/setup_agentsmd.sh" --harness claude
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"읽지 않습니다"* ]]
+}
+
+@test "setup_agentsmd.sh --force backs CLAUDE.md up before overwriting it" {
+    cd "$SANDBOX"
+    printf 'user content\n' > "$SANDBOX/CLAUDE.md"
+    run bash "$REPO_ROOT/scripts/setup_agentsmd.sh" --harness claude --force
+    [ "$status" -eq 0 ]
+    grep -q "@AGENTS.md" "$SANDBOX/CLAUDE.md"
+    ls "$SANDBOX"/CLAUDE.md.bak.* >/dev/null
+    grep -q "user content" "$SANDBOX"/CLAUDE.md.bak.*
+}
+
+@test "setup.sh --agentsmd --harness codex passes the selection through" {
+    cd "$SANDBOX"
+    run bash "$REPO_ROOT/scripts/setup.sh" --agentsmd --harness codex
+    [ "$status" -eq 0 ]
+    [ -f "$SANDBOX/AGENTS.md" ]
+    [ ! -f "$SANDBOX/CLAUDE.md" ]
+    [ ! -f "$HOME/.claude/hooks/danger_guard.py" ]
+}

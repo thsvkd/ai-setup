@@ -24,6 +24,7 @@ ONBOARD = ROOT / "res" / "onboard.py"
 DOWN = b"\x1b[B"
 ENTER = b"\r"
 CTRL_C = b"\x03"
+SPACE = b" "        # 체크박스에서 항목 선택/해제
 
 EXIT_OK = 0
 EXIT_NON_INTERACTIVE = 2
@@ -175,13 +176,14 @@ def test_기본값_그대로_선택하면_전체설치_auto_적용(tmp_path):
     """covers: Test-1
     SCOPE=all 기본값: 권한 모드 다음·적용 여부 전에 줄바꿈 키를 묻고,
     Enter(기본 강조)는 Shift+Enter → NEWLINE_CHORD=shift-enter.
-    질문 순서: 범위 → 권한 → 줄바꿈 키 → 적용.
+    질문 순서: 범위 → 권한 → 줄바꿈 키 → 하네스 → 적용.
+    하네스 체크박스는 전부 체크된 상태로 뜨므로 Enter 만으로 전체가 선택된다.
     """
     out = tmp_path / "answers"
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER, ENTER, ENTER, ENTER],
+        keys=[ENTER, ENTER, ENTER, ENTER, ENTER],
     )
     text = screen.decode(errors="replace")
     assert code == EXIT_OK, text
@@ -192,6 +194,7 @@ def test_기본값_그대로_선택하면_전체설치_auto_적용(tmp_path):
         "OVERWRITE_AGENTSMD": "0",
         "DRY_RUN": "0",
         "NEWLINE_CHORD": "shift-enter",
+        "HARNESSES": "claude,codex,grok,opencode",
     }
 
 
@@ -220,11 +223,11 @@ def test_curl_파이프_설치에서도_프롬프트가_동작한다(tmp_path):
 @posix_only
 def test_bypass_선택시_경고를_보여준다(tmp_path):
     out = tmp_path / "answers"
-    # 범위=전체, 권한=bypass, 줄바꿈=기본(Shift+Enter), 적용=기본
+    # 범위=전체, 권한=bypass, 줄바꿈=기본(Shift+Enter), 하네스=기본(전체), 적용=기본
     _, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER, DOWN, ENTER, ENTER, ENTER],
+        keys=[ENTER, DOWN, ENTER, ENTER, ENTER, ENTER],
     )
     text = screen.decode(errors="replace")
     assert "권한 확인" in text and "생략" in text, text
@@ -249,11 +252,11 @@ def test_ctrl_c_취소는_비대화형_폴백과_구분된다(tmp_path):
 def test_기존_agentsmd가_있을때만_덮어쓰기를_묻는다(tmp_path):
     (tmp_path / "AGENTS.md").write_text("기존 프로젝트 규칙\n", encoding="utf-8")
     out = tmp_path / "answers"
-    # 질문이 하나 늘어난다: 범위 → 권한 → 줄바꿈 키 → 덮어쓰기 → 적용
+    # 질문이 하나 늘어난다: 범위 → 권한 → 줄바꿈 키 → 하네스 → 덮어쓰기 → 적용
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER, ENTER, ENTER, ENTER, ENTER],
+        keys=[ENTER, ENTER, ENTER, ENTER, ENTER, ENTER],
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     assert "덮어쓸까요" in screen.decode(errors="replace")
@@ -271,7 +274,7 @@ def test_온보딩에서_CtrlEnter를_고르면_NEWLINE_CHORD는_ctrl_enter다(t
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER, ENTER, DOWN, ENTER, ENTER],
+        keys=[ENTER, ENTER, DOWN, ENTER, ENTER, ENTER],
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     answers = read_answers(out)
@@ -300,17 +303,52 @@ def test_SCOPE_hooks이면_NEWLINE_CHORD를_묻지_않는다(tmp_path):
 def test_SCOPE_agentsmd이면_NEWLINE_CHORD를_묻지_않는다(tmp_path):
     """covers: Test-2
     SCOPE=agentsmd 이면 줄바꿈 키를 묻지 않고 답 파일에 NEWLINE_CHORD 가 없다.
+    질문 순서: 범위 → 하네스 → 적용.
     """
     out = tmp_path / "answers"
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[DOWN, DOWN, ENTER, ENTER],
+        keys=[DOWN, DOWN, ENTER, ENTER, ENTER],
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     answers = read_answers(out)
     assert answers["SCOPE"] == "agentsmd"
     assert "NEWLINE_CHORD" not in answers
+    assert answers["HARNESSES"] == "claude,codex,grok,opencode"
+
+
+@posix_only
+def test_하네스를_해제하면_고른_것만_기록된다(tmp_path):
+    """체크박스는 전부 체크된 상태로 뜬다. Space 로 claude 를 해제하면 나머지만 남는다.
+
+    이 경로가 깨지면 Codex 만 쓰는 사용자의 프로젝트에도 CLAUDE.md 가 생긴다.
+    """
+    out = tmp_path / "answers"
+    # 범위=AGENTS.md만 → 하네스에서 첫 항목(claude) 을 Space 로 해제 → 확정 → 적용
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        keys=[DOWN, DOWN, ENTER, SPACE, ENTER, ENTER],
+    )
+    assert code == EXIT_OK, screen.decode(errors="replace")
+    answers = read_answers(out)
+    assert answers["HARNESSES"] == "codex,grok,opencode"
+
+
+@posix_only
+def test_SCOPE_hooks이면_하네스를_묻지_않는다(tmp_path):
+    """훅은 프로젝트 지침과 무관하다. 범위가 훅뿐이면 하네스 질문이 끼면 안 된다."""
+    out = tmp_path / "answers"
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        keys=[DOWN, ENTER, ENTER, ENTER],
+    )
+    assert code == EXIT_OK, screen.decode(errors="replace")
+    answers = read_answers(out)
+    assert answers["SCOPE"] == "hooks"
+    assert "HARNESSES" not in answers
 
 
 # ── 벤더링 회귀 방지 ─────────────────────────────────────────────────

@@ -13,6 +13,16 @@ BeforeAll {
         $out = pwsh -NoProfile -File $Path @ScriptArgs 2>&1 | Out-String
         return [pscustomobject]@{ Output = $out; ExitCode = $LASTEXITCODE }
     }
+
+    # 지침 워커는 "현재 디렉터리 = 대상 프로젝트" 규약이라 반드시 그 안에서 돌려야 한다.
+    # Pester 5 는 Describe 본문을 discovery 단계에 실행하므로 헬퍼는 여기 둔다.
+    function Invoke-AgentsMdIn {
+        param([string]$ProjectDir, [string[]]$ScriptArgs = @())
+        Push-Location $ProjectDir
+        try {
+            return Invoke-Script (Join-Path $script:RepoRoot "scripts\setup_agentsmd.ps1") $ScriptArgs
+        } finally { Pop-Location }
+    }
 }
 
 Describe "setup.ps1 dispatcher" {
@@ -371,6 +381,102 @@ Describe "AGENTS.md 덮어쓰기 (-Force)" {
         $backups.Count | Should -Be 1 -Because "사용자 콘텐츠를 덮어쓸 때는 되돌릴 방법을 남겨야 한다"
         (Get-Content $backups[0].FullName -Raw) | Should -Match "사용자가 손댄 내용"
         (Get-Content $target -Raw) | Should -Not -Match "사용자가 손댄 내용"
+    }
+}
+
+Describe "프로젝트 지침 하네스 선택" {
+    BeforeEach {
+        $script:proj = Join-Path $env:TEMP ("cc-pester-harness-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        New-Item -ItemType Directory -Force -Path $script:proj | Out-Null
+    }
+    AfterEach {
+        Remove-Item -Recurse -Force $script:proj -ErrorAction SilentlyContinue
+    }
+
+    It "인자가 없으면 모든 하네스를 설치한다 — AGENTS.md 와 CLAUDE.md" {
+        (Invoke-AgentsMdIn $script:proj).ExitCode | Should -Be 0
+        Test-Path (Join-Path $script:proj "AGENTS.md") | Should -Be $true
+        Test-Path (Join-Path $script:proj "CLAUDE.md") | Should -Be $true
+    }
+
+    It "-Harness codex 는 CLAUDE.md 를 만들지 않는다" {
+        (Invoke-AgentsMdIn $script:proj @("-Harness", "codex")).ExitCode | Should -Be 0
+        Test-Path (Join-Path $script:proj "AGENTS.md") | Should -Be $true
+        Test-Path (Join-Path $script:proj "CLAUDE.md") | Should -Be $false -Because "Codex 는 AGENTS.md 를 직접 읽는다"
+    }
+
+    It "-Harness grok,opencode 는 CLAUDE.md 를 만들지 않는다" {
+        (Invoke-AgentsMdIn $script:proj @("-Harness", "grok,opencode")).ExitCode | Should -Be 0
+        Test-Path (Join-Path $script:proj "AGENTS.md") | Should -Be $true
+        Test-Path (Join-Path $script:proj "CLAUDE.md") | Should -Be $false
+    }
+
+    It "-Harness claude,codex 는 다중 선택으로 둘 다 설치한다" {
+        (Invoke-AgentsMdIn $script:proj @("-Harness", "claude,codex")).ExitCode | Should -Be 0
+        Test-Path (Join-Path $script:proj "AGENTS.md") | Should -Be $true
+        Test-Path (Join-Path $script:proj "CLAUDE.md") | Should -Be $true
+    }
+
+    It "-Harness all 은 -Harness claude,codex,grok,opencode 와 같다" {
+        (Invoke-AgentsMdIn $script:proj @("-Harness", "all")).ExitCode | Should -Be 0
+        Test-Path (Join-Path $script:proj "CLAUDE.md") | Should -Be $true
+    }
+
+    It "CLAUDE.md 는 AGENTS.md 를 import 한다" {
+        (Invoke-AgentsMdIn $script:proj @("-Harness", "claude")).ExitCode | Should -Be 0
+        (Get-Content (Join-Path $script:proj "CLAUDE.md") -Raw) | Should -Match "@AGENTS\.md"
+    }
+
+    It "알 수 없는 하네스는 아무것도 설치하지 않고 실패한다" {
+        (Invoke-AgentsMdIn $script:proj @("-Harness", "cursor")).ExitCode | Should -Not -Be 0
+        Test-Path (Join-Path $script:proj "AGENTS.md") | Should -Be $false -Because "판정할 수 없는 입력에는 멈춰야 한다"
+    }
+
+    It "-DryRun 은 어떤 하네스를 골라도 파일을 만들지 않는다" {
+        (Invoke-AgentsMdIn $script:proj @("-Harness", "claude,codex", "-DryRun")).ExitCode | Should -Be 0
+        Test-Path (Join-Path $script:proj "AGENTS.md") | Should -Be $false
+        Test-Path (Join-Path $script:proj "CLAUDE.md") | Should -Be $false
+    }
+
+    It "기존 CLAUDE.md 는 -Force 없이는 건드리지 않는다" {
+        $target = Join-Path $script:proj "CLAUDE.md"
+        Set-Content -Path $target -Value "사용자가 손댄 내용" -Encoding UTF8
+        (Invoke-AgentsMdIn $script:proj @("-Harness", "claude")).ExitCode | Should -Be 0
+        (Get-Content $target -Raw) | Should -Match "사용자가 손댄 내용"
+    }
+
+    It "@AGENTS.md 를 import 하지 않는 기존 CLAUDE.md 는 경고한다" {
+        # 건너뛰기 자체는 옳다 — 사용자 콘텐츠다. 다만 그 파일이 AGENTS.md 를 불러오지
+        # 않으면 Claude Code 는 방금 설치한 지침을 영영 읽지 않는데, 조용히 성공으로
+        # 보고하면 사용자가 알 방법이 없다.
+        $target = Join-Path $script:proj "CLAUDE.md"
+        Set-Content -Path $target -Value "프로젝트 고유 규칙만 있음" -Encoding UTF8
+
+        $r = Invoke-AgentsMdIn $script:proj @("-Harness", "claude")
+        $r.ExitCode | Should -Be 0
+        $r.Output | Should -Match "@AGENTS\.md"
+        $r.Output | Should -Match "읽지 않습니다"
+        (Get-Content $target -Raw) | Should -Match "프로젝트 고유 규칙만 있음" -Because "경고는 하되 사용자 파일은 건드리지 않는다"
+    }
+
+    It "이미 @AGENTS.md 를 import 하는 CLAUDE.md 에는 경고하지 않는다" {
+        $target = Join-Path $script:proj "CLAUDE.md"
+        Set-Content -Path $target -Value "@AGENTS.md`n`n## 프로젝트 고유" -Encoding UTF8
+
+        $r = Invoke-AgentsMdIn $script:proj @("-Harness", "claude")
+        $r.ExitCode | Should -Be 0
+        $r.Output | Should -Not -Match "읽지 않습니다"
+    }
+
+    It "-Force 는 CLAUDE.md 도 백업한 뒤 덮어쓴다" {
+        $target = Join-Path $script:proj "CLAUDE.md"
+        Set-Content -Path $target -Value "사용자가 손댄 내용" -Encoding UTF8
+        (Invoke-AgentsMdIn $script:proj @("-Harness", "claude", "-Force")).ExitCode | Should -Be 0
+
+        $backups = @(Get-ChildItem -Path $script:proj -Filter "CLAUDE.md.bak.*")
+        $backups.Count | Should -Be 1 -Because "AGENTS.md 와 같은 복구 보장을 받아야 한다"
+        (Get-Content $backups[0].FullName -Raw) | Should -Match "사용자가 손댄 내용"
+        (Get-Content $target -Raw) | Should -Match "@AGENTS\.md"
     }
 }
 

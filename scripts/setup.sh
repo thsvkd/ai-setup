@@ -28,7 +28,9 @@ claude-code-setup — Claude Code 사용자 레벨 설정
 사용법: bash setup.sh [옵션]
   (옵션 없음)   대화형 온보딩으로 설치 범위/권한 모드를 고른 뒤 실행
   --hooks       전역 가드 훅 + 권한만 설치 (~/.claude)
-  --agentsmd    현재 폴더에 AGENTS.md 만 설치
+  --agentsmd    현재 폴더에 프로젝트 지침만 설치
+  --harness L   지침을 설치할 하네스 (쉼표 구분: claude,codex,grok,opencode,all)
+                claude 를 고르면 CLAUDE.md 도 함께 설치된다. 기본값은 all.
   --keybinds    줄바꿈 키바인딩만 설치 (VS Code/Cursor/Claude/Codex/tmux)
   --newline VAL 줄바꿈 키 (shift-enter | ctrl-enter). 기본 shift-enter
   --uninstall   가드 훅 + 관리 키바인딩 제거 (권한·사용자 항목은 보존)
@@ -54,6 +56,7 @@ NO_ONBOARD=0
 # 온보딩이 채우는 값들. 비어 있으면 워커가 각자의 기본값을 쓴다.
 DEFAULT_MODE=""
 FORCE_AGENTSMD=0
+HARNESSES=""
 NEWLINE_CHORD=""
 NEWLINE_GIVEN=0
 
@@ -63,6 +66,13 @@ while [[ $# -gt 0 ]]; do
         --hooks) RUN_HOOKS=1; HAD_ARGS=1; shift ;;
         --agentsmd) RUN_AGENTSMD=1; HAD_ARGS=1; shift ;;
         --keybinds) RUN_KEYBINDS=1; HAD_ARGS=1; shift ;;
+        --harness)
+            if [[ -z "${2:-}" ]]; then
+                echo "--harness 값이 필요합니다 (claude|codex|grok|opencode|all)" >&2
+                exit 1
+            fi
+            HARNESSES="$2"; HAD_ARGS=1; shift 2 ;;
+        --harness=*) HARNESSES="${1#*=}"; HAD_ARGS=1; shift ;;
         --newline)
             if [[ -z "${2:-}" ]]; then
                 echo "--newline 값은 shift-enter 또는 ctrl-enter 여야 합니다." >&2
@@ -155,6 +165,13 @@ run_onboarding() {
                 case "$value" in
                     shift-enter|ctrl-enter) NEWLINE_CHORD="$value" ;;
                 esac ;;
+            HARNESSES)
+                # onboard.py writes a controlled set, but a stray value must not
+                # reach the worker as a shell word.
+                case "$value" in
+                    ""|*[!a-z,-]*) ;;
+                    *) HARNESSES="$value" ;;
+                esac ;;
             OVERWRITE_AGENTSMD) [[ "$value" == "1" ]] && FORCE_AGENTSMD=1 ;;
             DRY_RUN) [[ "$value" == "1" ]] && DRY_RUN=1 ;;
         esac
@@ -176,6 +193,9 @@ MODE_FLAG=()
 
 FORCE_FLAG=()
 [[ "$FORCE_AGENTSMD" -eq 1 ]] && FORCE_FLAG=(--force)
+
+HARNESS_FLAG=()
+[[ -n "$HARNESSES" ]] && HARNESS_FLAG=(--harness "$HARNESSES")
 
 NEWLINE_FLAG=()
 [[ -n "$NEWLINE_CHORD" ]] && NEWLINE_FLAG=(--newline "$NEWLINE_CHORD")
@@ -211,7 +231,7 @@ if [[ "$RUN_HOOKS" -eq 1 ]]; then
 fi
 
 if [[ "$RUN_AGENTSMD" -eq 1 ]]; then
-    bash "$SCRIPT_DIR/setup_agentsmd.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} ${FORCE_FLAG[@]+"${FORCE_FLAG[@]}"}
+    bash "$SCRIPT_DIR/setup_agentsmd.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} ${FORCE_FLAG[@]+"${FORCE_FLAG[@]}"} ${HARNESS_FLAG[@]+"${HARNESS_FLAG[@]}"}
 fi
 
 if [[ "$RUN_KEYBINDS" -eq 1 ]]; then

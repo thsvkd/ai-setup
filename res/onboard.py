@@ -11,7 +11,8 @@ scripts/setup.sh (와 setup.ps1) 가 **인자 없이** 호출됐을 때만 실�
   DEFAULT_MODE=auto|bypassPermissions
   NEWLINE_CHORD=shift-enter|ctrl-enter
                                줄바꿈 키 (SCOPE=all 일 때만 기록)
-  OVERWRITE_AGENTSMD=0|1       기존 AGENTS.md 를 덮어쓸지
+  HARNESSES=claude,codex,...   지침을 설치할 하네스 (SCOPE=all|agentsmd 일 때만 기록)
+  OVERWRITE_AGENTSMD=0|1       기존 지침 파일을 덮어쓸지
   DRY_RUN=0|1                  실제 적용 전에 변경 계획만 볼지
 
 종료 코드로 세 상황을 구분한다:
@@ -45,6 +46,17 @@ EXIT_CANCELLED = 130
 SCOPE_ALL = "all"
 SCOPE_HOOKS = "hooks"
 SCOPE_AGENTSMD = "agentsmd"
+
+# Which harnesses the instruction files can be installed for, and what each one
+# actually reads. Codex, Grok and OpenCode read the root AGENTS.md directly;
+# Claude Code reads CLAUDE.md, which imports it. The worker owns that mapping --
+# here we only collect the selection.
+HARNESS_CHOICES = (
+    ("claude", "Claude Code — AGENTS.md + CLAUDE.md (@AGENTS.md 로 불러옴)"),
+    ("codex", "Codex — AGENTS.md 를 직접 읽음"),
+    ("grok", "Grok — AGENTS.md 를 직접 읽음"),
+    ("opencode", "OpenCode — AGENTS.md 를 직접 읽음"),
+)
 
 
 def parse_args(argv):
@@ -201,12 +213,38 @@ def ask_all(questionary, project_dir):
             return None
         answers["NEWLINE_CHORD"] = chord
 
-    # AGENTS.md 는 프로젝트별로 손보는 파일이라 기본이 '건너뛰기'다. 이미 있을 때만 묻는다.
     if scope in (SCOPE_ALL, SCOPE_AGENTSMD):
-        target = os.path.join(project_dir, "AGENTS.md")
-        if os.path.isfile(target):
+        # Multi-select: one project is often driven by more than one agent, and
+        # the artefacts are additive, so there is no reason to force a choice of
+        # exactly one. Selecting none would install nothing, so it is rejected
+        # rather than silently treated as "all".
+        harnesses = questionary.checkbox(
+            "어떤 하네스에 지침을 설치할까요?",
+            choices=[
+                questionary.Choice(label, value=name, checked=True)
+                for name, label in HARNESS_CHOICES
+            ],
+            validate=lambda picked: bool(picked) or "최소 하나는 선택해야 합니다.",
+            style=style,
+            instruction="(↑↓ 이동, Space 선택/해제, Enter 확정)",
+        ).ask()
+        if harnesses is None:
+            return None
+        answers["HARNESSES"] = ",".join(harnesses)
+
+        # 지침 파일은 프로젝트별로 손보는 파일이라 기본이 '건너뛰기'다. 이미 있을 때만 묻는다.
+        # 하나라도 있으면 묻는다 — 덮어쓰기 결정은 파일별이 아니라 이 설치 전체에 적용된다.
+        existing = [
+            os.path.join(project_dir, name)
+            for name in ("AGENTS.md", "CLAUDE.md")
+            if os.path.isfile(os.path.join(project_dir, name))
+        ]
+        # CLAUDE.md 는 claude 를 고른 경우에만 설치 대상이므로, 그 경우에만 묻는 근거가 된다.
+        if "claude" not in harnesses:
+            existing = [p for p in existing if not p.endswith("CLAUDE.md")]
+        if existing:
             overwrite = questionary.confirm(
-                f"{target} 가 이미 있습니다. 덮어쓸까요?",
+                "%s 가 이미 있습니다. 덮어쓸까요?" % ", ".join(existing),
                 default=False,
                 style=style,
             ).ask()

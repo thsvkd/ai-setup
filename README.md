@@ -59,7 +59,8 @@ irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/
 | ----------------------------- | -------------------------------------------------------------------------------------------------- |
 | (없음)                       | 대화형 온보딩 → 고른 대로 설치 (터미널이 없으면 전체 설치로 폴백)                                 |
 | `--hooks` / `-Hooks`         | 가드 훅 + 권한만 설치 (전역, `~/.claude`)                                                         |
-| `--agentsmd` / `-AgentsMd`   | 현재 폴더에 `AGENTS.md`만 설치                                                                    |
+| `--agentsmd` / `-AgentsMd`   | 현재 폴더에 프로젝트 지침만 설치                                                                  |
+| `--harness <목록>` / `-Harness <목록>` | 지침을 설치할 하네스 (쉼표 구분: `claude`,`codex`,`grok`,`opencode`,`all`). 기본 `all`   |
 | `--keybinds` / `-Keybinds`   | 줄바꿈 키바인딩만 설치 (VS Code·Cursor·Claude·Codex·tmux·Windows Terminal)                        |
 | `--newline <값>` / `-Newline <값>` | 줄바꿈 키를 고른다 — `shift-enter`(기본) 또는 `ctrl-enter`                                  |
 | `--dry-run` / `-DryRun`      | 아무것도 바꾸지 않고 변경 계획만 출력                                                             |
@@ -69,7 +70,9 @@ irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/
 
 `--newline`은 다른 플래그와 조합할 수 있다 — `--keybinds --newline ctrl-enter`는 키바인딩만 Ctrl+Enter로, `--no-onboard --newline ctrl-enter`는 전체 설치를 Ctrl+Enter로 한다. 재실행 시 `--newline`을 주지 않으면 매니페스트에 기록된 이전 선택을 그대로 쓰고, 기록이 없으면 `shift-enter`다. 값이 둘 중 하나가 아니면 아무것도 쓰지 않고 종료 코드 1로 끝난다.
 
-온보딩이 직접 쓰는 하위 옵션도 워커에 그대로 열려 있다 — `setup_hooks`의 `--default-mode <모드>`(`auto`/`bypassPermissions`/`default`/`acceptEdits`/`plan`)와 `setup_agentsmd`의 `--force`(기존 `AGENTS.md`를 `.bak.<타임스탬프>`로 백업한 뒤 덮어쓰기)다.
+온보딩이 직접 쓰는 하위 옵션도 워커에 그대로 열려 있다 — `setup_hooks`의 `--default-mode <모드>`(`auto`/`bypassPermissions`/`default`/`acceptEdits`/`plan`)와 `setup_agentsmd`의 `--force`(기존 지침 파일을 `.bak.<타임스탬프>`로 백업한 뒤 덮어쓰기)다.
+
+`--harness`는 **무엇을 쓸지**가 아니라 **무엇을 읽는지**로 갈린다. Codex·Grok·OpenCode는 루트 `AGENTS.md`를 직접 읽으므로 그 파일 하나면 되고, Claude Code는 `AGENTS.md`를 읽지 않고 `CLAUDE.md`를 읽으므로 `@AGENTS.md` 한 줄짜리 `CLAUDE.md`가 추가로 필요하다(Windows에서 심볼릭 링크는 관리자 권한을 요구해서 import를 쓴다). 그래서 `AGENTS.md`는 항상 설치되고, `CLAUDE.md`는 선택에 `claude`가 있을 때만 생긴다. 여러 하네스를 함께 쓰는 프로젝트가 흔하므로 다중 선택이 기본이며 — `--harness claude,codex` — 온보딩에서도 체크박스로 고른다. 모르는 이름을 주면 아무것도 쓰지 않고 종료 코드 1로 끝난다.
 
 예시 (macOS/Linux/Git Bash — Windows는 위 `scriptblock` 패턴에 `-Hooks`/`-DryRun`/`-Uninstall` 등을 붙이면 된다):
 
@@ -108,6 +111,7 @@ bash scripts/setup.sh --dry-run   # 또는 .\scripts\setup.ps1 -DryRun
 | `~/.claude/hooks/send_to_trash.py` | (Windows) 휴지통 이동 헬퍼                                                           |
 | `~/.claude/settings.json`          | 권한 + PreToolUse 훅 등록 + `model`/`effortLevel`/`language`·`env.CLAUDE_CODE_SCROLL_SPEED` 기본값(없을 때만) |
 | `./AGENTS.md`                      | (`--agentsmd` 시) 현재 폴더에 프로젝트 워크플로 규칙 — 이미 있으면 건너뜀 (`--force`면 백업 후 덮어쓰기) |
+| `./CLAUDE.md`                      | (`--agentsmd` + 하네스에 `claude` 포함 시) `@AGENTS.md` 한 줄 — Claude Code는 `AGENTS.md`를 직접 읽지 않는다. 이미 있으면 건너뜀 |
 | `~/.claude/keybindings.json`       | (줄바꿈 키) Claude Code의 `Chat` 컨텍스트에 고른 키 → `chat:newline`                     |
 | `~/.codex/config.toml`             | (줄바꿈 키) `[tui.keymap.editor] insert_newline`에 고른 키를 **합집합**으로 추가         |
 | VS Code / Cursor `keybindings.json` | (줄바꿈 키) 통합 터미널(`when: terminalFocus`)에 고른 키 → `sendSequence`. 경로는 OS별 — Windows `%APPDATA%\Code\User\`, macOS `~/Library/Application Support/Code/User/`, Linux `~/.config/Code/User/` |
