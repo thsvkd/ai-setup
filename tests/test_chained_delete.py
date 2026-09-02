@@ -51,12 +51,15 @@ def _new_command(payload):
 # --- 붙어 있는 구분자를 체이닝으로 인식해야 한다 ---
 
 def test_ps_glued_semicolon_is_detected_as_a_chain(run_hook):
-    """이 버그가 실제로 관측된 정확한 명령. 판정이 deny 든 뭐든, 뒤 명령의 인자가 삭제 대상
+    """이 버그가 실제로 관측된 정확한 명령. 판정이 ask 든 뭐든, 뒤 명령의 인자가 삭제 대상
     목록에 들어가서는 안 된다."""
     cmd = (f'Remove-Item -Recurse -Force "{REPO}\\.tmp" -Confirm:$false; '
            f'git -C "{REPO}" status --short')
     d, payload, _ = run_hook(WIN, ps(cmd))
-    assert d == "deny", payload
+    # F4 강등으로 계약이 deny→ask 로 바뀌었다: 체이닝은 이제 '차단'이 아니라 '사람에게 물어본다'.
+    # 강등된 것은 판정뿐이고, 이 테스트가 지키는 실질은 아래 두 단언이다 —
+    # 체이닝으로 인식했는가, 그리고 치환을 포기했는가.
+    assert d == "ask", payload
     assert "체이닝" in _reason(payload)
     # 치환이 일어나지 않았으므로 삭제 대상 목록 자체가 없어야 한다.
     assert _new_command(payload) == ""
@@ -64,8 +67,11 @@ def test_ps_glued_semicolon_is_detected_as_a_chain(run_hook):
 
 def test_bash_glued_semicolon_is_detected_as_a_chain(run_hook):
     d, payload, _ = run_hook(WIN, bash("rm -rf build;ls -la"))
-    assert d == "deny", payload
+    # F4 강등으로 계약이 deny→ask 로 바뀌었다.
+    assert d == "ask", payload
     assert "체이닝" in _reason(payload)
+    # 강등이 '치환 허용'으로 새면 안 된다 — ask 여도 삭제 대상 목록은 나오지 않아야 한다.
+    assert _new_command(payload) == ""
 
 
 @pytest.mark.parametrize("cmd", [
@@ -158,8 +164,11 @@ def _run_posix(cmd):
 def test_posix_glued_semicolon_is_detected_as_a_chain():
     payload = _run_posix("rm -rf build;ls -la")
     out = payload["hookSpecificOutput"]
-    assert out["permissionDecision"] == "deny", out
+    # F4 강등으로 계약이 deny→ask 로 바뀌었다. windows 판과 같은 계약을 posix 판에도 고정한다.
+    assert out["permissionDecision"] == "ask", out
     assert "체이닝" in out["permissionDecisionReason"]
+    # 강등이 '치환 허용'으로 새면 안 된다.
+    assert "updatedInput" not in out, out
 
 
 def test_posix_quoted_separator_is_not_a_chain():

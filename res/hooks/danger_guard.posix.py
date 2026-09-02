@@ -164,11 +164,19 @@ MAX_TRASH_TARGETS = 100
 
 
 def expand_delete_targets(args: list, cwd: str) -> tuple:
-    """글로브를 cwd 기준으로 확장한다. 반환: (확장된 경로 리스트, 실패 사유 또는 None)."""
+    """글로브를 cwd 기준으로 확장한다. 반환: (확장된 경로 리스트, 실패 사유 또는 None, 판정 등급)."""
     expanded = []
+    brace_reason = None
     for a in args:
         if BRACE_RE.search(a):
-            return [], f"중괄호 확장이 포함된 대상('{a}')은 훅이 해석할 수 없어 차단합니다."
+            # `${VAR}` 는 값이 비면 셸이 `rm -rf /*` 를 실행하고 `{/,~}` 는 펼치면 루트/홈이 된다 —
+            # 승인 한 번으로 복구 불가 삭제가 되므로 순수한 `{a,b}` 만 ask 로 낮춘다.
+            if "$" in a or any(_is_root_or_home_literal(p) for p in re.split(r"[{},]", a) if p):
+                return [], f"셸 변수나 루트/홈이 섞인 대상('{a}')은 훅이 실제 대상을 알 수 없어 차단합니다.", "deny"
+            # 곧장 돌려주면 뒤 인자의 deny 사유를 앞질러 강등이 인자 순서에 의존한다.
+            if brace_reason is None:
+                brace_reason = f"중괄호 확장이 포함된 대상('{a}')은 훅이 해석할 수 없어 휴지통 치환을 못 합니다. 원본 rm 을 그대로 실행할까요?"
+            continue
         if not GLOB_META_RE.search(a):
             expanded.append(a)
             continue
@@ -177,9 +185,11 @@ def expand_delete_targets(args: list, cwd: str) -> tuple:
         pattern = a if os.path.isabs(a) else os.path.join(cwd, a)
         matches = sorted(glob.glob(pattern))
         if not matches:
-            return [], f"'{a}' 와 일치하는 파일이 없습니다."
+            return [], f"'{a}' 와 일치하는 파일이 없습니다.", "deny"
         expanded.extend(matches)
-    return expanded, None
+    if brace_reason:
+        return [], brace_reason, "ask"
+    return expanded, None, "deny"
 
 
 def _is_force_flag(arg: str) -> bool:
@@ -187,6 +197,23 @@ def _is_force_flag(arg: str) -> bool:
     if arg in ("-f", "--force"):
         return True
     return arg.startswith("-") and not arg.startswith("--") and "f" in arg[1:]
+
+
+def _rm_prompts_per_file(args: list) -> bool:
+    """rm 이 실제로 확인 프롬프트를 띄우는가. POSIX 는 `-f`/`-i` 중 뒤에 온 것만 살린다 — `-i` 가 섞였다는
+    이유로 치환을 포기하면 `rm -i -f build`(프롬프트가 아예 없다)에서 휴지통 복구를 잃고, `-i` 한 글자가 휴지통 보호의 옵트아웃이 된다."""
+    prompts = False
+    for a in args:
+        if not a.startswith("-") or a in ("-", "--"):
+            continue
+        # 긴 옵션은 토큰이, 단축 옵션은 묶인 글자 하나하나가 순서대로 앞의 것을 덮어쓴다. `--interactive=always|once` 도 사용자가 요청한 프롬프트다.
+        for flag in ([a] if a.startswith("--") else list(a[1:])):
+            when = flag.split("=", 1)[1] if flag.startswith("--interactive=") else None
+            if flag in ("f", "--force") or when == "never":
+                prompts = False
+            elif flag in ("i", "I", "--interactive") or when is not None:
+                prompts = True
+    return prompts
 
 
 # 실제 명령 앞에 붙어 가드를 빠져나가게 하는 래퍼들. sudo 만 벗기면 `command rm -rf x`,
@@ -969,6 +996,59 @@ def _all_lines_parseable(lines: list) -> bool:
         except ValueError:
             return False
     return True
+
+
+# 인용된 히어독(`<<'EOF'`) 본문은 셸이 확장도 실행도 하지 않는 '데이터'다(실사용 로그에 오탐 다수). 인용 없는 `<<EOF` 는 `$( )` 가 실제로 실행된다.
+HEREDOC_START_RE = re.compile(r"""<<(-?)\s*(['"])([^'"]*)\2""")
+
+
+def _heredoc_marker(line: str):
+    """따옴표 '밖' 의 `<<` 만 히어독 시작으로 본다. 반환: (dash, 구분자) 또는 None. `<<` 앞
+    한 글자만 보는 lookbehind 는 `echo "text <<'EOF' more"` 처럼 공백이 하나만 끼면 뚫려, 그 아래 진짜 명령이
+    '본문' 으로 검사에서 빠졌다(실측). 셸처럼 작은따옴표 밖의 백슬래시는 다음 한 글자를 이스케이프한다 —
+    `\\"` 를 닫는 따옴표로 세면 마커가 문자열 밖으로 새어 같은 구멍이 난다."""
+    quote, i = "", 0
+    while i < len(line):
+        ch = line[i]
+        if ch == "\\" and quote != "'":
+            i += 2
+            continue
+        if quote:
+            quote = "" if ch == quote else quote
+        elif ch in "\"'":
+            quote = ch
+        elif line[i:i + 2] == "<<":
+            match = HEREDOC_START_RE.match(line, i)
+            if match:
+                return match.group(1), match.group(3)
+            i += 1   # `<<<`(here-string)/`$((1 << 2))` 는 히어독이 아니다
+        i += 1
+    return None
+
+
+def _heredoc_body_indices(raw_lines: list) -> set:
+    """인용된 히어독 본문의 줄 번호 집합. 시작 줄(`rm -rf / <<'EOF'` 처럼 진짜 명령)과 종료 줄은
+    빼고, 종료 구분자를 못 찾으면 없던 히어독으로 본다 — 마커 오인식이 진짜 명령을 가리면 위험."""
+    skipped = set()
+    i = 0
+    while i < len(raw_lines):
+        match = _heredoc_marker(raw_lines[i])
+        if not match:
+            i += 1
+            continue
+        dash, delimiter = match
+        # `<<-` 형태는 종료 구분자 줄의 선행 탭을 무시한다.
+        rest = raw_lines[i + 1:]
+        end = next((k for k, ln in enumerate(rest)
+                    if (ln.lstrip("\t") if dash else ln).rstrip() == delimiter), None)
+        if end is None:
+            i += 1
+            continue
+        skipped.update(range(i + 1, i + 1 + end))
+        i += end + 2
+    return skipped
+
+
 def read_event_json() -> str:
     """stdin 에서 훅 이벤트 JSON 을 읽는다. 선행 BOM(U+FEFF)은 벗겨낸다.
 
@@ -997,9 +1077,11 @@ def main() -> None:
         sys.exit(0)
 
     raw_lines = command.splitlines()
-    original_lines = [ln for ln in raw_lines if ln.strip()]
+    # 인용된 히어독 본문은 명령이 아니라 데이터다 — 검사 대상에서 통째로 뺀다.
+    body = _heredoc_body_indices(raw_lines) if "<<" in command else set()
     # 검사 대상 줄 → 원본(빈 줄 포함) 줄 번호. 백업 줄을 원위치에 끼워 넣을 때 쓴다.
-    original_raw_index = [idx for idx, ln in enumerate(raw_lines) if ln.strip()]
+    original_raw_index = [i for i, ln in enumerate(raw_lines) if ln.strip() and i not in body]
+    original_lines = [raw_lines[i] for i in original_raw_index]
     is_multiline = len(original_lines) > 1
     # 이 블록에 백업 줄을 끼워 넣어도 원문이 보존되는가. 히어독(`<<`)이나 줄에 걸친 따옴표가
     # 있으면 삽입 지점이 문자열 내부일 수 있어 원문을 망가뜨리므로, 그 경우는 종전대로 ask 로 넘긴다.
@@ -1167,10 +1249,10 @@ def main() -> None:
                         emit("deny", f"루트/홈 디렉터리 전체({a})를 삭제하려는 시도는 차단됩니다.")
 
                 cwd = data.get("cwd") or os.getcwd()
-                targets, glob_reason = expand_delete_targets(clean_args, cwd)
+                targets, glob_reason, glob_level = expand_delete_targets(clean_args, cwd)
                 if glob_reason:
-                    log({"command": command, "decision": "deny-unexpandable-target"})
-                    emit("deny", glob_reason)
+                    log({"command": command, "decision": glob_level + "-unexpandable-target"})
+                    emit(glob_level, glob_reason)
 
                 # 확장 결과에도 같은 안전 검사를 적용한다 — 글로브가 홈이나 루트를
                 # 가리키는 경로로 펼쳐질 수 있다.
@@ -1182,8 +1264,15 @@ def main() -> None:
                 if len(targets) > MAX_TRASH_TARGETS:
                     emit("ask", f"삭제 대상이 {len(targets)}개입니다. 한 번에 이만큼 휴지통으로 옮길까요?")
 
+                # 체이닝 게이트는 치환 가능 여부보다 앞이다 — 뒤에 두면 `-i` 하나로 게이트가 사라진다.
                 if is_multiline or is_chained:
-                    emit("deny", "여러 줄 또는 체이닝된 명령 안에 삭제 명령이 섞여 있어 안전하게 자동 치환할 수 없습니다. 삭제 명령은 단독으로 실행하세요.")
+                    log({"command": command, "decision": "ask-chained-delete"})
+                    emit("ask", "여러 줄 또는 체이닝된 명령 안에 삭제 명령이 섞여 있어 안전하게 자동 치환할 수 없습니다. 휴지통이 아니라 원본 rm 이 그대로 실행됩니다. 계속할까요?")
+
+                # 프롬프트가 실제로 뜨는 삭제만 원본 그대로 보낸다(치환하면 프롬프트가 사라진다).
+                if _rm_prompts_per_file(args):
+                    log({"command": command, "decision": "pass-unsubstitutable-delete"})
+                    continue
 
                 trash_cmd = resolve_trash_command()
                 if not trash_cmd:

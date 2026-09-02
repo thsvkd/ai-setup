@@ -231,12 +231,67 @@ def expand_delete_targets(args: list, cwd: str) -> tuple:
     return expanded, None
 
 
+# rm 의 단문자 플래그 문자셋. `-rf` 묶음과 PowerShell 명명 파라미터를 가르는 유일한 기준이다.
+POSIX_SHORT_FLAG_CHARS = "rfvid"
+# 휴지통으로 보낼 수 없는 프로바이더 드라이브(환경변수/레지스트리다). 드라이브 문자 1글자는 제외.
+PS_PROVIDER_DRIVES = {"env", "hkcu", "hklm", "alias", "function", "variable", "cert", "wsman"}
+# 뒤 토큰을 '값' 으로 먹지 않는 파라미터(대상 자체이거나 값 없는 스위치). 접두 축약도 본다.
+PS_KEEP_NEXT_PARAMS = ("path", "literalpath", "recurse", "force", "whatif", "confirm", "verbose", "debug")
+
+
+def _is_posix_short_bundle(arg: str) -> bool:
+    """`-r`/`-rf`/`-rfv` 같은 POSIX 단문자 묶음인가. `--force` 도 `-Recurse` 도 아니다."""
+    if len(arg) < 2 or not arg.startswith("-") or arg.startswith("--"):
+        return False
+    return all(ch in POSIX_SHORT_FLAG_CHARS for ch in arg[1:].lower())
+
+
 def _is_force_flag(arg: str) -> bool:
-    """force 플래그인가. rm 계열의 `-f`/`-rf` 와 del/rd 계열의 `/f` 를 모두 본다."""
+    """force 플래그인가. rm 의 `-f`/`-rf`/`--force`, PowerShell `-Force`, del/rd 의 `/f`. 이름
+    안에 f 가 든 명명 파라미터(`-Filter`)를 force 로 읽으면 원본보다 더 지우는 치환이 된다."""
     lowered = arg.lower()
-    if lowered in ("-f", "--force", "/f"):
+    if lowered in ("-f", "--force", "-force", "/f"):
         return True
-    return lowered.startswith("-") and not lowered.startswith("--") and "f" in lowered[1:]
+    return _is_posix_short_bundle(arg) and "f" in lowered[1:]
+
+
+def _blocks_substitution(arg: str, forced: bool = False) -> bool:
+    """치환하면 의미가 뒤집히는 플래그인가. 드라이런(`-WhatIf`), 확인 프롬프트(`-Confirm`/`-i`),
+    필터. `-Confirm:$false` 는 확인 생략이라 계속 치환한다. 이름은 접두일치로 본다 — `-Wh` 는
+    유효한 `-WhatIf` 라, 정확일치로만 보면 0개를 지우는 명령을 치환해 실제로 지운다. `forced`
+    면 POSIX rm 은 `-i` 를 묻지 않으므로(`rm -i -f x`) 그 프롬프트 때문에 복구를 버리지 않는다."""
+    lowered = arg.lower()
+    if lowered == "--interactive" or _is_posix_short_bundle(arg):
+        return not forced and (lowered == "--interactive" or "i" in lowered[1:])
+    name, _, value = lowered.lstrip("-").partition(":") if arg.startswith("-") else ("", "", "")
+    if name and any(k.startswith(name) for k in ("whatif", "confirm")):
+        return value != "$false"
+    # 필터는 '일부만 지운다' 는 뜻이라, 디렉터리를 통째로 치환하면 원본보다 더 지운다.
+    return bool(name) and any(k.startswith(name) for k in ("include", "exclude", "filter"))
+
+
+def _is_provider_path(arg: str) -> bool:
+    r"""프로바이더 경로(`Env:\FOO`)인가. 역슬래시 유무와 무관하게 콜론 앞만 본다."""
+    return ":" in arg and arg.split(":", 1)[0].lower() in PS_PROVIDER_DRIVES
+
+
+def _delete_targets(args: list) -> list:
+    """삭제 대상만 골라낸다. 완전한 파서 대신 **모르는 대시 인자 뒤의 값은 대상이 아니다**."""
+    targets = []
+    skip_next = False
+    for i, a in enumerate(args):
+        if skip_next:
+            skip_next = False
+        elif not a.startswith("-"):
+            targets.append(a)
+        elif a == "--":
+            return targets + args[i + 1:]          # 옵션 끝. 이후는 전부 대상이다.
+        elif not (":" in a or a.startswith("--") or _is_posix_short_bundle(a)):
+            # 콜론 결합형/`--long`/단문자 묶음은 값을 토큰 안에 갖거나 아예 받지 않는다. 남은
+            # '모르는 명명 파라미터' 만 뒤 토큰을 값으로 먹는다(`rm -rf build` 는 그대로).
+            name = a[1:].split(":", 1)[0].lower()
+            skip_next = not any(k.startswith(name) for k in PS_KEEP_NEXT_PARAMS)
+    return targets
 
 
 # 실제 명령 앞에 붙어 가드를 빠져나가게 하는 래퍼들. 이걸 벗기지 않으면
@@ -339,12 +394,42 @@ REMOTE_EXEC_TOKENS = {"bash", "sh", "zsh", "iex", "invoke-expression", "powershe
 # (?<!\|)\|(?!\|) 는 PowerShell/셸의 OR 연산자 `||` 를 제외하기 위한 것.
 PIPE_TO_SHELL_RE = re.compile(
     r'(?<!\|)\|(?!\|)\s*(?:sudo\s+)?(?:[^\s|]*[\\/])?'
-    r'(?:' + "|".join(sorted(REMOTE_EXEC_TOKENS, key=len, reverse=True)) + r')(?:\.exe)?\b',
+    r'(' + "|".join(sorted(REMOTE_EXEC_TOKENS, key=len, reverse=True)) + r')(?:\.exe)?\b',
     re.IGNORECASE,
 )
-# 따옴표 안의 문자열은 실행되는 명령이 아니므로 위 파이프 검사에서 제외한다
-# (예: Select-String -Pattern "x|iex" 가 오탐으로 차단되지 않도록).
+# 따옴표 안 문자열은 실행되는 명령이 아니므로 파이프 검사에서 뺀다(`-Pattern "x|iex"` 오탐 방지).
 QUOTED_RE = re.compile(r'"[^"]*"|\'[^\']*\'')
+# `| powershell -File x.ps1` 은 stdin 을 프로그램으로 읽지 않는다(실사용 오탐). 단 `-File -` 는
+# 'stdin 을 스크립트로 읽어라' 이므로, 면제는 PowerShell 계열의 실제 파일 인자에만 준다.
+PIPE_SCRIPT_FILE_RE = re.compile(r'(?<![\w-])-File\b(?![:=\s]*-(?:\s|$))', re.IGNORECASE)
+PS_INTERPRETERS = ("powershell", "pwsh")
+
+# heredoc 시작. 인용 구분자만 인정하고(인용 없는 `<<EOF` 본문의 `$( )` 는 셸이 실제로 실행한다),
+# 앞이 `<` 면 히어스트링/시프트이지 heredoc 이 아니다.
+HEREDOC_START_RE = re.compile(r"""(?<!<)<<-?\s*([\'"])([A-Za-z_][A-Za-z0-9_]*)\1""")
+
+
+def _heredoc_body_indices(raw_lines: list) -> set:
+    """heredoc 본문 줄의 인덱스. 본문은 파일에 쓰이는 데이터이지 명령이 아니다(실사용 오탐). 종료
+    구분자를 못 찾으면 빈 집합 — 경계를 놓치면 뒤의 진짜 명령이 무판정 통과가 되기 때문이다.
+    시작 판정은 따옴표 안 내용을 같은 길이의 공백으로 덮어 `<<` 자체가 문자열 안인지 본다 —
+    `echo "text <<'EOF' more"` 의 가짜 마커 하나가 뒤의 진짜 명령을 통째로 가린다."""
+    skip = set()
+    i = 0
+    while i < len(raw_lines):
+        ln = raw_lines[i]
+        masked = QUOTED_RE.sub(lambda q: " " * len(q.group()), ln)
+        m = next((h for h in HEREDOC_START_RE.finditer(ln) if masked[h.start()] == "<"), None)
+        if not m:
+            i += 1
+            continue
+        # 종료자는 들여쓰기를 무시한다(`<<-`). 늦게 끝내면 진짜 명령이 본문으로 묻힌다.
+        ends = [j for j in range(i + 1, len(raw_lines)) if raw_lines[j].strip() == m.group(2)]
+        if not ends:
+            return set()
+        skip.update(range(i + 1, ends[0] + 1))
+        i = ends[0] + 1
+    return skip
 
 
 def log(entry: dict) -> None:
@@ -1129,9 +1214,10 @@ def main() -> None:
 
     is_bash = tool_name == "Bash"
     raw_lines = command.splitlines()
-    original_lines = [ln for ln in raw_lines if ln.strip()]
-    # 검사 대상 줄 → 원본(빈 줄 포함) 줄 번호. 백업 줄을 원위치에 끼워 넣을 때 쓴다.
-    original_raw_index = [idx for idx, ln in enumerate(raw_lines) if ln.strip()]
+    # 검사 대상 줄 → 원본 줄 번호(백업 줄 삽입용). heredoc 본문은 데이터이므로 여기서 뺀다.
+    _heredoc = _heredoc_body_indices(raw_lines)
+    original_raw_index = [n for n, ln in enumerate(raw_lines) if ln.strip() and n not in _heredoc]
+    original_lines = [raw_lines[n] for n in original_raw_index]
     is_multiline = len(original_lines) > 1
     # 이 블록에 백업 줄을 끼워 넣어도 원문이 보존되는가. 히어독(`<<`)이나 줄에 걸친 따옴표가
     # 있으면 삽입 지점이 문자열 내부일 수 있어 원문을 망가뜨리므로, 그 경우는 종전대로 ask 로 넘긴다.
@@ -1146,7 +1232,13 @@ def main() -> None:
         line_raw_index = original_raw_index[i] if i < len(original_raw_index) else None
         i += 1
         # shlex 파싱 전에 원시 문자열로 잡아야 하는 패턴 (공백 없는 파이프).
-        if PIPE_TO_SHELL_RE.search(QUOTED_RE.sub(" ", line)):
+        unquoted = QUOTED_RE.sub(" ", line)
+        # 매치를 전부 보고, 면제는 매치된 인터프리터의 조각 안에서만 준다. 첫 매치만 보면
+        # 그 조각이 `-File` 로 면제될 때 같은 줄 뒤쪽의 파이프가 아예 검사되지 않는다.
+        for pipe_hit in PIPE_TO_SHELL_RE.finditer(unquoted):
+            seg = unquoted[pipe_hit.end():].split("|", 1)[0]
+            if pipe_hit.group(1).lower() in PS_INTERPRETERS and PIPE_SCRIPT_FILE_RE.search(seg):
+                continue
             log({"tool": tool_name, "command": command, "decision": "deny-pipe-to-shell"})
             emit("deny", "원격/외부 출력을 바로 셸에 파이프 실행하는 패턴입니다. 스크립트를 먼저 저장해 검토한 뒤 실행하세요.")
 
@@ -1282,9 +1374,11 @@ def main() -> None:
                 if base in WINDOWS_FLAG_STYLE:
                     clean_args = [a for a in args if not a.startswith("/")]
                 else:
-                    clean_args = [a for a in args if not a.startswith("-")]
+                    clean_args = _delete_targets(args)
 
                 if not clean_args:
+                    if any(not a.startswith(("-", "/")) for a in args):
+                        emit("ask", "훅이 해석하지 못한 파라미터가 있어 삭제 대상을 특정할 수 없습니다. 휴지통 치환 없이 원본 그대로 실행할까요?")
                     emit("deny", "삭제 대상 경로가 지정되지 않았습니다.")
 
                 # rm 이 거부하는 형태(`.`/`..`)는 훅도 거부한다 — 치환이 원래 명령보다
@@ -1313,11 +1407,20 @@ def main() -> None:
                         log({"tool": tool_name, "command": command, "decision": "deny-root-delete"})
                         emit("deny", f"드라이브/파일시스템 루트({a})를 삭제하려는 시도는 차단됩니다.")
 
+                # 체이닝 게이트가 먼저다. 아래 '치환 포기 후 통과' 가 앞서면 드라이런/필터 플래그 하나로 게이트가 사라진다.
+                if is_multiline or is_chained:
+                    log({"tool": tool_name, "command": command, "decision": "ask-chained-delete"})
+                    emit("ask", "여러 줄 또는 체이닝된 명령 안에 삭제 명령이 섞여 있어 안전하게 자동 치환할 수 없습니다. 삭제 명령을 단독으로 실행하면 휴지통으로 치환됩니다. 계속할까요?")
+
+                # 확신하지 못하는 삭제(드라이런·필터·프로바이더 경로)는 치환하지 않고 원본을 보낸다.
+                forced = any(_is_force_flag(a) for a in args)
+                if (any(_blocks_substitution(a, forced) for a in args)
+                        or any(_is_provider_path(a) for a in clean_args)):
+                    log({"tool": tool_name, "command": command, "decision": "pass-unsubstitutable-delete"})
+                    continue
+
                 if len(targets) > MAX_TRASH_TARGETS:
                     emit("ask", f"삭제 대상이 {len(targets)}개입니다. 한 번에 이만큼 휴지통으로 옮길까요?")
-
-                if is_multiline or is_chained:
-                    emit("deny", "여러 줄 또는 체이닝된 명령 안에 삭제 명령이 섞여 있어 안전하게 자동 치환할 수 없습니다. 삭제 명령은 단독으로 실행하세요.")
 
                 if not os.path.exists(SEND_TO_TRASH):
                     emit("deny", "안전 삭제 스크립트(send_to_trash.py)가 없어 삭제를 차단합니다.")
@@ -1329,7 +1432,7 @@ def main() -> None:
                 py_exe = sys.executable
                 # `rm -f` / `del /f` 는 없는 파일을 조용히 넘긴다. 이 의미를 버리면
                 # 없는 파일을 지우려는 명령이 실패해 호출자를 혼란스럽게 하므로 그대로 넘긴다.
-                force_flag = "-f " if any(_is_force_flag(a) for a in args) else ""
+                force_flag = "-f " if forced else ""
                 new_command = (f'{py_exe} -X utf8 {quote(SEND_TO_TRASH)} {force_flag}'
                                + " ".join(quote(a) for a in targets))
 
@@ -1557,10 +1660,18 @@ def main() -> None:
 
             # 파이프 체크: &&/; 분리 후 서브커맨드 단위로 검사한다.
             if "|" in cmd_parts:
-                idx = cmd_parts.index("|")
-                downstream = [p.lower() for p in cmd_parts[idx + 1:]]
-                if any(tok in downstream for tok in REMOTE_EXEC_TOKENS):
-                    emit("deny", "원격/외부 출력을 바로 셸에 파이프 실행하는 패턴입니다. 스크립트를 먼저 저장해 검토한 뒤 실행하세요.")
+                # 파이프 조각마다 따로 판정한다. 첫 조각의 `-File` 면제가 뒤 조각까지 덮으면
+                # 뒤에 붙은 셸이 무판정 통과한다.
+                pseg: list = []
+                for tok in [p.lower() for p in cmd_parts[cmd_parts.index("|") + 1:]] + ["|"]:
+                    if tok != "|":
+                        pseg.append(tok)
+                        continue
+                    ps_file = (pseg[:1] and pseg[0] in PS_INTERPRETERS and any(
+                        t == "-file" and pseg[i + 1:i + 2] != ["-"] for i, t in enumerate(pseg)))
+                    if any(t in pseg for t in REMOTE_EXEC_TOKENS) and not ps_file:
+                        emit("deny", "원격/외부 출력을 바로 셸에 파이프 실행하는 패턴입니다. 스크립트를 먼저 저장해 검토한 뒤 실행하세요.")
+                    pseg = []
 
             if base in {"shutdown", "restart-computer", "stop-computer"}:
                 emit("ask", f"'{base}' 는 시스템을 종료/재시작합니다. 계속할까요?")

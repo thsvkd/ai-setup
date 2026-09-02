@@ -296,10 +296,12 @@ def test_git_multiline_other_repo_still_asks(run_hook):
     assert d == "ask"
 
 
-def test_git_inside_heredoc_still_asks(run_hook):
-    # 히어독 본문에 백업 줄을 끼워 넣으면 '실행'이 아니라 작성될 파일 내용이 오염된다.
+def test_git_inside_heredoc_is_not_a_command_at_all(run_hook):
+    # 원래 취지는 '히어독 본문에 백업 줄을 끼워 넣어 작성될 파일 내용을 오염시키지 마라' 였고,
+    # F1 이 그것을 더 강하게 만족시킨다 — 인용된 구분자의 본문은 아예 검사하지 않으므로
+    # 판정 자체가 생기지 않는다. `git restore .` 는 s.sh 에 기록될 텍스트지 실행될 명령이 아니다.
     d, *_ = run_hook(HOOK, bash("cat <<'EOF' > s.sh\ngit restore .\nEOF"))
-    assert d == "ask"
+    assert d is None
 
 
 def test_git_inside_multiline_string_still_asks(run_hook):
@@ -570,10 +572,13 @@ def test_chained_git_push_asks(run_hook):
     assert d == "ask"
 
 
-def test_chained_rm_denies_substitution(run_hook):
-    # echo hi && rm -rf temp/ → 체이닝이라 자동 치환 불가, deny 여야 한다.
-    d, *_ = run_hook(HOOK, bash("echo hi && rm -rf temp/"))
-    assert d == "deny"
+def test_chained_rm_asks_instead_of_substituting(run_hook):
+    # echo hi && rm -rf temp/ → 체이닝이라 자동 치환은 여전히 불가하지만, 실사용 로그에서
+    # 이 형태는 전부 오탐이었다(임시 파일 삭제 + echo) → deny 대신 ask. 강등이 '치환 허용'
+    # 으로 새지 않았음을 함께 고정한다 — updatedInput 이 있으면 emit() 계약상 allow 가 된다.
+    d, payload, _ = run_hook(HOOK, bash("echo hi && rm -rf temp/"))
+    assert d == "ask"
+    assert "updatedInput" not in payload["hookSpecificOutput"]
 
 
 def test_chained_curl_pipe_bash_denied(run_hook):
@@ -897,9 +902,11 @@ def test_glob_with_no_match_denied(tmp_path):
     assert decision_of(payload) == "deny"
 
 
-def test_brace_expansion_denied(tmp_path):
+def test_brace_expansion_asks(tmp_path):
+    # 훅이 못 편다는 이유로 정상 삭제를 막지는 않는다 → ask. 다만 완화 범위는 `${` 가 없는
+    # 순수한 중괄호 확장뿐이다(매개변수 확장은 아래 test_shell_parameter_expansion_... 참조).
     payload = run_guard("rm -rf {a,b}.log", cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
-    assert decision_of(payload) == "deny"
+    assert decision_of(payload) == "ask"
 
 
 MAX_TARGETS_OVER = 101   # 훅의 MAX_TRASH_TARGETS(100) 를 넘기는 개수
@@ -1039,3 +1046,342 @@ def test_quoted_pipe_is_not_treated_as_a_pipeline(run_hook):
     """`grep "a|rm" f` 의 따옴표 안 파이프를 삭제로 오탐하면 안 된다."""
     d, *_ = run_hook(HOOK, bash('grep "a|rm" file.txt'))
     assert d is None
+
+
+# --- F1: 인용된 히어독 본문은 '데이터'다 (실사용 오탐 제거) ---
+#
+# `cat > f <<'EOF' … EOF` 의 본문은 파일에 기록될 텍스트지 셸이 실행할 명령이 아니다.
+# guard.log 실측에서 README 의 설치 안내(`curl … | sh`)나 파이썬 히어독 스크립트가
+# 이 이유로 차단됐다. 완화 범위는 **인용된 구분자**(`<<'EOF'` / `<<"EOF"`)뿐이다 —
+# 인용 없는 `<<EOF` 본문은 셸이 `$( )`/백틱을 실제로 실행하므로 계속 검사한다(R4).
+
+def test_heredoc_quoted_body_is_data_not_command(run_hook):
+    # covers: P-F1-1
+    d, *_ = run_hook(HOOK, bash("cat > x.sh <<'EOF'\nrm -rf /\nEOF"))
+    assert d is None
+
+
+def test_heredoc_double_quoted_delimiter_body_is_data(run_hook):
+    # covers: P-F1-2
+    d, *_ = run_hook(HOOK, bash('cat > x.sh <<"EOF"\nrm -rf /\nEOF'))
+    assert d is None
+
+
+def test_heredoc_dash_form_strips_leading_tabs_on_terminator(run_hook):
+    # covers: P-F1-3
+    # `<<-` 는 종료 구분자 줄의 선행 탭을 무시한다 — `\tEOF` 도 종료로 인식해야 한다.
+    d, *_ = run_hook(HOOK, bash("cat > x.sh <<-'EOF'\n\trm -rf /\n\tEOF"))
+    assert d is None
+
+
+def test_heredoc_terminator_ends_the_body(run_hook):
+    # covers: P-F1-4
+    # 종료 구분자 '뒤' 의 명령은 진짜 명령이다 — 본문 제외가 파일 끝까지 삼키면 미탐이 된다.
+    d, *_ = run_hook(HOOK, bash("cat > x.sh <<'EOF'\nEOF\nrm -rf /"))
+    assert d == "deny"
+
+
+def test_unquoted_heredoc_body_is_still_scanned(run_hook):
+    # covers: P-F1-5
+    # 인용 없는 구분자의 본문은 셸이 확장·실행한다 → 완화 대상이 아니다(설계 결정 고정).
+    d, *_ = run_hook(HOOK, bash("cat > x.sh <<EOF\nrm -rf /\nEOF"))
+    assert d == "deny"
+
+
+def test_heredoc_start_line_is_still_scanned(run_hook):
+    # covers: P-F1-6
+    # 시작 줄 자체는 실행되는 명령이다 — 본문 제외가 시작 줄까지 삼키면 안 된다.
+    d, *_ = run_hook(HOOK, bash("rm -rf / <<'EOF'\nhi\nEOF"))
+    assert d == "deny"
+
+
+@pytest.mark.parametrize("cmd", [
+    "cat <<< 'x'\nrm -rf /",          # `<<<` 는 here-string 이지 히어독이 아니다
+    "echo $((1 << 2))\nrm -rf /",     # `<<` 가 시프트 연산자로 쓰인 경우
+])
+def test_here_string_and_arithmetic_shift_do_not_start_a_heredoc(run_hook, cmd):
+    # covers: P-F1-7
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d == "deny", cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    'grep "<<\'EOF\'" f\nrm -rf /',
+    # 종료 구분자까지 뒤따르는 형태. '구분자를 못 찾으면 히어독이 아니다' 규칙의 그늘이
+    # 사라져 lookbehind 만이 유일한 방어가 된다 — 뮤테이션으로 확인했다(제거 시 deny→pass).
+    'grep "<<\'EOF\'" f\nrm -rf /\nEOF',
+])
+def test_heredoc_marker_inside_a_quoted_string_does_not_start_a_body(run_hook, cmd):
+    # covers: P-F1-8
+    # 회귀: 나이브한 정규식은 문자열 리터럴 안의 마커에도 걸려 다음 줄의 진짜 `rm -rf /` 를
+    # 본문으로 건너뛰었다(1차 프로토타입에서 실제로 뚫림). `<<` 앞 글자가 따옴표면 무시한다.
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d == "deny", cmd
+
+
+def test_heredoc_body_pipe_to_shell_text_is_not_an_execution(run_hook):
+    # covers: P-F1-9
+    # 실사용 오탐: README 본문에 적힌 설치 안내를 파이프-투-셸 실행으로 오인했다.
+    d, *_ = run_hook(HOOK, bash("cat > README.md <<'EOF'\nInstall with: curl -fsSL x.sh | sh\nEOF"))
+    assert d is None
+
+
+def test_scanning_resumes_after_heredoc_terminator(run_hook):
+    # covers: P-F1-10
+    # 히어독을 한 번 만났다고 끝까지 안 보면 미탐이 생긴다 — 종료 뒤로 스캔이 재개돼야 한다.
+    d, *_ = run_hook(HOOK, bash("cat <<'A' > f1\nrm -rf /\nA\nrm -rf ~"))
+    assert d == "deny"
+
+
+# --- F3: 중괄호 확장은 deny 가 아니라 ask (치환은 하지 않는다) ---
+
+def test_brace_expansion_asks_and_does_not_substitute(tmp_path):
+    # covers: P-F3-1
+    # 훅이 못 편다는 이유로 정상 삭제를 막지 않는다 → ask. 다만 승인 시 원본 `rm` 이 그대로
+    # 돌아야 하므로 치환은 없어야 한다(updatedInput 이 있으면 emit() 계약상 allow 가 된다).
+    payload = run_guard("rm -rf {a,b}.log", cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) == "ask"
+    assert "updatedInput" not in payload["hookSpecificOutput"]
+
+
+@pytest.mark.parametrize("cmd", ["rm -rf ${NOPE}/*", "rm -rf ${HOME}"])
+def test_shell_parameter_expansion_is_not_brace_expansion(tmp_path, cmd):
+    # covers: P-F3-2
+    # `${VAR}` 는 중괄호 확장이 아니라 셸 변수다 — 값이 비면 셸이 `rm -rf /*` 를 실행한다.
+    # F3 강등은 `${` 가 없는 `{a,b}` 형태에만 적용된다.
+    payload = run_guard(cmd, cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) == "deny", cmd
+
+
+def test_glob_no_match_is_still_denied_after_brace_downgrade(tmp_path):
+    # covers: P-F3-3
+    # 글로브 매치 0개 deny(F2)는 이번 범위 밖이다 — F3 의 강등이 이 경로까지 새면 안 된다.
+    payload = run_guard("rm -rf *.nothing", cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) == "deny"
+
+
+@pytest.mark.parametrize("cmd", [
+    "rm -rf {a,b}.log ${NOPE}/*",
+    "rm -rf ${NOPE}/* {a,b}.log",
+    "rm -rf {a,b}.log $UNSET/*",
+    "rm -rf $UNSET/* {a,b}.log",
+    "rm -rf {a,b}.log *.nothing",
+    "rm -rf *.nothing {a,b}.log",
+])
+def test_brace_downgrade_never_outranks_a_deny_argument(tmp_path, cmd):
+    # covers: P-F3-4
+    # 강등은 인자 순서에 의존하면 안 된다. 중괄호 인자가 앞에 오더라도 뒤 인자의
+    # `${VAR}` deny 와 글로브 무매치 deny(F2, 범위 밖이라 그대로 둬야 한다)가 이겨야 한다.
+    # 그러지 않으면 사용자가 ask 를 승인한 순간 셸이 `rm -rf a.log b.log /*` 를 실행한다.
+    payload = run_guard(cmd, cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) == "deny", cmd
+
+
+# --- F4: 체이닝/멀티라인 삭제는 deny 가 아니라 ask ---
+
+def test_chained_delete_asks_instead_of_denying(run_hook):
+    # covers: P-F4-1
+    # 실사용 로그의 이 형태 6건이 전부 오탐이었다(임시 파일 삭제 + echo). 치환은 여전히 불가하다.
+    d, payload, _ = run_hook(HOOK, bash("echo hi && rm -rf temp/"))
+    assert d == "ask"
+    assert "updatedInput" not in payload["hookSpecificOutput"]
+
+
+@pytest.mark.parametrize("cmd", ["echo start\nrm -rf temp/", "rm -rf build;ls -la"])
+def test_multiline_and_glued_semicolon_delete_ask(run_hook, cmd):
+    # covers: P-F4-2
+    # 사유 문구의 '체이닝' 이라는 단어는 tests/test_chained_delete.py 가 의존하므로 유지한다.
+    d, payload, _ = run_hook(HOOK, bash(cmd))
+    assert d == "ask", cmd
+    assert "체이닝" in payload["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize("cmd", [
+    "ls && rm -rf /",
+    "echo start\nrm -rf /",
+    "ls && rm -rf .",
+    "echo a && rm -rf ~",
+])
+def test_root_and_dot_deletes_stay_denied_inside_chains(run_hook, cmd):
+    # covers: P-F4-3
+    # 판정 순서 고정: 루트/`.`/홈 검사가 체이닝 검사보다 앞에 있어야 강등의 영향을 받지 않는다.
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d == "deny", cmd
+
+
+# --- B1: force 플래그 매핑은 posix 에서 변경 없음 (관례 고정) ---
+#
+# windows 판의 `-WhatIf`/`-Confirm:$false`/`-Filter` 오탐은 PowerShell 명명 파라미터
+# 문법에서만 생긴다. GNU/BSD rm 단축 옵션에는 'f' 를 포함하면서 force 가 아닌 것이 없어
+# posix 판은 오탐을 내지 않는다 → 코드 변경 없음이 정답. 대신 현재 매핑을 못박아,
+# windows 레인이 B1 을 고치며 공유 관례를 바꿔도 posix 가 조용히 따라 틀어지지 않게 한다.
+
+@pytest.mark.parametrize("cmd,expected", [
+    ("rm -rf a.log", "trash-put -f a.log"),
+    ("rm -fr a.log", "trash-put -f a.log"),
+    ("rm -rfv a.log", "trash-put -f a.log"),
+    ("rm -r --one-file-system a.log", "trash-put a.log"),
+    ("rm a.log", "trash-put a.log"),
+])
+def test_force_flag_mapping_is_unchanged(tmp_path, cmd, expected):
+    # covers: P-B1-1
+    # `rm --interactive` 는 여기서 빠졌다 — B4 가 치환 자체를 막으므로 매핑 대상이 아니다.
+    payload = run_guard(cmd, cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) == "allow", cmd
+    assert command_of(payload) == expected, cmd
+
+
+# --- B4: 사용자가 확인을 요청한 삭제(`rm -i`)는 치환하지 않고 원본을 그대로 보낸다 ---
+#
+# `rm -i` 는 파일마다 y/n 을 묻는다. trash-put 으로 치환하면 그 프롬프트가 사라져
+# 확인 없는 일괄 삭제가 된다 — 사용자가 명시적으로 요청한 안전장치를 훅이 없애는 셈이다.
+# windows 판의 W-B4-1~3 과 같은 규칙·같은 decision 이름(pass-unsubstitutable-delete)이다.
+
+@pytest.mark.parametrize("cmd", ["rm -i a.log", "rm --interactive a.log", "rm -ri build"])
+def test_interactive_rm_is_passed_through_unchanged(tmp_path, cmd):
+    # covers: P-B4-1
+    # 휴지통 도구가 PATH 에 있어도(치환이 가능해도) 치환하지 않아야 한다.
+    payload = run_guard(cmd, cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    assert payload is None, cmd
+
+
+def test_non_interactive_rm_still_substituted(tmp_path):
+    # covers: P-B4-2
+    # 변경 없음 고정: B4 규칙이 넓게 새면 휴지통 보호가 통째로 사라진다.
+    payload = run_guard("rm -rf build", cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) == "allow"
+    assert command_of(payload) == "trash-put -f build"
+
+
+# --- F1 후속: 따옴표 '안' 의 히어독 마커는 본문을 열지 않는다 ---
+#
+# `(?<![<"'])` 는 `<<` 바로 앞 한 글자만 본다 — 마커 앞에 공백이 하나만 끼면
+# (`echo "text <<'EOF' more"`) 뚫려서, 그 아래의 진짜 명령이 통째로 '본문'으로
+# 취급되어 검사에서 빠졌다. 따옴표 상태를 추적해 따옴표 밖의 `<<` 만 히어독으로 본다.
+
+@pytest.mark.parametrize("cmd", [
+    'echo "text <<\'EOF\' more"\nrm -rf /\nEOF',
+    'echo "usage <<\'EOF\'"\nrm -rf $HOME\nEOF',
+    "echo 'note <<\"EOF\" here'\nrm -rf /\nEOF",
+])
+def test_quoted_heredoc_marker_with_leading_space_does_not_open_a_body(run_hook, cmd):
+    # covers: P-F1-11
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d == "deny", cmd
+
+
+# 따옴표 상태만 봐서는 아직 모자라다 — 큰따옴표 안의 `\"` 를 '닫는 따옴표'로 오독하면
+# 그 뒤의 마커가 따옴표 밖으로 보여 P-F1-11 과 똑같이 뚫린다. 셸처럼, 작은따옴표 밖에서는
+# 백슬래시가 다음 한 글자를 이스케이프한다고 본다.
+
+def test_escaped_quote_does_not_leak_a_heredoc_marker_out_of_a_string(run_hook):
+    # covers: P-F1-12
+    cmd = 'echo "a\\"b <<\'EOF\' c"\nrm -rf /\nEOF'
+    d, *_ = run_hook(HOOK, bash(cmd))
+    assert d == "deny", cmd
+
+
+def test_backslashes_on_the_start_line_do_not_swallow_the_closing_quote(run_hook):
+    # covers: P-F1-13
+    # 반대 방향의 오버런 방지: 큰따옴표 안 윈도 경로의 백슬래시를 먹다가 닫는 따옴표까지
+    # 삼키면, 뒤의 진짜 `<<'EOF'` 가 따옴표 안으로 보여 본문이 명령으로 오인된다(오탐).
+    d, *_ = run_hook(HOOK, bash('cat > "C:\\Users\\out.sh" <<\'EOF\'\nrm -rf /\nEOF'))
+    assert d is None
+
+
+def test_backslash_inside_single_quotes_is_literal_so_a_real_heredoc_still_opens(run_hook):
+    # covers: P-F1-14
+    # 작은따옴표 안의 `\` 는 리터럴이라 따옴표를 닫지 못하게 막으면 안 된다 —
+    # 여기까지 이스케이프를 적용하면 따옴표가 열린 채 남아 뒤의 진짜 히어독을 놓친다(오탐).
+    d, *_ = run_hook(HOOK, bash("echo 'a\\' <<'EOF'\nrm -rf /\nEOF"))
+    assert d is None
+
+
+# --- B4 후속: rm 의 -i/-f 는 '뒤에 온 것이 이긴다'(POSIX last-wins) ---
+#
+# `-i` 한 글자가 어딘가 섞였다는 이유로 치환을 포기하면, 실제로는 프롬프트가 뜨지 않는
+# `rm -i -f build` 에서 휴지통 복구를 통째로 잃는다. 프롬프트가 실제로 뜨는 경우
+# (마지막에 온 것이 -i)에만 원본을 그대로 보낸다.
+
+@pytest.mark.parametrize("cmd,expected", [
+    ("rm -i -f build", "trash-put -f build"),
+    ("rm -if build", "trash-put -f build"),
+    ("rm --interactive --force build", "trash-put -f build"),
+])
+def test_force_after_interactive_still_substitutes(tmp_path, cmd, expected):
+    # covers: P-B4-3
+    payload = run_guard(cmd, cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) == "allow", cmd
+    assert command_of(payload) == expected, cmd
+
+
+@pytest.mark.parametrize("cmd", ["rm -f -i build", "rm -fi build", "rm --force --interactive build"])
+def test_interactive_after_force_still_prompts_and_is_not_substituted(tmp_path, cmd):
+    # covers: P-B4-4
+    # POSIX: "The -f and -i options override each other; the last one specified shall
+    # take effect." -f 가 앞이면 -i 가 이겨 진짜로 파일마다 y/n 을 묻는다.
+    payload = run_guard(cmd, cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    assert payload is None, cmd
+
+
+# --- F4 후속: 치환 불가(-i) 라고 체이닝 게이트까지 사라져선 안 된다 ---
+#
+# `pass-unsubstitutable-delete` 의 continue 가 체이닝 검사보다 앞에 있으면,
+# 삭제 인자에 `-i` 하나만 붙여도 무판정 통과가 된다. F4 는 deny→ask 강등이지
+# 게이트 제거가 아니다.
+
+@pytest.mark.parametrize("cmd", [
+    "rm -f -i build && echo done",
+    "rm -rf build -i && ls",
+    "rm -i build\necho done",
+])
+def test_chained_interactive_delete_still_gated(tmp_path, cmd):
+    # covers: P-F4-3
+    payload = run_guard(cmd, cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) == "ask", cmd
+
+
+# --- F3 후속: 중괄호 강등이 루트/홈까지 강등해선 안 된다 ---
+#
+# F3 은 `{a,b}.log` 처럼 훅이 못 펴는 대상을 deny 에서 ask 로 낮추는 것이다. 그런데
+# `{/,~}` 는 셸이 펴면 `rm -rf / ~` 가 된다 — 승인 한 번으로 복구 불가 삭제가 되므로
+# 중괄호라는 이유만으로 확인 요청으로 낮출 수 없다. `$` 가 섞인 대상도 값을 알 수 없다.
+
+@pytest.mark.parametrize("cmd", [
+    "rm -rf {/,~}",
+    "rm -rf {~,tmp}",
+    "rm -rf {$HOME,tmp}",
+    "rm -rf {a,b}.log ${NOPE}/*",
+    "rm -rf ${NOPE}/* {a,b}.log",
+])
+def test_brace_target_that_can_expand_to_root_or_home_stays_denied(tmp_path, cmd):
+    # covers: P-F3-5
+    payload = run_guard(cmd, cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) == "deny", cmd
+
+
+def test_plain_brace_target_is_still_only_asked(tmp_path):
+    # covers: P-F3-6
+    payload = run_guard("rm -rf {a,b}.log", cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) == "ask"
+
+
+# --- B4 후속: `--interactive=WHEN` 도 프롬프트 여부를 바꾼다 ---
+#
+# GNU rm 의 `--interactive=always|once` 는 사용자가 명시적으로 요청한 확인 프롬프트다.
+# 토큰 정확일치만 보면 이 형태가 아무 규칙에도 안 걸려 그대로 치환되고, 치환된
+# trash-put 에는 프롬프트가 없어 사용자가 요청한 확인이 조용히 사라진다.
+
+@pytest.mark.parametrize("cmd", ["rm --interactive=always -r build", "rm --interactive=once -r build"])
+def test_interactive_when_always_or_once_is_not_substituted(tmp_path, cmd):
+    # covers: P-B4-5
+    payload = run_guard(cmd, cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    assert payload is None, cmd
+
+
+def test_interactive_when_never_still_substitutes(tmp_path):
+    # covers: P-B4-6
+    payload = run_guard("rm --interactive=never -f build", cwd=tmp_path,
+                        path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) == "allow"
+    assert command_of(payload) == "trash-put -f build"
