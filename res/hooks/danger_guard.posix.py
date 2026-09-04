@@ -1274,6 +1274,19 @@ def main() -> None:
                     log({"command": command, "decision": "pass-unsubstitutable-delete"})
                     continue
 
+                # /tmp 는 재부팅하면 비워지는 임시 영역이라 휴지통이 지켜 줄 것이 없다.
+                # 게다가 리눅스에서 /tmp 가 tmpfs 면 휴지통 자리도 같은 파일시스템 안의
+                # /tmp/.Trash-$UID 다 — 규격상 다른 파일시스템으로는 옮길 수 없으므로,
+                # 치환하면 램이 전혀 회수되지 않은 채 삭제한 척만 하게 된다. 실측으로
+                # 1.4GB 가 이렇게 묶여 2GB 스왑을 통째로 소진시킨 적이 있다. 그래서
+                # 대상이 전부 /tmp 아래일 때는 원본 rm 을 그대로 보낸다. 루트/홈/`.`
+                # 검사는 위에서 이미 끝났고, `/tmp` 자체는 realpath 가 "/tmp/" 로
+                # 시작하지 않아 걸리지 않는다. macOS 의 /tmp 는 /private/tmp 로 풀려
+                # 역시 걸리지 않는데, 그쪽은 tmpfs 가 아니니 그래야 맞다.
+                if targets and all(os.path.realpath(t).startswith("/tmp/") for t in targets):
+                    log({"command": command, "decision": "pass-tmpfs-delete"})
+                    continue
+
                 trash_cmd = resolve_trash_command()
                 if not trash_cmd:
                     emit("deny", "휴지통 이동 도구(trash-put / macOS trash)가 없어 삭제를 차단합니다. (pip install trash-cli)")

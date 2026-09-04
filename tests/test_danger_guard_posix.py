@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -884,17 +885,54 @@ def test_resolved_home_denied(tmp_path):
     assert decision_of(payload) == "deny"
 
 
-def test_glob_expanded_to_concrete_paths(tmp_path):
+@pytest.fixture
+def outside_tmp():
+    """/tmp 밖의 작업 디렉터리.
+
+    훅은 /tmp 안의 삭제를 휴지통으로 치환하지 않고 원본 rm 으로 통과시킨다
+    (tmpfs 휴지통은 램을 회수하지 못하므로). pytest 의 tmp_path 는 /tmp 아래라서,
+    '치환이 일어나는지' 자체를 보는 테스트는 이 픽스처로 /tmp 밖에서 돌아야 한다.
+    """
+    with tempfile.TemporaryDirectory(dir=Path.home()) as d:
+        yield Path(d)
+
+
+def test_glob_expanded_to_concrete_paths(tmp_path, outside_tmp):
     """글로브를 인용해 넘기면 셸이 확장하지 못해 명령이 조용히 실패한다.
     훅이 cwd 기준으로 확장해 구체 경로로 바꿔야 한다."""
-    (tmp_path / "a.log").write_text("x", encoding="utf-8")
-    (tmp_path / "b.log").write_text("x", encoding="utf-8")
-    payload = run_guard("rm -rf *.log", cwd=tmp_path, path_prefix=_stub(tmp_path, "trash-put"))
+    (outside_tmp / "a.log").write_text("x", encoding="utf-8")
+    (outside_tmp / "b.log").write_text("x", encoding="utf-8")
+    payload = run_guard("rm -rf *.log", cwd=outside_tmp, path_prefix=_stub(tmp_path, "trash-put"))
     assert decision_of(payload) == "allow"
     command = command_of(payload)
-    assert str(tmp_path / "a.log") in command
-    assert str(tmp_path / "b.log") in command
+    assert str(outside_tmp / "a.log") in command
+    assert str(outside_tmp / "b.log") in command
     assert "*" not in command
+
+
+def test_tmp_delete_passes_through_without_trash(tmp_path):
+    """/tmp 안의 삭제는 치환하지 않고 원본 rm 을 그대로 보낸다.
+
+    tmpfs 위에서는 휴지통도 같은 파일시스템 안(/tmp/.Trash-$UID)에 있어서, 치환하면
+    램이 전혀 회수되지 않은 채 삭제한 척만 된다. 실측으로 1.4GB 가 이렇게 묶여
+    2GB 스왑을 통째로 소진시킨 적이 있다.
+    """
+    victim = tmp_path / "junk"
+    victim.mkdir()
+    payload = run_guard(f"rm -rf {victim}", path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) is None, payload
+
+
+@pytest.mark.parametrize("target", ["/tmp", "/tmp/"])
+def test_tmp_root_itself_is_not_passed_through(tmp_path, target):
+    """예외는 /tmp '아래' 에만 적용된다 — /tmp 자체는 평소대로 휴지통으로 치환된다.
+
+    realpath('/tmp') 는 "/tmp/" 로 시작하지 않으므로 예외에 걸리지 않는다. 예외가
+    여기까지 새면 `rm -rf /tmp` 가 아무 보호 없이 실행된다.
+    """
+    payload = run_guard(f"rm -rf {target}", path_prefix=_stub(tmp_path, "trash-put"))
+    assert decision_of(payload) == "allow", payload
+    assert command_of(payload).startswith("trash-put"), payload
 
 
 def test_glob_with_no_match_denied(tmp_path):
