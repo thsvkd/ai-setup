@@ -221,3 +221,7 @@ __marimo__/
 .streamlit/secrets.toml
 .omc/
 .cluade/
+
+# 셰임 테스트 픽스처 (tmpfs 밖이어야 해서 저장소 안에 만든다)
+.tmp-rmshim/
+.tmp-rmshim-ps/

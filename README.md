@@ -4,7 +4,7 @@ Claude Code를 **더 안전하게** 쓰기 위한 사용자 레벨(user-level) �
 위험한 명령을 자동으로 막거나 휴지통 이동으로 치환하는 **가드 훅**, 합리적인 **권한(permissions)**,
 프로젝트용 **AGENTS.md**, 그리고 OS·터미널·에이전트마다 제각각인 **줄바꿈 키**를 Windows / macOS / Linux에 한 번에 설치한다.
 
-- 🛡️ **가드 훅** — `rm`을 휴지통 이동으로 치환, 디스크 포맷·`curl | bash` 등 되돌릴 수 없는 명령을 차단, `git push`는 브랜치 이름으로 판단(곁다리 브랜치는 통과, 보호 브랜치는 확인), `git reset --hard`/`clean`/`stash drop` 등 되돌릴 수 없는 git 명령은 `refs/claude-backups/`에 백업한 뒤 그대로 실행, 시크릿 파일 접근 시 확인 요청
+- 🛡️ **가드 훅** — 삭제를 휴지통으로 돌리는 셰임을 `PATH`/모듈로 끼워 넣고(명령 문자열은 건드리지 않는다), `git reset --hard`·`clean` 등 미커밋 변경을 날리는 명령 앞에 `refs/claude-backups/`로 스냅샷을 뜬다. 차단은 되돌릴 수단이 없는 둘뿐 — 루트/홈 전체 삭제와 디스크 파괴. 원격 기본 브랜치 push 와 시크릿 파일 접근만 확인을 요청한다
 - 🧩 **외과적 병합** — 권한/훅을 추가하고 `model`·`effortLevel`·`language`는 **없을 때만** 채운다. 사용자가 이미 고른 값과 그 외 키(env, statusLine 등)는 100% 보존
 - ⏎ **줄바꿈 키 통일** — Claude Code / Codex / Grok CLI에서 Shift+Enter(또는 Ctrl+Enter)로 줄을 넣고, Enter는 그대로 전송. VS Code·Cursor 통합 터미널, tmux, Windows Terminal, 에이전트 키맵까지 한 번에 맞춘다
 - 🔁 **멱등성 · dry-run** — 몇 번을 실행해도 안전하고, `--dry-run`으로 실제 적용 전에 바뀔 내용을 미리 확인
@@ -109,6 +109,8 @@ bash scripts/setup.sh --dry-run   # 또는 .\scripts\setup.ps1 -DryRun
 | `~/.claude/hooks/danger_guard.py`  | 위험 명령 가드 (Bash·PowerShell 툴)                                                  |
 | `~/.claude/hooks/secrets_guard.py` | 시크릿 파일 접근 가드 (Read·Write·Edit)                                              |
 | `~/.claude/hooks/send_to_trash.py` | (Windows) 휴지통 이동 헬퍼                                                           |
+| `~/.claude/hooks/shims/rm`         | 삭제를 휴지통으로 돌리는 `rm` 셰임 (Bash·Git Bash)                                   |
+| `~/.claude/hooks/shims/RmShim.psm1`| 같은 역할의 `Remove-Item` 프록시 (PowerShell, Windows 설치본만)                       |
 | `~/.claude/settings.json`          | 권한 + PreToolUse 훅 등록 + `model`/`effortLevel`/`language`·`env.CLAUDE_CODE_SCROLL_SPEED` 기본값(없을 때만) |
 | `./AGENTS.md`                      | (`--agentsmd` 시) 현재 폴더에 프로젝트 워크플로 규칙 — 이미 있으면 건너뜀 (`--force`면 백업 후 덮어쓰기) |
 | `./CLAUDE.md`                      | (`--agentsmd` + 하네스에 `claude` 포함 시) `@AGENTS.md` 한 줄 — Claude Code는 `AGENTS.md`를 직접 읽지 않는다. 이미 있으면 건너뜀 |
@@ -188,67 +190,107 @@ Windows Terminal·iTerm2·Ghostty·Kitty·WezTerm 같은 터미널은 Shift+Ente
 
 ## 가드 정책
 
-### danger_guard — 위험 명령
+### 설계 원칙 — 차단이 아니라 복구
 
-| 명령                                                                                                                    | 조치                                                                  |
-| ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `rm`, `del`, `Remove-Item`, `rd`, `rmdir`                                                                               | 🗑️ 휴지통 이동으로 **치환** (macOS `trash` / `trash-put` / send2trash) |
-| ↳ 드라이브·홈 루트 삭제 (`C:\`, `/`, `~`, 그리고 `$HOME` 값을 그대로 적은 절대경로)                                     | ⛔ **차단**                                                            |
-| ↳ `.`/`..` 형태 (`rm -rf .`, `rm -rf ./`, `rm -rf ..`, `rm -rf sub/.`)                                                  | ⛔ **차단** — rm 자신이 거부하는 형태다 ([아래 절](#치환은-원래-명령보다-위험해지면-안-된다)) |
-| ↳ cwd 기준으로 풀면 루트·홈이 되는 상대경로 (`../../../home/me`)                                                        | ⛔ **차단**                                                            |
-| ↳ 와일드카드(`rm -rf *.log`)                                                                                            | 🔍 훅이 cwd 기준으로 **확장해 구체 경로로 치환**. 매칭 0개거나 중괄호 확장(`{a,b}`)이면 차단, 100개 초과면 확인 |
-| ↳ 래퍼·경로·확장자로 감싼 형태 (`sudo`/`command`/`env`/`exec`/`busybox` 접두어, `/bin/rm`, `rm.exe`)                    | 벗겨내고 위 규칙을 **동일하게** 적용                                   |
-| ↳ 휴지통 도구 미설치 / 여러 줄 스크립트에 섞임                                                                          | ⛔ **차단** (fail-closed)                                              |
-| **git** — 전역 옵션(`-C`/`-c` 등)을 건너뛰고 **실제 서브커맨드**를 판정해 세분화 (`git stash push` 같은 안전 명령 오탐 방지) | ↓ 아래 세분화 |
-| `git push` — 대상 브랜치 이름에 `/`가 있으면(`feature/*`, `fix/*` 등 곁다리 브랜치) 통과. `/`가 없으면(`main`/`master`/`develop` 등) 브랜치 이름을 명시하며 확인. `--all`/`--mirror` 처럼 특정 브랜치로 못 좁히면 확인 (force 여부는 통과/확인 판정에 영향 없음) | ✅ 통과 또는 ❓ **확인** |
-| ↳ `git push --delete`/`-d`, `git push origin :<브랜치>` (원격 브랜치 **삭제**)                                           | ❓ **확인** (브랜치 이름에 `/`가 있어도 — 원격은 로컬 백업으로 못 되돌린다) |
-| `reset --hard`, `clean -f*`(`-n`/`--dry-run` 제외), `stash drop`/`clear`, `branch -D`/`-M`(대상 있었으면), `tag -d`/`-f`(대상 있었으면), `rebase`(새로 시작), `commit --amend`, `filter-branch`/`filter-repo`, `reflog expire`/`delete`, `gc --prune=now`/`all`, `checkout`/`switch --force`(강제 전환) | 🗂️ **`refs/claude-backups/<timestamp>/<대상>`에 백업 후 그대로 실행** (자동치환) |
-| `git checkout -- <경로>` / `checkout .` / `restore`(워킹트리)                                                            | 🗂️ 위와 동일하게 백업 후 실행 (**자동치환**)          |
-| ↳ 위 백업 대상 명령이 `-C`/`--git-dir`/`--work-tree`로 **다른 저장소**를 가리키거나 여러 줄·체이닝에 섞임                | ❓ **확인** (백업 대상을 안전하게 특정할 수 없음)      |
-| `git stash push`/`pop`/`apply`/`list`, `reset --soft`/`--mixed`, `clean -n`, `branch -d`, `checkout`/`switch <브랜치>`, `restore --staged`, `rebase --continue`/`--abort`/`--skip` | ✅ 통과 (안전) |
-| `format` / `diskpart` / `mkfs*` / `newfs_*` / `fdisk` / `parted` / `wipefs` / `Clear-Disk` / `Format-Volume` / `dd of=` | ⛔ **차단**                                                            |
-| `diskutil` 파괴적 서브커맨드 (`eraseDisk`, `eraseVolume`, `secureErase`, `partitionDisk`, `apfs deleteContainer` 등)    | ⛔ **차단**                                                            |
-| `/dev/sd*`·`/dev/disk*` 등 블록 디바이스로의 리다이렉트, 포크밤 `:(){ :\|:& };:`                                        | ⛔ **차단**                                                            |
-| `curl … \| bash`, `irm … \| iex` (원격 출력을 셸로 파이프 — 공백이 없어도)                                              | ⛔ **차단**                                                            |
-| `shutdown` / `reboot` / `Restart-Computer`, `chmod 777`, `shred`, `Clear-Content`, `reg delete`                         | ❓ **확인**                                                            |
-| `find … -delete`, `find … -exec`/`-execdir`/`-ok` + 삭제 명령                                                            | ❓ **확인** — 대상을 미리 볼 수 없어 휴지통 치환이 불가능하다          |
-| `xargs`/`parallel` + 삭제 명령 (`find … \| xargs rm` 처럼 파이프 하류여도)                                              | ❓ **확인** — 대상이 표준입력이라 훅이 볼 수 없다                      |
-| 그 외                                                                                                                   | ✅ 통과 (판단 안 함)                                                   |
+이 훅의 가치는 위험한 명령을 막는 데 있지 않다. 실사용 로그 `~/.claude/hooks/guard.log` 10,329건을 전수 분석한 결과가 근거다.
 
-`sudo`/`command`/`env`/`exec`/`builtin`/`nohup`/`time`/`busybox`/`doas` 접두어는 벗겨 실제 명령을 위 규칙으로 검사한다(`sudo env rm …` 처럼 중첩된 것도 반복해서 벗긴다). 실행 파일을 경로나 확장자로 적은 형태(`/bin/rm`, `rm.exe`)도 같은 명령으로 판정한다. 모든 판정은 `~/.claude/hooks/guard.log`에 감사 기록으로 남는다.
+| 판정 | 발동 | 진짜 위험한 명령 | 오탐·무의미 |
+| --- | ---: | ---: | --- |
+| `deny-fork-bomb` | 8 | **0** | 8 — 평범한 셸 함수 정의 `f(){ … \| grep … && … }` |
+| `deny-pipe-to-shell` | 14 | **0** | 8 테스트 픽스처, 5 히어독 본문 오탐, 1 의도한 설치 스크립트 차단 |
+| `deny-root-delete` | 13 | **0** | 13 전부 테스트 픽스처 |
+| `deny-unexpandable-target` | 4 | **0** | 4 전부 글로브 미일치(`rm -f *.png`) |
+| `ask-chained-delete` | 9 | **0** | 9 전부 임시 파일 정리 |
+| `ask-find-delete` | 5 | **0** | 5 전부 `__pycache__` 정리 |
+| **휴지통 치환** | **311** | — | 실제로 작동한 복구 기능 |
+| **git 백업** | **22** | — | 실제로 작동한 복구 기능 |
 
-자기 인자를 먼저 받는 래퍼(`timeout 5 rm …`, `nice -n 5 rm …`, `ionice`/`stdbuf`/`setsid`/`taskset`/`chrt`)도 벗겨낸다. 이 형태는 첫 인자(`5`)를 명령으로 오인해 **rm 보호가 통째로 무력화됐던** 경로다. 두 종류의 래퍼는 번갈아 벗기므로 `timeout 5 sudo rm -rf .` 처럼 섞인 형태도 잡힌다.
+deny/ask 53건 중 진짜 위험한 명령은 **0건**이었다. 반대로 복구 기능은 333건 작동했다. 게다가 오탐의 상당수는 훅이 **명령 문자열을 재작성하다** 생겼다 — 훅은 셸이 아니라서 `$VAR`·글로브·따옴표 확장을 흉내 낼 수 없는데도 인자를 다시 따옴표로 감싸 넘겼고(`rm -rf "$FOO/bar"` → `trash-put '$FOO/bar'`), 확장이 막혀 명령이 실패했다.
 
-**이 목록은 완전하지 않다.** 블랙리스트는 원리적으로 완성될 수 없다 — 셸은 임의의 프로그램을 실행할 수 있어서 `python3 -c "shutil.rmtree('.')"` 같은 경로를 명령 문자열만 보고 판정하는 건 불가능하다. 실측 결과 삭제 경로 35가지 중 이 훅이 잡는 건 일부다. 그래서 이 훅의 역할은 **완전 차단이 아니라 흔한 실수에 대한 확인**이다. 근거와 대안(OS 수준 샌드박스, 섀도 스냅샷)은 [docs/2026-07-31-delete-guard-architecture.md](docs/2026-07-31-delete-guard-architecture.md) 참고.
+그래서 현재 설계는 셋뿐이다.
 
-### 치환은 원래 명령보다 위험해지면 안 된다
+1. **명령 문자열을 재작성하지 않는다.** 삭제를 휴지통으로 돌리는 일은 셰임(shim)이 하고, 훅은 셰임을 끼워 넣는 **선행 한 줄**만 앞에 붙인다. 인자 해석은 전적으로 셸/PowerShell 몫이다.
+2. **git 백업도 명령을 건드리지 않는다.** 훅 프로세스가 직접 스냅샷 커밋을 만들고 원본 명령은 그대로 흘려보낸다.
+3. **deny 는 되돌릴 수단이 아예 없는 두 부류뿐이다.** 루트/홈 전체 삭제와 디스크 파괴. 파싱하지 않고 명령 문자열의 꼴만 본다.
 
-`rm`을 휴지통 이동으로 바꾸면 편해지지만, **rm이 원래 갖고 있던 보호 장치까지 같이 사라진다.** GNU rm은 `rm -rf .`을 거부한다(`refusing to remove '.' or '..' directory`). 반면 `trash-put`은 거부하지 않는다. 그래서 아무 검사 없이 치환하면, rm이었다면 아무 일도 없었을 명령이 **현재 디렉터리를 통째로 휴지통에 넣는다.** 저장소 루트에서 실행되면 저장소 전체가 사라진다.
+### 삭제 → 휴지통: PATH·모듈 셰임
 
-같은 이유로 와일드카드도 그대로 넘길 수 없다. 훅이 `*`를 인용해서 넘기면 셸이 확장하지 못해 명령이 조용히 실패하고(사용자에게는 "치환 완료"로 보인다), 인용하지 않으면 무엇이 지워질지 모르는 채로 통과시키게 된다. 그래서 훅이 직접 `cwd` 기준으로 확장하고, **확장된 경로 하나하나에 루트·홈 검사를 다시 적용한 뒤** 절대경로로 고정해서 넘긴다.
+| 툴 | 방식 |
+| --- | --- |
+| Bash (POSIX 셸·Git Bash) | `PATH` 맨 앞에 `~/.claude/hooks/shims` 를 끼워 넣는 한 줄을 붙인다. `shims/rm` 이 셸의 확장이 **끝난 뒤의 argv** 를 받는다 |
+| PowerShell | `shims/RmShim.psm1` 을 `Import-Module` 하는 한 줄을 붙인다. 명령 우선순위가 별칭 > 함수 > cmdlet 이라 같은 이름의 함수가 `Remove-Item` cmdlet 을 가리고, `rm`/`del`/`erase`/`ri`/`rd`/`rmdir` 별칭이 전부 그 함수로 해석된다 |
 
-원칙은 하나다 — **치환된 명령이 원래 명령보다 더 많이 지울 수 있으면 안 된다.**
+셸이 이미 확장을 끝낸 뒤에 받으므로 **원본 명령과 해석이 어긋날 수 없다.** 종전에 확인을 요구하거나 차단하던 것들이 그냥 동작한다.
 
-### 왜 git 명령을 막지 않고 백업 후 실행하는가
+| 종전 | 지금 |
+| --- | --- |
+| `rm -rf "$FOO/bar"` → 확장이 깨져 실패 | ✅ 그대로 동작, 휴지통으로 |
+| `rm -f *.nomatch` → 매칭 0개라 차단 | ✅ `rm -f` 의미 그대로 성공 |
+| `find … -exec rm -rf {} +` → 확인 | ✅ 셰임을 타므로 휴지통으로 |
+| `find … \| xargs rm -f` → 확인 | ✅ 같음 |
+| 여러 줄·체이닝에 `rm` 이 섞임 → 확인 | ✅ 파싱하지 않으므로 무관 |
+| 스크립트 내부의 `rm` → 훅이 못 봄 | ✅ `PATH` 로 해석되므로 커버 |
+| 히어독 본문의 `rm -rf /` → 오탐 | ✅ 데이터로 남음 |
 
-되돌릴 수 없는 git 명령이라도 실행 자체를 막으면 에이전트가 정상적인 작업(재작업, 정리, 리베이스 등)을 진행하지 못하고 매번 사용자 승인을 기다리게 된다. 대신 실행 **직전**에 되돌릴 대상(현재 HEAD, uncommitted 변경, 삭제될 브랜치/태그/스태시, 도달 불가능해질 커밋 등)을 `refs/claude-backups/<timestamp>/<대상>` 아래에 커밋 객체로 고정해두고 원본 명령은 그대로 실행한다.
+셰임이 **원본 `rm` 에게 그대로 넘기는** 경우 — 셰임이 흉내 내면 의미가 달라지는 것들이다.
+
+- `-i`/`-I` — 치환하면 프롬프트가 사라진다
+- `.`/`..` 로 끝나는 대상 — `rm` 이 거부하는 형태다. 치환이 원본보다 더 지우면 안 된다
+- 대상이 **전부** `/tmp` 등 tmpfs 아래 — 휴지통 자리도 같은 램이라 옮겨봐야 회수되지 않는다 (실측: 1.4GB 가 이렇게 묶여 스왑을 소진시킨 적이 있다). 하나라도 tmpfs 밖이면 전부 휴지통으로 간다
+- 휴지통 도구 부재 — 경고를 남기고 실제 삭제한다. `rm` 자체를 못 쓰게 만드는 쪽이 더 해롭다는 판단이다
+- `CLAUDE_NO_TRASH` 가 설정됨 — 명시적 탈출구
+
+루트/홈 전체 삭제는 셰임도 argv 수준에서 한 번 더 거부한다. `bash -c "rm -rf /"` 처럼 훅의 텍스트 규칙을 비껴가는 형태를 여기서 잡는다.
+
+**한계**: `sudo rm` 은 sudo 의 `secure_path` 가 `PATH` 를 버려 셰임을 타지 않는다(실사용 10,329건 중 2건). `find … -delete` 처럼 `rm` 을 거치지 않는 삭제도 커버 밖이다.
+
+### git — 미커밋 변경만 스냅샷
+
+Claude Code 의 체크포인팅(`/rewind`)은 [공식 문서상](https://code.claude.com/docs/en/checkpointing) **"bash 명령이 바꾼 파일을 추적하지 않는다."** `git reset --hard` 로 날아간 작업은 `/rewind` 로 못 되돌린다. 그래서 이 부분은 훅이 계속 맡는다.
+
+훅 프로세스가 임시 `GIT_INDEX_FILE` 에 `git add -A` → `git write-tree` → `git commit-tree` 로 스냅샷 커밋을 만들고 `refs/claude-backups/<timestamp>` 에 고정한 뒤, **원본 명령은 한 글자도 바꾸지 않고** 통과시킨다. `git stash create` 는 추적 안 된 파일을 담지 못해서(실측 확인) 스크래치 인덱스를 쓴다.
+
+| 대상 | 근거 |
+| --- | --- |
+| `reset --hard`, `checkout`/`restore` (워킹트리), `clean -f*`, `worktree remove`, `checkout`/`switch --force` | 미커밋 변경은 git 어디에도 남지 않는다 |
+| ~~`rebase`, `branch -D`, `commit --amend`, `filter-branch`, `gc --prune`, `tag -d`~~ | **제외** — reflog·`ORIG_HEAD` 가 이미 되돌려 준다 |
+| ~~`stash drop`/`clear`~~ | **제외** — gc 유예기간 안에서 `git fsck --unreachable` 로 살릴 수 있다 |
+
+- `clean -x`/`-X` 는 `.gitignore` 대상(`.env`, 로컬 설정)까지 지우므로 이 경우에만 `git add -Af` 로 무시된 파일까지 담는다.
+- 워킹트리가 `HEAD` 와 같거나 직전 스냅샷과 트리가 같으면 ref 를 만들지 않는다. `refs/claude-backups/` 는 14일이 지나면 정리된다.
+- `cd <경로> && git reset --hard` 는 그 경로에서 백업한다. `cd "$VAR"` 처럼 대상을 특정할 수 없으면 엉뚱한 저장소를 백업하느니 아무것도 하지 않는다.
+- `git worktree remove <경로>` 의 대상은 cwd 가 아니라 인자다 — 사라질 워크트리 쪽에서 스냅샷을 뜬다.
+
+오탐의 대가가 **쓸데없는 백업 ref 한 개**뿐이라 패턴을 느슨하게 잡아도 안전하다. 이것이 문자열 재작성 방식과의 결정적인 차이다.
 
 - **조회**: `git for-each-ref refs/claude-backups/`
-- **복구**: 백업 종류에 따라 `git stash apply <hash>`(uncommitted 변경/스냅샷), `git branch <name> <hash>`(브랜치/태그), `git reset --hard <hash>`(HEAD 위치) 중 알맞은 걸 사용
+- **복구**: `git checkout <ref> -- .`
 
-`git clean`처럼 추적 안 된 파일까지 지우는 명령은 `git stash create`가 추적 안 된 파일을 담지 못하는 한계가 있어(실측 확인), 별도 스크래치 인덱스로 추적/미추적 파일 전체를 스냅샷 커밋으로 백업한다. `clean -x`/`-X`는 `.gitignore` 대상(`.env`, `node_modules/`, 빌드 산출물)까지 지우는데 기본 `git add -A`는 그것들을 담지 못하므로, 이 경우에만 `git add -Af`로 무시된 파일까지 스냅샷에 넣는다.
+### 차단·확인 목록
 
-**백업 실패는 곧 명령 중단이다(fail-closed).** 백업 스니펫은 bash에선 전부 `&&`로, PowerShell에선 단계마다 `$LASTEXITCODE` 확인 후 `exit 1`로 이어져, 한 단계라도 실패하면 뒤에 붙은 원본 파괴적 명령이 실행되지 않고 `claude-guard: 백업에 실패해 원본 명령을 실행하지 않았습니다`를 남기고 끝난다. 백업 대상을 애초에 특정할 수 없는 경우 — 멀티라인·`&&`/`;` 체이닝, 또는 `-C`/`--git-dir`/`--work-tree`로 **현재 디렉터리가 아닌 다른 저장소**를 가리키는 경우(백업 스니펫은 cwd에서 실행되므로 엉뚱한 저장소를 백업하게 된다) — 는 자동치환 대신 확인을 요청한다.
+| 명령 | 조치 |
+| --- | --- |
+| `rm -rf /`, `/*`, `~`, `$HOME` (따옴표 유무 무관, `sudo`/`timeout` 접두어 포함) | ⛔ **차단** |
+| `Remove-Item`/`del`/`rd` + 드라이브 루트(`C:\`)·`$env:USERPROFILE`·`$HOME` | ⛔ **차단** |
+| `mkfs*`/`newfs_*`/`fdisk`/`gdisk`/`sgdisk`/`parted`/`wipefs`, `dd of=/dev/*`, `diskutil erase*`, `/dev/sd*` 리다이렉트 | ⛔ **차단** |
+| `format <드라이브>:`, `diskpart`, `Clear-Disk`/`Initialize-Disk`/`Remove-Partition`/`Clear-Volume` | ⛔ **차단** |
+| **원격의 기본 브랜치**로 `git push` (`git symbolic-ref refs/remotes/origin/HEAD` 로 판정, 없으면 `main`/`master`), `--all`/`--mirror` | ❓ **확인** — 원격 히스토리는 로컬 백업이 닿지 않는다 |
+| 곁다리 브랜치 push (force 포함) | ✅ 통과 |
+| 그 외 전부 | ✅ 통과 (판단 안 함) |
 
-`git push`만 이 백업 메커니즘 대신 브랜치 이름 기반 정책을 쓴다 — 원격 히스토리는 로컬 백업으로 보호할 수 있는 대상이 아니고, 어떤 브랜치로 반영되는지가 사용자가 알아야 할 핵심 정보이기 때문이다. 같은 이유로 원격 브랜치 **삭제**(`--delete`/`-d`/`origin :<브랜치>`)는 곁다리 브랜치여도 확인을 요청한다.
+차단 규칙은 **명령 자리**에서 시작할 때만 잡는다. `grep -rn "rm -rf /" docs/` 처럼 위험한 문자열을 데이터로 다루는 명령은 막지 않는다 — 종전 오탐이 대부분 이 부류였다.
+
+**종전에 있었으나 실측 근거로 제거한 것**: 포크밤 패턴, `curl … | bash` 패턴, `find`/`xargs` 대량 삭제 확인, 체이닝 삭제 확인, 글로브 미일치 차단, `.`/`..` 차단, 대상 100개 초과 확인, `chmod 777` 확인, `shred` 확인, `shutdown`/`reboot` 확인, 훅 내부 오류 확인.
+
+**이 목록은 완전하지 않고, 완전할 수도 없다.** 셸은 임의의 프로그램을 실행할 수 있어서 `python3 -c "shutil.rmtree('.')"` 같은 경로를 명령 문자열만 보고 판정하는 건 불가능하다. 그래서 이 훅은 차단을 목표로 하지 않는다 — 되돌릴 수 있게 만드는 것이 목표다. 배경은 [docs/2026-07-31-delete-guard-architecture.md](docs/2026-07-31-delete-guard-architecture.md) 참고.
 
 ### git 정책을 permissions가 아니라 훅이 담당하는 이유 (그리고 그 대가)
 
-Claude Code에서 `permissions`의 `deny`/`ask` 규칙은 PreToolUse 훅의 `allow` 판정보다 항상 우선한다. 따라서 `Bash(git push *)` 같은 규칙을 `settings.json`에 두면 위의 세밀한 판단(곁다리 브랜치 통과, 백업 후 실행)이 전부 무력화된다. 그래서 git 정책은 전적으로 훅이 담당한다.
+Claude Code에서 `permissions`의 `deny`/`ask` 규칙은 PreToolUse 훅의 `allow` 판정보다 항상 우선한다. 따라서 `Bash(git push *)` 같은 규칙을 `settings.json`에 두면 위의 세밀한 판단(곁다리 브랜치 통과)이 전부 무력화된다. 그래서 git 정책은 전적으로 훅이 담당한다.
 
 **업그레이드 시 자동 마이그레이션**: 예전 버전은 `Bash(git push *)`·`Bash(git reset --hard *)`(및 PowerShell 짝)을 `deny`로 배포했다. 병합 엔진은 원래 '추가만' 하므로 그 규칙들이 기존 설치본에 그대로 남고, deny가 훅보다 우선하니 **새로 설치한 사람에게는 동작하고 업그레이드한 사람에게는 조용히 죽는** 상태가 된다. 그래서 설치 중에 *우리가 배포했던 문자열과 정확히 일치하는* 그 규칙들만 제거하고, 무엇을 지웠는지 설치 리포트에 출력한다. 문자열이 조금이라도 다른(=사용자가 직접 넣은) 규칙은 건드리지 않으며, 제거 사실은 매니페스트에 기록돼 `--uninstall` 시 원래대로 복원된다.
 
-그 대가로 **훅이 유일한 방어선**이 된다. 훅이 예외로 죽으면 Claude Code는 판정 없이 명령을 실행하므로(fail-open), 예상 못 한 내부 오류는 조용히 흘려보내지 않고 ❓ 확인으로 승격해 사용자에게 판단을 넘긴다(`guard.log`에 `ask-guard-error`로 기록). 훅 파일 자체가 없거나 python을 못 찾는 상황은 이 장치로도 막을 수 없으므로, 설치 후 `bash scripts/setup.sh`의 셀프테스트가 통과했는지 확인하는 것이 중요하다.
+그 대가로 훅이 유일한 방어선이 되지만, **훅이 죽어도 잃는 것은 복구 수단이지 실행 권한이 아니다.** 훅이 예외로 죽으면 Claude Code는 판정 없이 명령을 실행한다(fail-open). 종전에는 이때 확인으로 승격했지만 실측상 그 확인은 전부 마찰이기만 했으므로, 이제 내부 오류는 `guard.log`에 `guard-error`로 남기고 조용히 통과시킨다. 설치 후 셀프테스트가 통과했는지 확인하는 것이 그만큼 더 중요하다.
 
 ### secrets_guard — 시크릿 파일
 
@@ -274,8 +316,8 @@ Claude Code에서 `permissions`의 `deny`/`ask` 규칙은 PreToolUse 훅의 `all
 
 - **Python 3.9+** (필수) — 훅은 `settings.json`에 `python3`로 등록되므로, Claude Code가 PATH에서 처음 찾는 python3에서 반드시 돌아야 한다 (macOS 기본 `/usr/bin/python3` 포함).
 - **macOS**: 추가 설치 불필요. 14.4+는 `/usr/bin/trash`를 기본 제공. (Homebrew `trash-cli`는 keg-only라 `brew install` 해도 PATH에 안 잡힌다.)
-- **Linux**: `bash`, `trash-cli`(pip로 자동 설치 시도 — 없으면 `rm` 계열이 차단됨)
-- **Windows**: `send2trash`(pip로 자동 설치 시도 — 없으면 `rm`/`del` 계열이 차단됨)
+- **Linux**: `bash`, `trash-cli`(pip로 자동 설치 시도 — 없으면 `rm` 은 경고를 남기고 실제로 삭제된다)
+- **Windows**: `send2trash`(pip로 자동 설치 시도 — Git Bash 의 `rm` 폴백에 쓰인다. PowerShell 셰임은 OS 휴지통 API 를 직접 쓴다)
 
 > `auto` 모드는 계정/버전 자격 요건을 충족해야 켜진다. 설치 후 세션에서 `Shift+Tab`으로 모드를 순환시켜 확인할 수 있다.
 
@@ -292,8 +334,9 @@ res/
   keybinds/
     apply.py                # 줄바꿈 키바인딩 외과적 병합 (VS Code·Cursor·Claude·Codex·WT·tmux)
   hooks/
-    danger_guard.windows.py # Windows용 (Bash + PowerShell)
-    danger_guard.posix.py   # macOS/Linux용 (Bash)
+    danger_guard.py         # 위험 명령 가드 (Bash + PowerShell, 전 플랫폼 공용)
+    shims/rm                # 삭제 → 휴지통 (POSIX 셸·Git Bash)
+    shims/RmShim.psm1       # 삭제 → 휴지통 (PowerShell)
     secrets_guard.py        # 공용
     send_to_trash.py        # Windows 휴지통 헬퍼
     merge_and_diff.py       # 자리표시자 치환 + 외과적 병합 엔진

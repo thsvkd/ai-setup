@@ -1,0 +1,140 @@
+#!/bin/sh
+# rm 셰임 — 삭제를 휴지통 이동으로 바꾼다.
+#
+# 훅이 명령 문자열을 재작성하는 대신 PATH 앞에 이 디렉터리를 끼워 넣는다. 셸이 변수·글로브·
+# 따옴표 확장을 모두 끝낸 뒤의 argv 를 그대로 받으므로, 원본 rm 과 해석이 어긋날 수 없다.
+# find -exec / xargs / 스크립트 내부 호출도 PATH 로 해석되므로 같은 경로를 탄다.
+#
+# 원본 rm 에게 그대로 넘기는 경우 — 셰임이 흉내 내면 의미가 달라지는 것들:
+#   · -i/-I : 치환하면 프롬프트가 사라진다
+#   · `.`/`..` 로 끝나는 대상 : rm 이 거부하는 형태다. 치환이 원본보다 더 지우면 안 된다
+#   · 대상이 전부 /tmp 등 tmpfs 아래 : 휴지통 자리도 같은 램이라 옮겨봐야 회수되지 않는다
+#   · 휴지통 도구 부재 : rm 자체를 못 쓰게 만드는 쪽이 더 해롭다 (경고 후 실제 삭제)
+set -u
+
+REAL_RM=/bin/rm
+[ -x "$REAL_RM" ] || REAL_RM=/usr/bin/rm
+
+# 탈출구: 이 변수가 있으면 원본 rm 으로 바로 넘긴다.
+[ -z "${CLAUDE_NO_TRASH:-}" ] || exec "$REAL_RM" "$@"
+
+# 휴지통 도구를 찾는다. Windows 의 Git Bash 에는 trash-cli 가 없고 대신 훅 디렉터리의
+# send_to_trash.py(send2trash) 가 있다.
+SHIM_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SEND_TO_TRASH="$SHIM_DIR/../send_to_trash.py"
+TRASH=$(command -v trash-put 2>/dev/null) || TRASH=""
+TRASH_PY=""
+if [ -z "$TRASH" ] && [ -f "$SEND_TO_TRASH" ]; then
+    for _py in python3 python py; do
+        if command -v "$_py" >/dev/null 2>&1; then TRASH_PY=$_py; break; fi
+    done
+fi
+if [ -z "$TRASH" ] && [ -z "$TRASH_PY" ]; then
+    echo "rm(shim): 휴지통 도구가 없어 휴지통 없이 실제 삭제합니다. (pip install trash-cli)" >&2
+    exec "$REAL_RM" "$@"
+fi
+
+# --- 1차 통과: "$@" 를 보존한 채 훑는다. 원본 rm 에게 넘길 판정을 여기서 모두 끝낸다.
+force=0
+targets=0
+tmp_targets=0
+end_opts=0
+for a in "$@"; do
+    if [ "$end_opts" -eq 0 ]; then
+        case "$a" in
+            --) end_opts=1; continue ;;
+            --force)  force=1; continue ;;
+            -i|-I|--interactive|--interactive=*) exec "$REAL_RM" "$@" ;;
+            --*) continue ;;
+            -?*) case "$a" in *[iI]*) exec "$REAL_RM" "$@" ;; esac
+                 case "$a" in *f*) force=1 ;; esac
+                 continue ;;
+        esac
+    fi
+    targets=$((targets + 1))
+
+    case "$a" in
+        /*) abs=$a ;;
+        *)  abs=$PWD/$a ;;
+    esac
+    # 뒤에 붙은 슬래시를 '전부' 벗긴다. 하나만 벗기면 `rm -rf .//` 이 `$PWD/./` 로 남아
+    # 아래 점 검사를 빠져나간다.
+    while [ "${abs%/}" != "$abs" ]; do
+        abs=${abs%/}
+    done
+    [ -n "$abs" ] || abs=/
+
+    # `.`/`..` 로 끝나는 대상은 rm 이 거부한다. 치환이 원본보다 더 지우면 안 되므로
+    # 거부 판정을 rm 에게 그대로 넘긴다. 원시 인자가 아니라 정규화한 절대경로로 봐야
+    # `./`, `../`, `.//`, `sub/./` 같은 변형이 새지 않는다 (실측: 원본 rm 은 거부하는데
+    # 셰임이 통과시켜 상위 디렉터리를 통째로 휴지통에 넣었다).
+    case "$abs" in
+        */.|*/..) exec "$REAL_RM" "$@" ;;
+    esac
+
+    # 루트/홈 전체 삭제는 어느 경로로 와도 거부한다.
+    if [ "$abs" = "/" ] || { [ -n "${HOME:-}" ] && [ "$abs" = "${HOME%/}" ]; }; then
+        echo "rm(shim): 루트/홈 디렉터리 전체($a) 삭제는 거부합니다." >&2
+        exit 1
+    fi
+
+    case "$abs/" in
+        /tmp/*|/private/tmp/*|/dev/shm/*|/run/user/*) tmp_targets=$((tmp_targets + 1)) ;;
+    esac
+done
+
+# 대상이 없다 → rm 이 내는 usage/오류를 그대로 보여준다.
+[ "$targets" -gt 0 ] || exec "$REAL_RM" "$@"
+# 대상이 '전부' tmpfs 아래일 때만 실제 삭제로 넘긴다. 하나라도 아니면 휴지통으로 간다 —
+# 섞였다고 실삭제로 넘기면 되돌릴 수 없는 파일까지 함께 사라진다.
+[ "$tmp_targets" -ne "$targets" ] || exec "$REAL_RM" "$@"
+
+# --- 2차 통과: 옵션을 버리고 대상만 남긴다. 앞에서 꺼내 뒤에 붙이므로
+# 정확히 원본 개수만큼 꺼내면 남는 것은 대상뿐이다.
+n=$#
+i=0
+end_opts=0
+while [ "$i" -lt "$n" ]; do
+    a=$1; shift; i=$((i + 1))
+    if [ "$end_opts" -eq 0 ]; then
+        case "$a" in
+            --)  end_opts=1; continue ;;
+            -?*) continue ;;
+        esac
+    fi
+    set -- "$@" "$a"
+done
+
+# --- 3차 통과: 존재 확인. `rm -f 없는파일` 은 조용히 성공해야 하는데 휴지통 도구는
+# 없는 파일에 오류를 낸다. -f 가 없으면 rm 처럼 오류를 내되 멈추지는 않는다.
+missing=0
+n=$#
+i=0
+while [ "$i" -lt "$n" ]; do
+    t=$1; shift; i=$((i + 1))
+    if [ ! -e "$t" ] && [ ! -L "$t" ]; then
+        [ "$force" -eq 1 ] || {
+            echo "rm: cannot remove '$t': No such file or directory" >&2
+            missing=1
+        }
+        continue
+    fi
+    set -- "$@" "$t"
+done
+
+[ $# -gt 0 ] || exit "$missing"            # 남은 대상 없음 → 없던 대상 유무로 판정
+
+if [ -n "$TRASH" ]; then
+    "$TRASH" -- "$@" || exit $?
+else
+    "$TRASH_PY" "$SEND_TO_TRASH" -- "$@"
+    rc=$?
+    if [ "$rc" -eq 127 ]; then
+        # send2trash 미설치 — 휴지통으로 옮길 수단이 없다. 알리고 실제 삭제한다.
+        echo "rm(shim): 휴지통 없이 실제 삭제합니다. (pip install send2trash)" >&2
+        "$REAL_RM" -r -- "$@" || exit $?
+    elif [ "$rc" -ne 0 ]; then
+        exit "$rc"
+    fi
+fi
+exit "$missing"

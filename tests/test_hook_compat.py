@@ -119,10 +119,10 @@ BOM = "\ufeff"
 
 
 @pytest.mark.parametrize("hook,event,expected", [
-    ("danger_guard.windows.py",
+    ("danger_guard.py",
      {"tool_name": "PowerShell", "tool_input": {"command": "Remove-Item -Recurse -Force C:\\"}},
      "deny"),
-    ("danger_guard.posix.py",
+    ("danger_guard.py",
      {"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}},
      "deny"),
     ("secrets_guard.py",

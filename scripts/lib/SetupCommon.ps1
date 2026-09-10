@@ -76,6 +76,7 @@ function Install-HookFiles {
     $installed = @()
     foreach ($f in $Files) {
         $dest = Join-Path $HooksDir $f.DestName
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
         Copy-Item -Path $f.Source -Destination $dest -Force
         $installed += $dest
     }
@@ -279,7 +280,8 @@ function Uninstall-Hooks {
         } catch {}
     }
     if (-not $files -or $files.Count -eq 0) {
-        $files = @("danger_guard.py", "secrets_guard.py", "send_to_trash.py")
+        $files = @("danger_guard.py", "secrets_guard.py", "send_to_trash.py",
+                   "shims/rm", "shims/RmShim.psm1")
     }
 
     Write-Host "[1/2] settings.json 정밀 복원 (설치가 건드린 것만)..."
@@ -292,6 +294,7 @@ function Uninstall-Hooks {
     $targets = @()
     foreach ($f in $files) { $targets += (Join-Path $HooksDir $f) }
     $targets += (Join-Path $HooksDir "guard.log")   # 설치 셀프테스트가 생성
+    $shimsDir = Join-Path $HooksDir "shims"
     foreach ($target in $targets) {
         if (Test-Path $target) {
             if ($DryRun) {
@@ -301,6 +304,12 @@ function Uninstall-Hooks {
                 Write-Host "  🗑️  제거: $target"
             }
         }
+    }
+
+    # 셰임 디렉터리는 파일을 다 걷어낸 뒤 비어 있을 때만 지운다.
+    if (-not $DryRun -and (Test-Path $shimsDir) -and
+        -not (Get-ChildItem -LiteralPath $shimsDir -Force)) {
+        Remove-Item -Force $shimsDir -ErrorAction SilentlyContinue
     }
 
     # 매니페스트: keybinds 영수증이 남아 있으면 그 섹션만 남기고 훅 흔적만 지운다.

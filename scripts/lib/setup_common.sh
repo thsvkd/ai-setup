@@ -53,6 +53,7 @@ install_hook_files() {
     for pair in "$@"; do
         src="${pair%%:*}"
         dest="${pair#*:}"
+        mkdir -p "$(dirname "$hooks_dir/$dest")"
         cp "$src" "$hooks_dir/$dest"
         chmod +x "$hooks_dir/$dest"
         echo "$hooks_dir/$dest"
@@ -90,7 +91,7 @@ uninstall_hooks() {
         files="$("$py_exe" -c "import json,sys; print('\n'.join(json.load(open(sys.argv[1],encoding='utf-8')).get('hook_files',[])))" "$manifest" 2>/dev/null | tr -d '\r' || true)"
     fi
     if [[ -z "${files:-}" ]]; then
-        files=$'danger_guard.py\nsecrets_guard.py\nsend_to_trash.py'
+        files=$'danger_guard.py\nsecrets_guard.py\nsend_to_trash.py\nshims/rm\nshims/RmShim.psm1'
     fi
 
     echo "[1/2] settings.json 정밀 복원 (설치가 건드린 것만)..."
@@ -110,6 +111,11 @@ uninstall_hooks() {
             echo "  🗑️  제거: $target"
         fi
     done <<< "$files"
+
+    # 셰임 디렉터리는 파일을 다 걷어낸 뒤 비어 있을 때만 지운다.
+    if [[ "$dry_run" -eq 0 && -d "$hooks_dir/shims" ]]; then
+        rmdir "$hooks_dir/shims" 2>/dev/null || true
+    fi
 
     # guard.log(설치 셀프테스트가 생성) 제거.
     for target in "$hooks_dir/guard.log"; do

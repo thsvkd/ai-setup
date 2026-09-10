@@ -10,10 +10,13 @@ import sys
 
 def main() -> int:
     argv = sys.argv[1:]
-    # `rm -f` / `del /f` 의 의미 보존: 없는 파일은 조용히 넘어간다. 가드가 이 플래그를
+    # `rm -f` / `del /f` 의 의미 보존: 없는 파일은 조용히 넘어간다. 호출자가 이 플래그를
     # 항상 경로들 앞에 붙이므로 첫 인자만 본다.
     force = bool(argv) and argv[0] in ("-f", "--force")
     paths = argv[1:] if force else argv
+    # `--` 뒤는 전부 경로다. `-` 로 시작하는 파일 이름을 옵션으로 오인하지 않게 한다.
+    if paths and paths[0] == "--":
+        paths = paths[1:]
 
     if not paths:
         print("send_to_trash: 대상 경로가 없어 아무 작업도 하지 않습니다.", file=sys.stderr)
@@ -22,9 +25,12 @@ def main() -> int:
     try:
         from send2trash import send2trash
     except ImportError:
-        print("BLOCKED: send2trash 모듈이 없어 아무 파일도 삭제하지 않았습니다.", file=sys.stderr)
+        # 127 은 '휴지통으로 옮길 수단이 없다'는 뜻으로 호출자(rm 셰임)와 약속된 코드다.
+        # 셰임은 이 코드를 보고 경고 후 원본 rm 으로 넘긴다 — 아무것도 못 지우게 만드는
+        # 쪽이 더 해롭기 때문이다.
+        print("send_to_trash: send2trash 모듈이 없어 휴지통으로 옮길 수 없습니다.", file=sys.stderr)
         print("설치: pip install send2trash", file=sys.stderr)
-        return 1
+        return 127
 
     had_failure = False
     for p in paths:
