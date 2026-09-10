@@ -257,6 +257,30 @@ def merge_env(existing: dict, fragment: dict, changes: list) -> dict:
     return added
 
 
+# 우리가 한 번이라도 배포했던 훅 스크립트 이름. 조각에서 빠진 것은 '정책이 바뀌어 그만둔
+# 것'이므로 설치 중에 기존 등록을 걷어낸다. 그러지 않으면 새로 설치한 사람에게는 없고
+# 업그레이드한 사람에게만 남는 유령 훅이 생긴다 (구버전 permissions 규칙과 같은 성격의
+# 마이그레이션이다). uninstall 이 되살리지는 않는다 — 우리가 심은 것을 우리가 거두는 것이라,
+# 되살리면 설치가 지운 파일을 가리키는 깨진 훅이 복원된다.
+SHIPPED_HOOK_SCRIPTS = ("danger_guard.py", "secrets_guard.py", "send_to_trash.py")
+
+
+def prune_retired_hooks(existing: dict, fragment: dict, changes: list) -> list:
+    """조각에 더 이상 없는 '우리 훅' 등록을 제거한다. 반환: 제거된 스크립트 이름들."""
+    shipped_now = set()
+    for entries in (fragment.get("hooks") or {}).values():
+        for entry in entries:
+            shipped_now.update(script_names(entry))
+    retired = [n for n in SHIPPED_HOOK_SCRIPTS if n not in shipped_now]
+    if not retired:
+        return []
+    before = len(changes)
+    removed = remove_hooks(existing, retired)
+    for line in removed:
+        changes.append(line + " (더 이상 배포하지 않는 훅 — 제거)")
+    return retired if len(changes) > before else []
+
+
 def merge(existing: dict, fragment: dict):
     """(changes, receipt) 를 반환. receipt 는 uninstall 이 정밀 복원에 쓰는 '설치 영수증'."""
     changes = []
@@ -267,6 +291,7 @@ def merge(existing: dict, fragment: dict):
         "added_scalars": {},
         "added_env": {},
         "removed_legacy": {},
+        "retired_hooks": [],
         "default_mode_before": None,
         "default_mode_after": None,
         "default_mode_changed": False,
@@ -309,6 +334,9 @@ def merge(existing: dict, fragment: dict):
                     existing_sigs.add(sig)
                     names = ", ".join(sig[1]) or "(?)"
                     changes.append(f"hooks.{event}: + matcher={entry.get('matcher')!r} ({names})")
+
+    # 조각을 넣은 '뒤'에 돌려야 한다 — 조각이 다시 등록한 훅까지 지워버리지 않도록.
+    receipt["retired_hooks"] = prune_retired_hooks(existing, fragment, changes)
 
     return changes, receipt
 
@@ -560,9 +588,12 @@ def main() -> int:
                 # settings.json 이 원래 있었는지는 '첫 설치' 시점의 사실이어야 한다.
                 "settings_existed_before": previous.get("settings_existed_before", settings_existed)
                 if previous else settings_existed,
+                # 하위 경로(shims/rm)도 그대로 담는다 — uninstall 이 지울 파일 목록이기도
+                # 하기 때문이다. settings.json 의 훅 등록을 지울 때만 바깥에서 걸러낸다
+                # (등록 명령에는 파일 이름만 나타난다).
                 "hook_files": sorted(
                     set(previous.get("hook_files", []) if previous else [])
-                    | {f for f in hook_files_csv.split(",") if f and "/" not in f and "\\" not in f}
+                    | {f.strip() for f in hook_files_csv.split(",") if f.strip()}
                 ),
             }
             manifest.update(fold_receipt(previous, receipt))

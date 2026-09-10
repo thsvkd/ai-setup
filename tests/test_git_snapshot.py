@@ -271,3 +271,50 @@ def test_push_outside_git_repo_passes(tmp_path):
 def test_stash_push_is_not_treated_as_push(repo, tmp_path):
     _with_origin(repo, tmp_path, "main")
     assert _decision("git stash push -m wip", repo) is None
+
+
+def test_push_delete_remote_branch_asks(repo, tmp_path):
+    """원격 브랜치 삭제는 로컬 백업이 닿지 않는다 — 곁다리 브랜치여도 확인한다."""
+    _with_origin(repo, tmp_path, "main")
+    assert _decision("git push --delete origin feature/x", repo) == "ask"
+
+
+def test_push_empty_src_refspec_asks(repo, tmp_path):
+    """`git push origin :branch` 도 같은 삭제다."""
+    _with_origin(repo, tmp_path, "main")
+    assert _decision("git push origin :feature/x", repo) == "ask"
+
+
+def test_clean_x_skips_ignored_when_too_large(repo, monkeypatch):
+    """.gitignore 대상이 상한을 넘으면 담지 않는다 — 담으면 훅이 수십 초를 잡아먹는다.
+
+    상한을 넘겨도 추적/미추적 스냅샷은 그대로 남아야 한다.
+    """
+    import sys
+    sys.path.insert(0, str(HOOK.parent))
+    import danger_guard
+
+    (repo / ".gitignore").write_text("junk/\n", encoding="utf-8")
+    (repo / "tracked.txt").write_text("WIP\n", encoding="utf-8")
+    junk = repo / "junk"
+    junk.mkdir()
+    for i in range(5):
+        (junk / ("f%d.bin" % i)).write_text("x" * 100, encoding="utf-8")
+
+    monkeypatch.setattr(danger_guard, "MAX_IGNORED_FILES", 1)
+    notes = danger_guard.git_snapshot("git clean -fdx", str(repo))
+
+    assert any("제외했습니다" in n for n in notes), notes
+    ref = latest_backup(repo)
+    assert ref, "무시된 파일을 포기해도 스냅샷 자체는 남아야 한다"
+    listing = git(repo, "ls-tree", "-r", "--name-only", ref).stdout
+    assert "tracked.txt" in listing
+    assert "junk/" not in listing
+
+
+def test_clean_x_includes_ignored_when_small(repo):
+    """상한 안이면 종전대로 .gitignore 대상까지 담는다."""
+    (repo / "local.env").write_text("SECRET=1\n", encoding="utf-8")
+    run_hook("git clean -fdx", repo)
+    ref = latest_backup(repo)
+    assert "local.env" in git(repo, "ls-tree", "-r", "--name-only", ref).stdout

@@ -40,12 +40,14 @@ Bash 툴(POSIX 셸·Git Bash)과 PowerShell 툴 양쪽을 대상으로 한다. �
        - 디스크 파괴 (mkfs*/fdisk/parted/wipefs, dd of=/dev/*, diskutil erase*, > /dev/sdX,
          format <드라이브>:, diskpart, Clear-Disk/Initialize-Disk/Remove-Partition)
      되돌릴 수단이 아예 없는 두 부류라 오탐 비용을 감수한다. 로그상 발동 0회.
-  4) ask 는 하나뿐이다 — 원격의 기본 브랜치로 push. 원격 히스토리는 로컬 백업이 닿지 않는
-     유일한 영역이다. 곁다리 브랜치 push 는 확인하지 않는다.
+  4) ask 는 원격 히스토리를 건드릴 때뿐이다 — 원격의 기본/보호 브랜치로 push, 그리고 원격
+     브랜치 삭제. 로컬 백업이 닿지 않는 유일한 영역이다. 곁다리 브랜치 push 는 force 여부와
+     무관하게 확인하지 않는다.
 
   종전에 있었으나 실측 근거로 제거한 것: 포크밤 패턴, curl|sh 패턴, find/xargs 대량 삭제
   ask, 체이닝 삭제 ask, 글로브 미일치 deny, `.`/`..` deny, 대상 100개 초과 ask,
-  chmod 777 ask, shred ask, shutdown/reboot ask, 훅 내부 오류 ask.
+  chmod 777 ask, shred ask, shutdown/reboot ask, 훅 내부 오류 ask, 그리고 시크릿 파일
+  접근 ask (secrets_guard — 파괴가 아니라 유출 위험이고, 그쪽은 auto mode 분류기가 맡는다).
 
 이 훅은 macOS 기본 인터프리터(/usr/bin/python3, 3.9.x)에서도 실행되어야 한다. 3.10+ 전용
 문법(PEP 604 `X | None` 애노테이션 등)을 쓰지 않고, 애노테이션은 `from __future__ import
@@ -122,6 +124,14 @@ BASH_DELETE_RE = re.compile(r"\brm\b")
 BACKUP_PREFIX = "refs/claude-backups/"
 PRUNE_DAYS = 14
 
+# `git clean -fdx` 는 .gitignore 대상까지 지우므로 스냅샷도 그것들을 담아야 한다. 그런데
+# 무시된 파일은 node_modules/.venv/빌드 산출물이라 규모가 다르다 — 실측(라즈베리파이 5):
+# 한 저장소가 52,722개 1,244MB 였고, 이 기기의 해싱 처리량은 100MB/2,000파일당 4.4초다.
+# 그대로 담으면 훅이 1~2분을 잡아먹고 SD 카드에 1.2GB 를 쓴다. 목록 나열은 169ms 로 싸니,
+# 먼저 규모를 재고 상한을 넘으면 무시된 파일은 포기한다(추적/미추적 스냅샷은 그대로 남는다).
+MAX_IGNORED_FILES = 10000
+MAX_IGNORED_BYTES = 100 * 1024 * 1024
+
 GIT_WIPE_RE = re.compile(r"""\bgit\b[^\n]*?\b(?:
       reset\b[^\n]*?--hard
     | (?:checkout|switch)\b[^\n]*?(?:--force\b|\s-[a-zA-Z]*f\b)
@@ -143,6 +153,7 @@ LEADING_CD_RE = re.compile(r"^\s*cd\s+(?!.*[$`])['\"]?([^\s'\";&|]+)")
 PUSH_RE = re.compile(r"\bgit\b(?:\s+-\S+|\s+--\S+=\S+)*\s+push\b([^\n;&|]*)")
 PUSH_VALUE_OPTS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
 PUSH_BROAD_FLAGS = {"--all", "--mirror"}
+PUSH_DELETE_FLAGS = {"--delete", "-d"}
 
 
 def log(entry):
@@ -233,18 +244,45 @@ def _prune(repo):
             _git(["update-ref", "-d", ref], repo)
 
 
+def _ignored_volume(repo):
+    """무시된 파일까지 담을 때의 규모. 반환: (감당 가능한가, 파일 수, 바이트)."""
+    out = _git(["ls-files", "-o", "-z"], repo).stdout
+    names = [n for n in out.split("\0") if n]
+    if len(names) > MAX_IGNORED_FILES:
+        return False, len(names), None
+    total = 0
+    for n in names:
+        try:
+            total += os.path.getsize(os.path.join(repo, n))
+        except OSError:
+            pass
+        if total > MAX_IGNORED_BYTES:
+            return False, len(names), total
+    return True, len(names), total
+
+
 def git_snapshot(command, cwd):
     """되돌릴 대상을 refs/claude-backups/ 에 고정한다. 반환: 사람에게 보여줄 문구 목록."""
     if not GIT_WIPE_RE.search(command):
         return []
 
-    include_ignored = bool(CLEAN_IGNORED_RE.search(command))
+    wants_ignored = bool(CLEAN_IGNORED_RE.search(command))
     notes = []
     for d in _target_dirs(command, cwd):
         r = _git(["rev-parse", "--show-toplevel"], d)
         if r.returncode != 0:
             continue
         repo = r.stdout.strip()
+
+        include_ignored = wants_ignored
+        if include_ignored:
+            ok, count, size = _ignored_volume(repo)
+            if not ok:
+                include_ignored = False
+                notes.append(
+                    "%s 의 .gitignore 대상이 %d개%s라 스냅샷에서 제외했습니다 — 담으면 훅이 "
+                    "수십 초에서 수 분을 잡아먹습니다. 추적/미추적 파일은 그대로 백업했습니다."
+                    % (repo, count, ("" if size is None else " %.0fMB" % (size / 1024 / 1024))))
 
         fd, idx = tempfile.mkstemp(prefix="claude-backup-idx-")
         os.close(fd)
@@ -328,6 +366,16 @@ def push_ask_reason(command, cwd):
         if a.startswith("-"):
             continue
         positionals.append(a)
+
+    # 원격 브랜치 삭제는 로컬 백업이 닿지 않는다 — 어느 브랜치든 확인한다.
+    # `git push --delete origin x` 와 빈 src refspec `git push origin :x` 두 형태가 있다.
+    deleting = [a for a in args if a in PUSH_DELETE_FLAGS]
+    empty_src = [a for a in positionals[1:] if a.startswith(":") and len(a) > 1]
+    if deleting or empty_src:
+        names = [a.lstrip(":") for a in empty_src] or positionals[1:]
+        return ("원격 브랜치(%s)를 삭제하려고 합니다. 원격 히스토리는 로컬 백업으로 되돌릴 수 "
+                "없습니다. 계속할까요?" % ", ".join(names) if names else
+                "원격 브랜치를 삭제하려고 합니다. 계속할까요?")
 
     refspecs = positionals[1:]              # 첫 위치 인자는 원격 이름
     if not refspecs:

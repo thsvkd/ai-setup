@@ -4,7 +4,7 @@ Claude Code를 **더 안전하게** 쓰기 위한 사용자 레벨(user-level) �
 위험한 명령을 자동으로 막거나 휴지통 이동으로 치환하는 **가드 훅**, 합리적인 **권한(permissions)**,
 프로젝트용 **AGENTS.md**, 그리고 OS·터미널·에이전트마다 제각각인 **줄바꿈 키**를 Windows / macOS / Linux에 한 번에 설치한다.
 
-- 🛡️ **가드 훅** — 삭제를 휴지통으로 돌리는 셰임을 `PATH`/모듈로 끼워 넣고(명령 문자열은 건드리지 않는다), `git reset --hard`·`clean` 등 미커밋 변경을 날리는 명령 앞에 `refs/claude-backups/`로 스냅샷을 뜬다. 차단은 되돌릴 수단이 없는 둘뿐 — 루트/홈 전체 삭제와 디스크 파괴. 원격 기본 브랜치 push 와 시크릿 파일 접근만 확인을 요청한다
+- 🛡️ **가드 훅** — 삭제를 휴지통으로 돌리는 셰임을 `PATH`/모듈로 끼워 넣고(명령 문자열은 건드리지 않는다), `git reset --hard`·`clean` 등 미커밋 변경을 날리는 명령 앞에 `refs/claude-backups/`로 스냅샷을 뜬다. 차단은 되돌릴 수단이 없는 둘뿐 — 루트/홈 전체 삭제와 디스크 파괴. 확인을 요청하는 것도 로컬 백업이 닿지 않는 원격 히스토리(기본·보호 브랜치 push, 원격 브랜치 삭제)뿐이다
 - 🧩 **외과적 병합** — 권한/훅을 추가하고 `model`·`effortLevel`·`language`는 **없을 때만** 채운다. 사용자가 이미 고른 값과 그 외 키(env, statusLine 등)는 100% 보존
 - ⏎ **줄바꿈 키 통일** — Claude Code / Codex / Grok CLI에서 Shift+Enter(또는 Ctrl+Enter)로 줄을 넣고, Enter는 그대로 전송. VS Code·Cursor 통합 터미널, tmux, Windows Terminal, 에이전트 키맵까지 한 번에 맞춘다
 - 🔁 **멱등성 · dry-run** — 몇 번을 실행해도 안전하고, `--dry-run`으로 실제 적용 전에 바뀔 내용을 미리 확인
@@ -107,7 +107,6 @@ bash scripts/setup.sh --dry-run   # 또는 .\scripts\setup.ps1 -DryRun
 | 위치                                | 내용                                                                                 |
 | ----------------------------------- | ------------------------------------------------------------------------------------ |
 | `~/.claude/hooks/danger_guard.py`  | 위험 명령 가드 (Bash·PowerShell 툴)                                                  |
-| `~/.claude/hooks/secrets_guard.py` | 시크릿 파일 접근 가드 (Read·Write·Edit)                                              |
 | `~/.claude/hooks/send_to_trash.py` | (Windows) 휴지통 이동 헬퍼                                                           |
 | `~/.claude/hooks/shims/rm`         | 삭제를 휴지통으로 돌리는 `rm` 셰임 (Bash·Git Bash)                                   |
 | `~/.claude/hooks/shims/RmShim.psm1`| 같은 역할의 `Remove-Item` 프록시 (PowerShell, Windows 설치본만)                       |
@@ -256,7 +255,7 @@ Claude Code 의 체크포인팅(`/rewind`)은 [공식 문서상](https://code.cl
 | ~~`rebase`, `branch -D`, `commit --amend`, `filter-branch`, `gc --prune`, `tag -d`~~ | **제외** — reflog·`ORIG_HEAD` 가 이미 되돌려 준다 |
 | ~~`stash drop`/`clear`~~ | **제외** — gc 유예기간 안에서 `git fsck --unreachable` 로 살릴 수 있다 |
 
-- `clean -x`/`-X` 는 `.gitignore` 대상(`.env`, 로컬 설정)까지 지우므로 이 경우에만 `git add -Af` 로 무시된 파일까지 담는다.
+- `clean -x`/`-X` 는 `.gitignore` 대상(`.env`, 로컬 설정)까지 지우므로 이 경우에만 `git add -Af` 로 무시된 파일까지 담는다. 단 **10,000개 또는 100MB 를 넘으면 무시된 파일은 포기**하고 추적/미추적만 담는다 — 실측(라즈베리파이 5)에서 한 저장소의 `.gitignore` 대상이 52,722개 1,244MB 였고, 이 기기의 해싱 처리량(100MB/2,000파일당 4.4초)으로는 훅이 1~2분을 잡아먹고 SD 카드에 1.2GB 를 쓴다. 규모 측정 자체는 169ms 로 싸다.
 - 워킹트리가 `HEAD` 와 같거나 직전 스냅샷과 트리가 같으면 ref 를 만들지 않는다. `refs/claude-backups/` 는 14일이 지나면 정리된다.
 - `cd <경로> && git reset --hard` 는 그 경로에서 백업한다. `cd "$VAR"` 처럼 대상을 특정할 수 없으면 엉뚱한 저장소를 백업하느니 아무것도 하지 않는다.
 - `git worktree remove <경로>` 의 대상은 cwd 가 아니라 인자다 — 사라질 워크트리 쪽에서 스냅샷을 뜬다.
@@ -274,13 +273,14 @@ Claude Code 의 체크포인팅(`/rewind`)은 [공식 문서상](https://code.cl
 | `Remove-Item`/`del`/`rd` + 드라이브 루트(`C:\`)·`$env:USERPROFILE`·`$HOME` | ⛔ **차단** |
 | `mkfs*`/`newfs_*`/`fdisk`/`gdisk`/`sgdisk`/`parted`/`wipefs`, `dd of=/dev/*`, `diskutil erase*`, `/dev/sd*` 리다이렉트 | ⛔ **차단** |
 | `format <드라이브>:`, `diskpart`, `Clear-Disk`/`Initialize-Disk`/`Remove-Partition`/`Clear-Volume` | ⛔ **차단** |
-| **원격의 기본 브랜치**로 `git push` (`git symbolic-ref refs/remotes/origin/HEAD` 로 판정, 없으면 `main`/`master`), `--all`/`--mirror` | ❓ **확인** — 원격 히스토리는 로컬 백업이 닿지 않는다 |
+| **원격의 기본·보호 브랜치**로 `git push` (`git symbolic-ref refs/remotes/origin/HEAD` 로 판정, 없으면 `main`/`master`), `--all`/`--mirror` | ❓ **확인** — 원격 히스토리는 로컬 백업이 닿지 않는다 |
+| 원격 브랜치 **삭제** (`--delete`/`-d`, `origin :branch`) | ❓ **확인** — 브랜치 이름과 무관하게 |
 | 곁다리 브랜치 push (force 포함) | ✅ 통과 |
 | 그 외 전부 | ✅ 통과 (판단 안 함) |
 
 차단 규칙은 **명령 자리**에서 시작할 때만 잡는다. `grep -rn "rm -rf /" docs/` 처럼 위험한 문자열을 데이터로 다루는 명령은 막지 않는다 — 종전 오탐이 대부분 이 부류였다.
 
-**종전에 있었으나 실측 근거로 제거한 것**: 포크밤 패턴, `curl … | bash` 패턴, `find`/`xargs` 대량 삭제 확인, 체이닝 삭제 확인, 글로브 미일치 차단, `.`/`..` 차단, 대상 100개 초과 확인, `chmod 777` 확인, `shred` 확인, `shutdown`/`reboot` 확인, 훅 내부 오류 확인.
+**종전에 있었으나 실측 근거로 제거한 것**: 포크밤 패턴, `curl … | bash` 패턴, `find`/`xargs` 대량 삭제 확인, 체이닝 삭제 확인, 글로브 미일치 차단, `.`/`..` 차단, 대상 100개 초과 확인, `chmod 777` 확인, `shred` 확인, `shutdown`/`reboot` 확인, 훅 내부 오류 확인, 그리고 시크릿 파일 접근 확인(`secrets_guard`) — 파괴가 아니라 유출 위험이고, 그쪽은 auto mode 분류기가 맡는다. 기존 설치본에 남아 있으면 설치 중에 훅 파일과 `settings.json` 등록을 함께 걷어낸다.
 
 **이 목록은 완전하지 않고, 완전할 수도 없다.** 셸은 임의의 프로그램을 실행할 수 있어서 `python3 -c "shutil.rmtree('.')"` 같은 경로를 명령 문자열만 보고 판정하는 건 불가능하다. 그래서 이 훅은 차단을 목표로 하지 않는다 — 되돌릴 수 있게 만드는 것이 목표다. 배경은 [docs/2026-07-31-delete-guard-architecture.md](docs/2026-07-31-delete-guard-architecture.md) 참고.
 
@@ -291,20 +291,6 @@ Claude Code에서 `permissions`의 `deny`/`ask` 규칙은 PreToolUse 훅의 `all
 **업그레이드 시 자동 마이그레이션**: 예전 버전은 `Bash(git push *)`·`Bash(git reset --hard *)`(및 PowerShell 짝)을 `deny`로 배포했다. 병합 엔진은 원래 '추가만' 하므로 그 규칙들이 기존 설치본에 그대로 남고, deny가 훅보다 우선하니 **새로 설치한 사람에게는 동작하고 업그레이드한 사람에게는 조용히 죽는** 상태가 된다. 그래서 설치 중에 *우리가 배포했던 문자열과 정확히 일치하는* 그 규칙들만 제거하고, 무엇을 지웠는지 설치 리포트에 출력한다. 문자열이 조금이라도 다른(=사용자가 직접 넣은) 규칙은 건드리지 않으며, 제거 사실은 매니페스트에 기록돼 `--uninstall` 시 원래대로 복원된다.
 
 그 대가로 훅이 유일한 방어선이 되지만, **훅이 죽어도 잃는 것은 복구 수단이지 실행 권한이 아니다.** 훅이 예외로 죽으면 Claude Code는 판정 없이 명령을 실행한다(fail-open). 종전에는 이때 확인으로 승격했지만 실측상 그 확인은 전부 마찰이기만 했으므로, 이제 내부 오류는 `guard.log`에 `guard-error`로 남기고 조용히 통과시킨다. 설치 후 셀프테스트가 통과했는지 확인하는 것이 그만큼 더 중요하다.
-
-### secrets_guard — 시크릿 파일
-
-`.env`, `id_rsa`/`id_dsa`/`id_ecdsa`/`id_ed25519`, `*.pem`/`*.pfx`/`*.p12`/`*.p8`/`*.ppk`/`*.jks`/`*.keystore`,
-`credentials.json`, `secrets.y(a)ml`, `.npmrc`/`.pypirc`/`.netrc`/`.git-credentials`, `~/.aws/credentials` 를
-**Read / Write / Edit / MultiEdit**로 접근하면 ❓ 확인을 요청한다 (완전 차단이 아닌 확인 게이트).
-
-판정 기준은 "**이 이름이면 내용이 시크릿일 수밖에 없는가**"다. 이름만으로 알 수 없는 패턴은 오탐이 실탐보다 훨씬 많아 게이트 자체를 무의미하게 만든다. 그래서 예전에 있던 `*_secret*` 과 `*.key` 는 제거했다 — 워크스페이스 전수 검사에서 이 두 패턴의 히트가 전부 라이브러리·테스트 소스코드(`crypto_secretbox.py`, `nested_secrets.py`, `test_secrets_guard.py` 등)였다. 시크릿이 커밋·PR·외부 전송으로 **새는** 방향은 auto mode 분류기가 별도로 막으므로, 이 훅은 이름만으로 확실한 파일에만 집중한다.
-
-단, `.env.example`/`.env.sample`/`.env.template`/`.env.dist` 처럼 자리표시자(placeholder)만 담고 커밋을 전제로 하는
-**예시/템플릿 파일은 시크릿이 아니므로 확인 없이 통과**시킨다 (`.env.local.example` 같은 변형도 마지막 확장자로 판정). 실제
-시크릿을 담는 `.env`/`.env.local`/`.env.production` 은 그대로 확인 게이트가 걸린다.
-
----
 
 ## 보안 고려사항
 
@@ -337,7 +323,6 @@ res/
     danger_guard.py         # 위험 명령 가드 (Bash + PowerShell, 전 플랫폼 공용)
     shims/rm                # 삭제 → 휴지통 (POSIX 셸·Git Bash)
     shims/RmShim.psm1       # 삭제 → 휴지통 (PowerShell)
-    secrets_guard.py        # 공용
     send_to_trash.py        # Windows 휴지통 헬퍼
     merge_and_diff.py       # 자리표시자 치환 + 외과적 병합 엔진
 scripts/

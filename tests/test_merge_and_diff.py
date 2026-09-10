@@ -10,7 +10,7 @@ FRAGMENT = ROOT / "res" / "settings.json"
 
 
 def run_merge(target: Path, dry="0", py="python3", hooks_dir="/home/u/.claude/hooks",
-              manifest_path=None, hook_files="danger_guard.py,secrets_guard.py"):
+              manifest_path=None, hook_files="danger_guard.py,shims/rm"):
     args = [sys.executable, "-X", "utf8", str(MERGE), str(FRAGMENT), str(target), dry, py, hooks_dir]
     if manifest_path is not None:
         args += [str(manifest_path), hook_files]
@@ -51,7 +51,6 @@ def test_placeholders_substituted(tmp_path):
     _, result = run_merge(tmp_path / "settings.json")
     cmds = hook_commands(result)
     assert any("danger_guard.py" in c for c in cmds)
-    assert any("secrets_guard.py" in c for c in cmds)
     for c in cmds:
         assert "{{PY}}" not in c and "{{HOOKS_DIR}}" not in c
         assert "/home/u/.claude/hooks/" in c
@@ -100,9 +99,9 @@ def test_no_duplicate_hooks_on_rerun(tmp_path):
     run_merge(target)
     _, result = run_merge(target)
     matchers = [h["matcher"] for h in result["hooks"]["PreToolUse"]]
-    # 세 번 실행해도 각 훅은 한 번씩만 등록되어야 한다.
+    # 세 번 실행해도 훅은 한 번씩만 등록되어야 한다.
     assert matchers.count("Bash|PowerShell") == 1
-    assert matchers.count("Read|Write|Edit|MultiEdit") == 1
+    assert matchers == ["Bash|PowerShell"]
 
 
 def test_backup_created_on_change(tmp_path):
@@ -223,9 +222,9 @@ def test_uninstall_dry_run_does_not_write(tmp_path):
 def test_install_writes_manifest_receipt(tmp_path):
     target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
     target.write_text(json.dumps({"permissions": {"defaultMode": "default"}}), encoding="utf-8")
-    run_merge(target, manifest_path=manifest, hook_files="danger_guard.py,secrets_guard.py")
+    run_merge(target, manifest_path=manifest, hook_files="danger_guard.py,shims/rm")
     m = json.loads(manifest.read_text(encoding="utf-8"))
-    assert m["hook_files"] == ["danger_guard.py", "secrets_guard.py"]
+    assert m["hook_files"] == ["danger_guard.py", "shims/rm"]
     assert "Bash" in m["added_allow"]
     assert m["default_mode_before"] == "default"
     assert m["default_mode_after"] == "auto"
@@ -556,3 +555,26 @@ def test_dry_run_reports_legacy_removal_without_writing(tmp_path):
     assert proc.returncode == 0
     assert "구버전 규칙" in proc.stdout, proc.stdout
     assert target.read_text(encoding="utf-8") == original, "dry-run 은 파일을 바꾸면 안 된다"
+
+
+def test_retired_hook_registration_is_pruned(tmp_path):
+    """우리가 배포했다가 그만둔 훅은 설치 중에 등록을 걷어낸다.
+
+    그러지 않으면 새로 설치한 사람에게는 없고 업그레이드한 사람에게만 남는 유령 훅이 된다.
+    """
+    target = tmp_path / "settings.json"
+    target.write_text(json.dumps({
+        "hooks": {"PreToolUse": [
+            {"matcher": "Read|Write|Edit|MultiEdit",
+             "hooks": [{"type": "command", "command": "python -X utf8 \"/h/secrets_guard.py\""}]},
+            {"matcher": "Notification",
+             "hooks": [{"type": "command", "command": "python /h/mine.py"}]},
+        ]}
+    }), encoding="utf-8")
+
+    _, result = run_merge(target)
+    cmds = hook_commands(result)
+    assert not any("secrets_guard.py" in c for c in cmds)
+    # 사용자가 직접 넣은 훅은 그대로 둔다.
+    assert any("mine.py" in c for c in cmds)
+    assert any("danger_guard.py" in c for c in cmds)

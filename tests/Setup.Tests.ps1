@@ -156,15 +156,17 @@ Describe "실제 설치 경로 (S2)" {
         Remove-Item -Recurse -Force $script:sandbox -ErrorAction SilentlyContinue
     }
 
-    It "-Hooks 실제 설치가 훅 파일 3개와 settings.json 을 만든다" {
+    It "-Hooks 실제 설치가 훅 파일과 셰임, settings.json 을 만든다" {
         $r = Invoke-Script $script:Setup @("-Hooks")
         $r.ExitCode | Should -Be 0
         $hooksDir = Join-Path $env:USERPROFILE ".claude\hooks"
         Test-Path (Join-Path $hooksDir "danger_guard.py") | Should -Be $true
-        Test-Path (Join-Path $hooksDir "secrets_guard.py") | Should -Be $true
         Test-Path (Join-Path $hooksDir "send_to_trash.py") | Should -Be $true
+        Test-Path (Join-Path $hooksDir "shims/rm") | Should -Be $true
+        Test-Path (Join-Path $hooksDir "shims/RmShim.psm1") | Should -Be $true
+        Test-Path (Join-Path $hooksDir "secrets_guard.py") | Should -Be $false
         $settings = Get-Content (Join-Path $env:USERPROFILE ".claude\settings.json") -Raw | ConvertFrom-Json
-        $settings.hooks.PreToolUse.Count | Should -Be 2
+        $settings.hooks.PreToolUse.Count | Should -Be 1
     }
 
     It "멱등 재실행 후에도 중복 없이 영수증(added_allow)이 보존된다" {
@@ -172,7 +174,7 @@ Describe "실제 설치 경로 (S2)" {
         $r2 = Invoke-Script $script:Setup @("-Hooks")
         $r2.ExitCode | Should -Be 0
         $settings = Get-Content (Join-Path $env:USERPROFILE ".claude\settings.json") -Raw | ConvertFrom-Json
-        $settings.hooks.PreToolUse.Count | Should -Be 2
+        $settings.hooks.PreToolUse.Count | Should -Be 1
         $manifest = Get-Content (Join-Path $env:USERPROFILE ".claude\.claude-code-setup.json") -Raw | ConvertFrom-Json
         $manifest.added_allow.Count | Should -BeGreaterThan 0
         $manifest.default_mode_changed | Should -Be $true

@@ -125,9 +125,6 @@ BOM = "\ufeff"
     ("danger_guard.py",
      {"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}},
      "deny"),
-    ("secrets_guard.py",
-     {"tool_name": "Read", "tool_input": {"file_path": "/proj/.env"}},
-     "ask"),
 ])
 def test_hooks_tolerate_leading_bom(hook, event, expected):
     proc = subprocess.run(

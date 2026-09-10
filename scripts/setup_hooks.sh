@@ -164,16 +164,20 @@ echo "[2/4] PreToolUse Hook 설치 $( [[ "$DRY_RUN" -eq 1 ]] && echo '(임시 �
 
 install_hook_files "$HOOKS_DIR" \
     "$RES_DIR/hooks/danger_guard.py:danger_guard.py" \
-    "$RES_DIR/hooks/secrets_guard.py:secrets_guard.py" \
     "$RES_DIR/hooks/shims/rm:shims/rm" > /dev/null
-echo "  ✅ Hook 파일 준비 완료: danger_guard.py, secrets_guard.py, shims/rm"
+# 구버전이 심어둔 훅 파일을 걷어낸다. settings.json 쪽 등록 해제는 merge 가 한다.
+if [[ "$DRY_RUN" -eq 0 && -f "$HOOKS_DIR/secrets_guard.py" ]]; then
+    rm -f "$HOOKS_DIR/secrets_guard.py"
+    echo "  🗑️  구버전 훅 제거: secrets_guard.py (더 이상 배포하지 않습니다)"
+fi
+echo "  ✅ Hook 파일 준비 완료: danger_guard.py, shims/rm"
 
 # --- 4. settings.json 병합 계획 수립 및 실행 ---
 echo ""
 echo "[3/4] settings.json 병합 계획 수립 및 실행..."
 
 MANIFEST_PATH="$WORK_HOME/.claude/$MANIFEST_NAME"
-if ! invoke_settings_merge "$PY" "$RES_DIR/hooks/merge_and_diff.py" "$RES_DIR/settings.json" "$SETTINGS_PATH" "$DRY_RUN" "$PY" "$REAL_HOOKS_DIR" "$MANIFEST_PATH" "danger_guard.py,secrets_guard.py,shims/rm" "$DEFAULT_MODE"; then
+if ! invoke_settings_merge "$PY" "$RES_DIR/hooks/merge_and_diff.py" "$RES_DIR/settings.json" "$SETTINGS_PATH" "$DRY_RUN" "$PY" "$REAL_HOOKS_DIR" "$MANIFEST_PATH" "danger_guard.py,shims/rm" "$DEFAULT_MODE"; then
     echo "  ❌ 병합 검증 실패 — 예상치 못한 최상위 키 변경이 감지되었습니다. 수동 확인이 필요합니다." >&2
     exit 1
 fi
@@ -199,5 +203,5 @@ if [[ "$HAS_TRASH" -eq 0 ]]; then
     DEP_WARNING="휴지통 도구(trash-put / macOS trash)가 없어, rm 은 경고만 남기고 실제로 삭제됩니다 (복구 불가)."
 fi
 print_setup_report "$DRY_RUN" "$REAL_SETTINGS_PATH" "$REAL_HOOKS_DIR/guard.log" "$DEP_WARNING" "$DEFAULT_MODE" \
-    "$REAL_HOOKS_DIR/danger_guard.py" "$REAL_HOOKS_DIR/secrets_guard.py" "$REAL_HOOKS_DIR/shims/rm"
+    "$REAL_HOOKS_DIR/danger_guard.py" "$REAL_HOOKS_DIR/shims/rm"
 # 설치 영수증(매니페스트)은 위 invoke_settings_merge 안에서 merge 가 기록한다.
