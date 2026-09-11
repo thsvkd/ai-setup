@@ -157,8 +157,9 @@ else
         # Invoke-Pester 는 테스트가 실패해도 종료 코드 0 을 낸다 (Pester 5 는 -EnableExit 도 없다).
         # 그대로 두면 아래 판정이 실패를 통과로 기록해, 깨진 Pester 테스트가 영영 드러나지 않는다.
         # -PassThru 로 결과 객체를 받아 실패 개수를 직접 종료 코드로 만든다.
-        "$PWSH" -NoProfile -Command "\$r = Invoke-Pester '$REPO_ROOT/tests/Setup.Tests.ps1' -Output Detailed -PassThru; exit \$r.FailedCount"
-        if [[ $? -eq 0 ]]; then record "Pester (Setup.Tests.ps1)" "pass" ""; else record "Pester (Setup.Tests.ps1)" "fail" ""; fi
+        # tests/*.Tests.ps1 을 전부 돌린다. 파일을 하나씩 적으면 새 스위트가 조용히 빠진다.
+        "$PWSH" -NoProfile -Command "\$r = Invoke-Pester '$REPO_ROOT/tests' -Output Detailed -PassThru; exit \$r.FailedCount"
+        if [[ $? -eq 0 ]]; then record "Pester (tests/*.Tests.ps1)" "pass" ""; else record "Pester (tests/*.Tests.ps1)" "fail" ""; fi
     fi
 fi
 

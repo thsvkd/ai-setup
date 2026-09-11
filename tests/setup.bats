@@ -63,7 +63,9 @@ teardown() {
     run bash "$REPO_ROOT/scripts/setup.sh" --hooks
     [ "$status" -eq 0 ]
     [ -f "$HOME/.claude/hooks/danger_guard.py" ]
-    [ -f "$HOME/.claude/hooks/secrets_guard.py" ]
+    [ -f "$HOME/.claude/hooks/shims/rm" ]
+    [ -x "$HOME/.claude/hooks/shims/rm" ]
+    [ ! -f "$HOME/.claude/hooks/secrets_guard.py" ]
     [ -f "$HOME/.claude/settings.json" ]
 }
 

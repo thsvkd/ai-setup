@@ -45,7 +45,9 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $ResDir = Join-Path $RepoRoot "res"
 . (Join-Path $PSScriptRoot "lib\SetupCommon.ps1")
 
-$RealUserHome = $env:USERPROFILE
+# $env:USERPROFILE 는 Windows 에만 있다. POSIX 의 pwsh 에서 null 이 되면 아래 Join-Path 가
+# 통째로 깨져 스크립트가 시작도 못 한다 — setup_keybinds.ps1 과 같은 폴백을 쓴다.
+$RealUserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
 $RealClaudeDir = Join-Path $RealUserHome ".claude"
 $RealHooksDir = Join-Path $RealClaudeDir "hooks"
 $RealSettingsPath = Join-Path $RealClaudeDir "settings.json"
@@ -107,7 +109,7 @@ if ($hasSend2Trash) {
         $hasSend2Trash = $true
     } else {
         Write-Host "  ⚠️ send2trash 설치 실패 — 수동 설치 필요: $pyInvoke -m pip install send2trash" -ForegroundColor Red
-        Write-Host "     (설치 전까지 rm/del 은 휴지통으로 치환되지 못하고 안전을 위해 '차단'됩니다 — fail closed)" -ForegroundColor Yellow
+        Write-Host "     (설치 전까지 Git Bash 의 rm 은 경고만 남기고 '실제로' 삭제됩니다 — 되돌릴 수 없습니다)" -ForegroundColor Yellow
         $hasSend2Trash = $false
     }
 }
@@ -119,11 +121,18 @@ if ($DryRun) { $hookMsg += " (임시 사본에만 — 실제 위치엔 안 씀)"
 Write-Host "$hookMsg..." -ForegroundColor Yellow
 
 Install-HookFiles -HooksDir $hooksDir -Files @(
-    @{ Source = (Join-Path $ResDir "hooks\danger_guard.windows.py"); DestName = "danger_guard.py" },
-    @{ Source = (Join-Path $ResDir "hooks\secrets_guard.py");        DestName = "secrets_guard.py" },
-    @{ Source = (Join-Path $ResDir "hooks\send_to_trash.py");        DestName = "send_to_trash.py" }
+    @{ Source = (Join-Path $ResDir "hooks/danger_guard.py");   DestName = "danger_guard.py" },
+    @{ Source = (Join-Path $ResDir "hooks/send_to_trash.py");  DestName = "send_to_trash.py" },
+    @{ Source = (Join-Path $ResDir "hooks/shims/rm");          DestName = "shims/rm" },
+    @{ Source = (Join-Path $ResDir "hooks/shims/RmShim.psm1"); DestName = "shims/RmShim.psm1" }
 ) | Out-Null
-Write-Host "  ✅ Hook 파일 준비 완료: danger_guard.py, secrets_guard.py, send_to_trash.py" -ForegroundColor Green
+# 구버전이 심어둔 훅 파일을 걷어낸다. settings.json 쪽 등록 해제는 merge 가 한다.
+$retired = Join-Path $hooksDir "secrets_guard.py"
+if (-not $DryRun -and (Test-Path $retired)) {
+    Microsoft.PowerShell.Management\Remove-Item -Force $retired
+    Write-Host "  🗑️  구버전 훅 제거: secrets_guard.py (더 이상 배포하지 않습니다)" -ForegroundColor DarkGray
+}
+Write-Host "  ✅ Hook 파일 준비 완료: danger_guard.py, send_to_trash.py, shims/rm, shims/RmShim.psm1" -ForegroundColor Green
 
 # --- 4. settings.json 병합 계획 수립 및 실행 ---
 Write-Host ""
@@ -138,7 +147,7 @@ $mergeExit = Invoke-SettingsMerge `
     -MergeScriptPath (Join-Path $ResDir "hooks\merge_and_diff.py") `
     -PyExe $py.Exe -PyArgs $py.Args `
     -ManifestPath (Join-Path $WorkHome ".claude\$MANIFEST_NAME") `
-    -HookFilesCsv "danger_guard.py,secrets_guard.py,send_to_trash.py" `
+    -HookFilesCsv "danger_guard.py,send_to_trash.py,shims/rm,shims/RmShim.psm1" `
     -DefaultMode $DefaultMode
 if ($mergeExit -ne 0) {
     throw "병합 검증 실패 — 예상치 못한 최상위 키 변경이 감지되었습니다. 수동 확인이 필요합니다."
@@ -148,15 +157,16 @@ if ($mergeExit -ne 0) {
 Write-Host ""
 Write-Host "[4/4] 셀프테스트 실행..." -ForegroundColor Yellow
 
+# git 관련 판정(스냅샷 백업, 기본 브랜치 push 확인)은 여기서 돌리지 않는다. 둘 다 cwd 가
+# git 저장소인지에 따라 결과가 달라지는데, 설치는 저장소 밖에서도 실행된다. 스냅샷은 cwd
+# 저장소에 실제로 백업 ref 를 만들어 dry-run 도 깨뜨린다. 두 경로 모두
+# tests/test_git_snapshot.py 가 임시 저장소를 만들어 검증한다.
 $selfTestFailures = Invoke-HookSelfTest -HookPath (Join-Path $hooksDir "danger_guard.py") -PyExe $py.Exe -PyArgs $py.Args -Cases @(
-    @{ Label = "rm -rf temp/  → 휴지통 치환 기대"; Json = '{"tool_name":"Bash","tool_input":{"command":"rm -rf temp/"}}' },
-    @{ Label = "git push --force origin main → ask 기대 (보호 브랜치)"; Json = '{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}' },
-    @{ Label = "PowerShell + git push origin feature/x → 통과 기대 (곁다리 브랜치)"; Json = '{"tool_name":"PowerShell","tool_input":{"command":"git push origin feature/x"}}' },
-    @{ Label = "git reset --hard (Bash 툴) → allow+bash 백업 스니펫 기대"; Json = '{"tool_name":"Bash","tool_input":{"command":"git reset --hard HEAD"}}' },
-    # PowerShell 툴로도 반드시 한 번 돌린다. 위 Bash 케이스는 bash 문법 스니펫을 내므로,
-    # 이게 없으면 Windows 설치본에서 PowerShell 방언 백업 스니펫($LASTEXITCODE 가드 포함)이
-    # 한 번도 생성되지 않은 채로 통과한다 — 정작 이 머신에서 실제로 쓰일 경로가 미검증으로 남는다.
-    @{ Label = "PowerShell + git reset --hard → allow+PS 백업 스니펫 기대"; Json = '{"tool_name":"PowerShell","tool_input":{"command":"git reset --hard HEAD"}}' },
+    @{ Label = "rm -rf temp/ → 셰임 PATH 선행 기대"; Json = '{"tool_name":"Bash","tool_input":{"command":"rm -rf temp/"}}' },
+    # PowerShell 툴로도 반드시 한 번 돌린다. Bash 케이스는 PATH 선행 줄을 내므로, 이게 없으면
+    # Windows 설치본에서 실제로 쓰일 Import-Module 선행 줄이 한 번도 생성되지 않은 채 통과한다.
+    @{ Label = "PowerShell + Remove-Item → RmShim Import 선행 기대"; Json = '{"tool_name":"PowerShell","tool_input":{"command":"Remove-Item -Recurse -Force .\\build"}}' },
+    @{ Label = "rm -rf ~ → deny 기대 (홈 디렉터리 전체)"; Json = '{"tool_name":"Bash","tool_input":{"command":"rm -rf ~"}}' },
     @{ Label = "Remove-Item -Recurse -Force C:\ → deny 기대"; Json = '{"tool_name":"PowerShell","tool_input":{"command":"Remove-Item -Recurse -Force C:\\"}}' },
     @{ Label = "ls -la → 통과(무판단) 기대";          Json = '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' }
 )
@@ -170,12 +180,13 @@ if ($selfTestFailures -gt 0) {
 # --- 6. 리포트 ---
 $depWarning = $null
 if (-not $hasSend2Trash) {
-    $depWarning = "send2trash 가 설치되지 않아, 설치 전까지 rm/del 계열 명령은 '차단'됩니다 (안전을 위한 기본값)."
+    $depWarning = "send2trash 가 설치되지 않아, Git Bash 의 rm 은 경고만 남기고 실제로 삭제됩니다 (복구 불가)."
 }
 Write-SetupReport -DryRun:$DryRun -InstalledFiles @(
     (Join-Path $RealHooksDir "danger_guard.py"),
-    (Join-Path $RealHooksDir "secrets_guard.py"),
-    (Join-Path $RealHooksDir "send_to_trash.py")
+    (Join-Path $RealHooksDir "send_to_trash.py"),
+    (Join-Path $RealHooksDir "shims/rm"),
+    (Join-Path $RealHooksDir "shims/RmShim.psm1")
 ) -SettingsPath $RealSettingsPath -GuardLogPath (Join-Path $RealHooksDir "guard.log") -DependencyWarning $depWarning -DefaultMode $DefaultMode
 # 설치 영수증(매니페스트)은 위 Invoke-SettingsMerge 안에서 merge 가 기록한다.
 

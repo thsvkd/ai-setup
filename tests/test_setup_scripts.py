@@ -83,7 +83,7 @@ def test_setup_hooks_installs_for_real(sandbox_home, stub_bin):
     assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     hooks = sandbox_home / ".claude" / "hooks"
     assert (hooks / "danger_guard.py").exists()
-    assert (hooks / "secrets_guard.py").exists()
+    assert (hooks / "shims" / "rm").exists()
     assert settings(sandbox_home)["hooks"]["PreToolUse"]
 
 

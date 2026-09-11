@@ -36,7 +36,7 @@ BeforeAll {
 
 Describe "setup.ps1 dispatcher" {
     BeforeEach {
-        $script:sandbox = Join-Path $env:TEMP ("cc-pester-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        $script:sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $script:sandbox | Out-Null
         $script:oldUP = $env:USERPROFILE
         $env:USERPROFILE = $script:sandbox     # 자식 pwsh 가 상속 → 실제 프로필 격리
@@ -123,7 +123,7 @@ Describe "install.ps1 bootstrap" {
 # macOS 의 치명적 버그(패턴 A)가 정확히 이 빈칸에 숨어 있었던 전례가 있어 추가한다.
 Describe "실제 설치 경로 (S2)" {
     BeforeEach {
-        $script:sandbox = Join-Path $env:TEMP ("cc-pester-real-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        $script:sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-real-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $script:sandbox | Out-Null
         $script:oldUP = $env:USERPROFILE
         $script:oldHome = $env:HOME
@@ -156,15 +156,17 @@ Describe "실제 설치 경로 (S2)" {
         Remove-Item -Recurse -Force $script:sandbox -ErrorAction SilentlyContinue
     }
 
-    It "-Hooks 실제 설치가 훅 파일 3개와 settings.json 을 만든다" {
+    It "-Hooks 실제 설치가 훅 파일과 셰임, settings.json 을 만든다" {
         $r = Invoke-Script $script:Setup @("-Hooks")
         $r.ExitCode | Should -Be 0
         $hooksDir = Join-Path $env:USERPROFILE ".claude\hooks"
         Test-Path (Join-Path $hooksDir "danger_guard.py") | Should -Be $true
-        Test-Path (Join-Path $hooksDir "secrets_guard.py") | Should -Be $true
         Test-Path (Join-Path $hooksDir "send_to_trash.py") | Should -Be $true
+        Test-Path (Join-Path $hooksDir "shims/rm") | Should -Be $true
+        Test-Path (Join-Path $hooksDir "shims/RmShim.psm1") | Should -Be $true
+        Test-Path (Join-Path $hooksDir "secrets_guard.py") | Should -Be $false
         $settings = Get-Content (Join-Path $env:USERPROFILE ".claude\settings.json") -Raw | ConvertFrom-Json
-        $settings.hooks.PreToolUse.Count | Should -Be 2
+        $settings.hooks.PreToolUse.Count | Should -Be 1
     }
 
     It "멱등 재실행 후에도 중복 없이 영수증(added_allow)이 보존된다" {
@@ -172,7 +174,7 @@ Describe "실제 설치 경로 (S2)" {
         $r2 = Invoke-Script $script:Setup @("-Hooks")
         $r2.ExitCode | Should -Be 0
         $settings = Get-Content (Join-Path $env:USERPROFILE ".claude\settings.json") -Raw | ConvertFrom-Json
-        $settings.hooks.PreToolUse.Count | Should -Be 2
+        $settings.hooks.PreToolUse.Count | Should -Be 1
         $manifest = Get-Content (Join-Path $env:USERPROFILE ".claude\.claude-code-setup.json") -Raw | ConvertFrom-Json
         $manifest.added_allow.Count | Should -BeGreaterThan 0
         $manifest.default_mode_changed | Should -Be $true
@@ -257,7 +259,7 @@ Describe "네이티브 명령 오류 승격 방어 회귀 (S1)" {
 Describe "온보딩 파이썬 탐지 (py -3 NativeCommandError 회귀)" {
     BeforeEach {
         $script:realPython = (Get-Command python -CommandType Application -ErrorAction SilentlyContinue).Source
-        $script:sandbox = Join-Path $env:TEMP ("cc-pester-py3-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        $script:sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-py3-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $script:sandbox | Out-Null
         $script:stub = Join-Path $script:sandbox "stubbin"
         New-Item -ItemType Directory -Force -Path $script:stub | Out-Null
@@ -336,7 +338,7 @@ Describe "온보딩 파이썬 탐지 (py -3 NativeCommandError 회귀)" {
 # 콘솔이 없을 때 아무것도 골라버리지 않을 것, 그리고 기존 플래그 호출이 멈추지 않을 것.
 Describe "온보딩 연결" {
     BeforeEach {
-        $script:sandbox = Join-Path $env:TEMP ("cc-pester-onboard-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        $script:sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-onboard-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $script:sandbox | Out-Null
         $script:oldUP = $env:USERPROFILE
         $env:USERPROFILE = $script:sandbox
@@ -381,7 +383,7 @@ Describe "온보딩 연결" {
 
 Describe "온보딩이 고른 값이 설치에 반영된다" {
     BeforeEach {
-        $script:sandbox = Join-Path $env:TEMP ("cc-pester-mode-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        $script:sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-mode-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $script:sandbox | Out-Null
         $script:oldUP = $env:USERPROFILE
         $env:USERPROFILE = $script:sandbox
@@ -411,7 +413,7 @@ Describe "온보딩이 고른 값이 설치에 반영된다" {
 
 Describe "AGENTS.md 덮어쓰기 (-Force)" {
     BeforeEach {
-        $script:proj = Join-Path $env:TEMP ("cc-pester-agents-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        $script:proj = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-agents-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $script:proj | Out-Null
         $script:AgentsMd = Join-Path $script:RepoRoot "scripts\setup_agentsmd.ps1"
     }
@@ -442,7 +444,7 @@ Describe "AGENTS.md 덮어쓰기 (-Force)" {
 
 Describe "프로젝트 지침 하네스 선택" {
     BeforeEach {
-        $script:proj = Join-Path $env:TEMP ("cc-pester-harness-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        $script:proj = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-harness-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $script:proj | Out-Null
     }
     AfterEach {
@@ -540,7 +542,7 @@ Describe "프로젝트 지침 하네스 선택" {
 # CLAUDE_SETUP_* 경로를 샌드박스로 돌린다.
 Describe "키바인드 디스패처" {
     BeforeEach {
-        $script:sandbox = Join-Path $env:TEMP ("cc-pester-kb-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        $script:sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-kb-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $script:sandbox | Out-Null
         $script:oldUP = $env:USERPROFILE
         $script:oldHome = $env:HOME

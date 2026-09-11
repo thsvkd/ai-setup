@@ -50,12 +50,6 @@
         "hooks": [
           { "type": "command", "command": "{{PY}} -X utf8 \"{{HOOKS_DIR}}/danger_guard.py\"" }
         ]
-      },
-      {
-        "matcher": "Read|Write|Edit|MultiEdit",
-        "hooks": [
-          { "type": "command", "command": "{{PY}} -X utf8 \"{{HOOKS_DIR}}/secrets_guard.py\"" }
-        ]
       }
     ]
   }
