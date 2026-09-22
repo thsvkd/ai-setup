@@ -118,6 +118,16 @@ Describe "install.ps1 bootstrap" {
         $r.Output | Should -Not -Match "--dry-run"
     }
 
+    # README 옵션 표의 -Harness 가 부트스트랩에서 '알 수 없는 옵션' 으로 죽던 회귀.
+    # 값까지 소비해야 하므로 --bogus 만 거절되는지로 본다 (다운로드 전이라 네트워크 없음).
+    It "-Harness 와 --harness 를 값과 함께 소비한다" {
+        foreach ($a in @("-Harness claude,codex --bogus", "--harness claude --bogus")) {
+            $r = Invoke-ScriptInline (Join-Path $script:RepoRoot "install.ps1") $a
+            $r.ExitCode | Should -Not -Be 0
+            $r.Output | Should -Match "(?m)알 수 없는 옵션: --bogus\r?$" -Because $a
+        }
+    }
+
     # README 의 `irm | iex` 는 인자를 하나도 넘기지 않는다. 그 경로가 빈 인자를 '알 수 없는 옵션'
     # 으로 거절하던 회귀. 존재하지 않는 레포를 가리켜 다운로드 단계에서 멈추게 하므로 설치는
     # 일어나지 않고, 오프라인이어도 결론은 같다.
@@ -561,6 +571,19 @@ Describe "프로젝트 지침 하네스 선택" {
         $backups.Count | Should -Be 1 -Because "AGENTS.md 와 같은 복구 보장을 받아야 한다"
         (Get-Content $backups[0].FullName -Raw) | Should -Match "사용자가 손댄 내용"
         (Get-Content $target -Raw) | Should -Match "@AGENTS\.md"
+    }
+
+    # setup.sh 처럼 긴 표기 --harness 도 디스패처를 거쳐 워커까지 가야 한다.
+    It "setup.ps1 --agentsmd --harness codex 는 CLAUDE.md 를 만들지 않는다" {
+        $oldUP = $env:USERPROFILE
+        $env:USERPROFILE = $script:proj
+        Push-Location $script:proj
+        try {
+            $r = Invoke-ScriptInline $script:Setup "--agentsmd --harness codex"
+        } finally { Pop-Location; $env:USERPROFILE = $oldUP }
+        $r.ExitCode | Should -Be 0
+        Test-Path (Join-Path $script:proj "AGENTS.md") | Should -Be $true
+        Test-Path (Join-Path $script:proj "CLAUDE.md") | Should -Be $false
     }
 }
 
