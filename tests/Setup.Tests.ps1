@@ -208,7 +208,7 @@ Describe "Windows .ps1 인코딩 회귀 (BOM)" {
     It "배포되는 .ps1 파일은 전부 UTF-8 BOM 으로 시작해야 한다" {
         $files = @(
             "scripts\setup.ps1", "scripts\setup_hooks.ps1", "scripts\setup_agentsmd.ps1",
-            "scripts\lib\SetupCommon.ps1", "install.ps1", "tests\Setup.Tests.ps1"
+            "scripts\lib\SetupCommon.ps1", "tests\Setup.Tests.ps1"
         )
         foreach ($f in $files) {
             $path = Join-Path $script:RepoRoot $f
@@ -216,6 +216,15 @@ Describe "Windows .ps1 인코딩 회귀 (BOM)" {
             $hasBom = ($bytes.Length -ge 3) -and ($bytes[0] -eq 0xEF) -and ($bytes[1] -eq 0xBB) -and ($bytes[2] -eq 0xBF)
             $hasBom | Should -Be $true -Because "$f 에 BOM이 없으면 Windows PowerShell 5.1 + DBCS 로케일에서 파싱이 깨질 수 있음"
         }
+    }
+
+    # install.ps1 은 파일로 실행되지 않고 `irm | iex` 로 문자열이 된다. 5.1 의 irm 은 BOM 을
+    # U+FEFF 문자로 남기고, 파서는 그걸 공백이 아닌 명령 이름으로 읽어 첫 줄 `<#` 주석부터
+    # 무너진다 (실측). 디코딩은 raw.githubusercontent 의 charset=utf-8 헤더가 맡으므로 BOM 이 필요 없다.
+    It "install.ps1 은 BOM 없이 시작해야 한다 (irm | iex 경로)" {
+        $bytes = [System.IO.File]::ReadAllBytes((Join-Path $script:RepoRoot "install.ps1"))
+        $hasBom = ($bytes.Length -ge 3) -and ($bytes[0] -eq 0xEF) -and ($bytes[1] -eq 0xBB) -and ($bytes[2] -eq 0xBF)
+        $hasBom | Should -Be $false -Because "Windows PowerShell 5.1 에서 irm | iex 가 파싱 오류로 실패함"
     }
 
     # powershell.exe 는 Windows 에만 있다. 없는 곳에서 '실패'로 잡으면 진짜 실패가 묻힌다 —

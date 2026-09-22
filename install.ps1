@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     claude-code-setup 원격 설치 부트스트랩 (Windows PowerShell)
 .DESCRIPTION
