@@ -38,7 +38,7 @@ param(
     [switch]$NoOnboard,
     [Alias("h")]
     [switch]$Help,
-    [Parameter(ValueFromRemainingArguments = $true)] $Rest
+    [Parameter(ValueFromRemainingArguments = $true)] [string[]]$Rest = @()
 )
 
 Set-StrictMode -Version Latest
@@ -142,12 +142,14 @@ function Invoke-Install {
         [switch]$NoOnboard,
         [Alias("h")]
         [switch]$Help,
-        [Parameter(ValueFromRemainingArguments = $true)] $Rest
+        [Parameter(ValueFromRemainingArguments = $true)] [string[]]$Rest = @()
     )
 
     # 남은 토큰을 install.sh 와 같은 긴 표기로 해석한다. PowerShell 은 이름에 하이픈이
     # 들어간 플래그(--dry-run)를 파라미터로 인식하지 못하므로 여기서 직접 읽는다.
-    $restTokens = @($Rest)
+    # 인자가 없으면 $Rest 는 빈 배열이다 — 타입 없이 받으면 @($null) 이 원소 하나짜리가 되어
+    # 빈 문자열이 "알 수 없는 옵션" 으로 걸리고, 인자 없는 `irm | iex` 가 매번 죽었다.
+    $restTokens = $Rest
     $newlineGiven = $PSBoundParameters.ContainsKey("Newline")
     $unknownArgs = @()
     for ($i = 0; $i -lt $restTokens.Count; $i++) {
