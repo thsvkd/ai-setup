@@ -8,7 +8,7 @@ Claude Code를 **실수해도 되돌릴 수 있게** 만드는 사용자 레벨 
 - ⏎ **줄바꿈 키 통일** — Claude Code·Codex·Grok CLI에서 Shift+Enter(또는 Ctrl+Enter)로 줄바꿈
 - 📄 **AGENTS.md** — 프로젝트에 에이전트용 작업 규칙 파일을 깔아 준다
 
-기존 설정은 덮어쓰지 않고 필요한 항목만 끼워 넣으며, 언제든 `--uninstall`로 설치 전 상태로 되돌릴 수 있다.
+기존 설정은 덮어쓰지 않고 필요한 항목만 끼워 넣으며, `--uninstall`로 설치가 넣은 항목만 골라 뺄 수 있다.
 
 ---
 
@@ -22,14 +22,14 @@ gh auth login -h github.com
 
 > 토큰을 직접 쓰고 싶거나 로그인이 안 되면 [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) 참고.
 
-**2. 설치** — `AGENTS.md`는 현재 폴더에 생기므로 프로젝트 루트에서 실행한다.
+**2. 설치** — `AGENTS.md`(와 `CLAUDE.md`)는 현재 폴더에 생기므로 프로젝트 루트에서 실행한다.
 
-macOS / Linux / Git Bash:
+macOS / Linux:
 ```sh
 curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh
 ```
 
-Windows PowerShell:
+Windows — Git Bash가 아니라 PowerShell에서 실행한다(Git Bash로 설치하면 Windows 휴지통 연동이 빠진다):
 ```powershell
 irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1 | iex
 ```
@@ -43,7 +43,9 @@ irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubuserco
    AGENTS.md 만 (현재 폴더)
 ```
 
-이어서 권한 모드(`auto` / `bypassPermissions`), 줄바꿈 키, 기존 `AGENTS.md` 덮어쓰기 여부, 바로 적용할지 미리보기만 할지를 묻는다. 끝나면 Claude Code를 다시 시작한다.
+이어서 권한 모드(`auto` / `bypassPermissions`), 지침을 깔 하네스(Claude Code·Codex·Grok·OpenCode), 줄바꿈 키, 기존 `AGENTS.md` 덮어쓰기 여부, 바로 적용할지 미리보기만 할지를 묻는다. 끝나면 Claude Code를 다시 시작한다.
+
+> 터미널이 없는 환경(CI, 에이전트 안에서 실행 등)에서는 **묻지 않고 전체 설치**한다. 먼저 보고 싶으면 아래 [옵션](#옵션)의 `--dry-run`을 쓴다.
 
 > ⚠️ 가드 훅과 권한은 `~/.claude`에 설치되어 **이 사용자가 여는 모든 프로젝트**에 적용된다.
 
@@ -81,7 +83,16 @@ PowerShell은 `| iex`로는 인자를 넘길 수 없어서 scriptblock으로 감
 
 ## 제거
 
-설치 명령에 `--uninstall`(PowerShell은 `-Uninstall`)을 붙인다. 설치가 추가한 훅·권한·키바인딩만 빼고, 원래 있던 설정은 그대로 둔다. 바뀌는 파일은 `<파일>.bak.<타임스탬프>`로 백업된다. 자세한 규칙은 [아래](#제거가-되돌리는-것).
+```sh
+curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --uninstall
+```
+```powershell
+& ([scriptblock]::Create((irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -Uninstall
+```
+
+설치가 추가한 훅·권한·키바인딩 항목만 빼고, 원래 있던 설정은 그대로 둔다. 바뀌는 파일은 `<파일>.bak.<타임스탬프>`로 백업된다.
+
+남는 것도 있다 — 프로젝트의 `AGENTS.md`/`CLAUDE.md`는 지우지 않으니 필요하면 직접 지운다. 설치가 새로 만든 키바인딩 파일은 우리 항목만 빠진 빈 파일(`[]` 등)로 남는다. 자세한 규칙은 [아래](#제거가-되돌리는-것).
 
 ---
 
@@ -92,9 +103,9 @@ PowerShell은 `| iex`로는 인자를 넘길 수 없어서 scriptblock으로 감
 | `~/.claude/settings.json` | 권한, 훅 등록, 없을 때만 채우는 기본값(`model`·`effortLevel`·`language` 등) |
 | `~/.claude/hooks/` | 가드 훅 `danger_guard.py`, 삭제를 휴지통으로 돌리는 셰임(`shims/rm`, `shims/RmShim.psm1`), Windows 휴지통 헬퍼 |
 | `./AGENTS.md`, `./CLAUDE.md` | 프로젝트 작업 규칙. `CLAUDE.md`는 `@AGENTS.md` 한 줄짜리(하네스에 `claude`가 있을 때만). 이미 있으면 건너뜀 |
-| 줄바꿈 키 | `~/.claude/keybindings.json`, `~/.codex/config.toml`, VS Code·Cursor `keybindings.json`, `~/.tmux.conf`, Windows Terminal(`ctrl-enter`일 때만) |
+| 줄바꿈 키 | `~/.claude/keybindings.json`, `~/.codex/config.toml`, VS Code·Cursor `keybindings.json`(에디터가 없어도 만든다), `~/.tmux.conf`(POSIX만), Windows Terminal(`ctrl-enter`일 때만) |
 
-필요한 것 — 모든 OS에서 **Python 3.9+**(훅이 `python3`로 실행된다). 휴지통 도구는 macOS 14.4+ 기본 `/usr/bin/trash`, Linux `trash-cli`, Windows `send2trash`를 쓰며, 없으면 설치 중에 pip로 설치를 시도한다.
+필요한 것 — 모든 OS에서 **Python 3.9+**(훅이 `python3`, Windows에서는 `python`으로 실행된다). 휴지통 도구는 macOS 14.4+ 기본 `/usr/bin/trash`, Linux `trash-cli`, Windows `send2trash`를 쓰며, 없으면 설치 중에 pip로 설치를 시도한다.
 
 > `auto` 권한 모드는 계정/버전 자격 요건을 충족해야 켜진다. 설치 후 세션에서 `Shift+Tab`으로 모드를 순환시켜 확인할 수 있다.
 
