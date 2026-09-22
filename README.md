@@ -1,43 +1,40 @@
 # claude-code-setup
 
-Claude Code를 **더 안전하게** 쓰기 위한 사용자 레벨(user-level) 설정 번들.
-위험한 명령을 자동으로 막거나 휴지통 이동으로 치환하는 **가드 훅**, 합리적인 **권한(permissions)**,
-프로젝트용 **AGENTS.md**, 그리고 OS·터미널·에이전트마다 제각각인 **줄바꿈 키**를 Windows / macOS / Linux에 한 번에 설치한다.
+Claude Code를 **실수해도 되돌릴 수 있게** 만드는 사용자 레벨 설정 모음. 명령 한 줄로 Windows / macOS / Linux에 설치한다.
 
-- 🛡️ **가드 훅** — 삭제를 휴지통으로 돌리는 셰임을 `PATH`/모듈로 끼워 넣고(명령 문자열은 건드리지 않는다), `git reset --hard`·`clean` 등 미커밋 변경을 날리는 명령 앞에 `refs/claude-backups/`로 스냅샷을 뜬다. 차단은 되돌릴 수단이 없는 둘뿐 — 루트/홈 전체 삭제와 디스크 파괴. 확인을 요청하는 것도 로컬 백업이 닿지 않는 원격 히스토리(기본·보호 브랜치 push, 원격 브랜치 삭제)뿐이다
-- 🧩 **외과적 병합** — 권한/훅을 추가하고 `model`·`effortLevel`·`language`는 **없을 때만** 채운다. 사용자가 이미 고른 값과 그 외 키(env, statusLine 등)는 100% 보존
-- ⏎ **줄바꿈 키 통일** — Claude Code / Codex / Grok CLI에서 Shift+Enter(또는 Ctrl+Enter)로 줄을 넣고, Enter는 그대로 전송. VS Code·Cursor 통합 터미널, tmux, Windows Terminal, 에이전트 키맵까지 한 번에 맞춘다
-- 🔁 **멱등성 · dry-run** — 몇 번을 실행해도 안전하고, `--dry-run`으로 실제 적용 전에 바뀔 내용을 미리 확인
-- 🖥️ **크로스 플랫폼** — Windows(PowerShell)와 POSIX(bash) 양쪽을 단일 소스로 관리
+- 🗑️ **삭제는 휴지통으로** — Claude가 `rm`·`Remove-Item`으로 지운 파일을 휴지통에서 되살릴 수 있다
+- 💾 **git 작업 자동 백업** — `git reset --hard`·`git clean` 같은 명령 전에 미커밋 변경을 스냅샷으로 남긴다
+- ⛔ **되돌릴 수 없는 것만 차단** — 루트/홈 전체 삭제, 디스크 포맷. 그 밖에는 작업을 막지 않는다
+- ⏎ **줄바꿈 키 통일** — Claude Code·Codex·Grok CLI에서 Shift+Enter(또는 Ctrl+Enter)로 줄바꿈
+- 📄 **AGENTS.md** — 프로젝트에 에이전트용 작업 규칙 파일을 깔아 준다
 
-> ⚠️ **범위 주의**: 훅과 권한은 `~/.claude`(유저 레벨)에 설치되어 **이 사용자가 여는 모든 프로젝트**에 적용된다.
+기존 설정은 덮어쓰지 않고 필요한 항목만 끼워 넣으며, 언제든 `--uninstall`로 설치 전 상태로 되돌릴 수 있다.
 
 ---
 
-## 설치
+## 빠른 시작
 
-> 비공개(private) 레포라서 GitHub 인증이 필요하다. `gh` CLI 설치와 토큰 발급은 [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) 참고.
+**1. 준비** — [Python 3.9+](https://www.python.org/downloads/)와 [GitHub CLI](https://cli.github.com/)가 필요하다. 비공개 레포라서 GitHub 로그인이 되어 있어야 한다.
 
-인자 없이 실행하면 가드 훅/권한(전역)과 `AGENTS.md`(현재 폴더)가 모두 설치된다. `AGENTS.md`는 현재 작업 디렉터리에 생기므로 프로젝트 루트에서 실행하자.
-
-**macOS / Linux / Git Bash**
 ```sh
-curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN:-$(gh auth token)}" \
-  https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh
+gh auth login -h github.com
 ```
 
-**Windows PowerShell**
+> 토큰을 직접 쓰고 싶거나 로그인이 안 되면 [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) 참고.
+
+**2. 설치** — `AGENTS.md`는 현재 폴더에 생기므로 프로젝트 루트에서 실행한다.
+
+macOS / Linux / Git Bash:
+```sh
+curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh
+```
+
+Windows PowerShell:
 ```powershell
-if (-not $env:GITHUB_TOKEN) { $env:GITHUB_TOKEN = gh auth token }
-$h = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
-irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1 | iex
+irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1 | iex
 ```
 
----
-
-## 사용법
-
-인자 없이 실행하면 **대화형 온보딩**이 떠서 무엇을 어떻게 설치할지 고르게 한다:
+**3. 고르기** — 실행하면 무엇을 설치할지 묻는다. 방향키로 고르고 Enter.
 
 ```
 ? 무엇을 설치할까요? (↑↓ 이동, Enter 선택)
@@ -46,146 +43,71 @@ irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/
    AGENTS.md 만 (현재 폴더)
 ```
 
-이어서 **권한 모드**(`auto` / `bypassPermissions`), **줄바꿈 키**(`Shift+Enter` / `Ctrl+Enter` — 범위가 '전체'일 때만), 기존 `AGENTS.md`가 있다면 **덮어쓸지**, 그리고 **지금 적용할지 변경 계획만 먼저 볼지**를 묻는다. `curl … | sh`로 실행해도 프롬프트가 정상 동작한다 — 자세한 사정은 [아래 절](#curl--sh에서-대화형-프롬프트가-동작하는-이유)에 있다.
+이어서 권한 모드(`auto` / `bypassPermissions`), 줄바꿈 키, 기존 `AGENTS.md` 덮어쓰기 여부, 바로 적용할지 미리보기만 할지를 묻는다. 끝나면 Claude Code를 다시 시작한다.
 
-플래그를 하나라도 주면 온보딩을 건너뛰고 예전과 똑같이 동작하므로, 기존 자동화 호출은 그대로 쓰면 된다. PowerShell에서 `irm | iex`는 인자를 넘기기 어려우므로, 플래그가 필요하면 `scriptblock` 형태로 감싸서 쓴다:
+> ⚠️ 가드 훅과 권한은 `~/.claude`에 설치되어 **이 사용자가 여는 모든 프로젝트**에 적용된다.
 
+---
+
+## 옵션
+
+플래그를 하나라도 주면 질문 없이 바로 실행한다.
+
+| POSIX | PowerShell | 동작 |
+| --- | --- | --- |
+| `--dry-run` | `-DryRun` | 아무것도 바꾸지 않고 변경 계획만 출력 |
+| `--hooks` | `-Hooks` | 가드 훅 + 권한만 설치 (`~/.claude`) |
+| `--agentsmd` | `-AgentsMd` | 현재 폴더에 `AGENTS.md`만 설치 |
+| `--harness <목록>` | `-Harness <목록>` | 지침을 설치할 하네스: `claude`,`codex`,`grok`,`opencode`,`all` (기본 `all`) |
+| `--keybinds` | `-Keybinds` | 줄바꿈 키바인딩만 설치 |
+| `--newline <값>` | `-Newline <값>` | 줄바꿈 키: `shift-enter`(기본) 또는 `ctrl-enter` |
+| `--no-onboard` | `-NoOnboard` | 질문 없이 전체 설치 |
+| `--uninstall` | `-Uninstall` | 설치한 것만 골라 되돌리기 |
+| `--help` | `-Help` | 도움말 |
+
+플래그 넘기는 법 — POSIX는 `sh -s --` 뒤에 붙인다:
+```sh
+curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --hooks --dry-run
+```
+
+PowerShell은 `| iex`로는 인자를 넘길 수 없어서 scriptblock으로 감싼다:
 ```powershell
-& ([scriptblock]::Create((irm -Headers @{Authorization="Bearer $(gh auth token)"} `
-    https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -Keybinds -Newline ctrl-enter
+& ([scriptblock]::Create((irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -Hooks -DryRun
 ```
 
-| 플래그 (POSIX / PowerShell)  | 동작                                                                                             |
-| ----------------------------- | -------------------------------------------------------------------------------------------------- |
-| (없음)                       | 대화형 온보딩 → 고른 대로 설치 (터미널이 없으면 전체 설치로 폴백)                                 |
-| `--hooks` / `-Hooks`         | 가드 훅 + 권한만 설치 (전역, `~/.claude`)                                                         |
-| `--agentsmd` / `-AgentsMd`   | 현재 폴더에 프로젝트 지침만 설치                                                                  |
-| `--harness <목록>` / `-Harness <목록>` | 지침을 설치할 하네스 (쉼표 구분: `claude`,`codex`,`grok`,`opencode`,`all`). 기본 `all`   |
-| `--keybinds` / `-Keybinds`   | 줄바꿈 키바인딩만 설치 (VS Code·Cursor·Claude·Codex·tmux·Windows Terminal)                        |
-| `--newline <값>` / `-Newline <값>` | 줄바꿈 키를 고른다 — `shift-enter`(기본) 또는 `ctrl-enter`                                  |
-| `--dry-run` / `-DryRun`      | 아무것도 바꾸지 않고 변경 계획만 출력                                                             |
-| `--no-onboard` / `-NoOnboard`| 온보딩을 띄우지 않고 기본값(전체 설치)으로 실행                                                   |
-| `--uninstall` / `-Uninstall` | 설치가 추가한 것만 정밀 복원 (아래 참고)                                                          |
-| `--help` / `-Help`           | 도움말                                                                                             |
+레포를 clone했다면 `bash scripts/setup.sh --dry-run` / `.\scripts\setup.ps1 -DryRun`처럼 직접 실행해도 된다.
 
-`--newline`은 다른 플래그와 조합할 수 있다 — `--keybinds --newline ctrl-enter`는 키바인딩만 Ctrl+Enter로, `--no-onboard --newline ctrl-enter`는 전체 설치를 Ctrl+Enter로 한다. 재실행 시 `--newline`을 주지 않으면 매니페스트에 기록된 이전 선택을 그대로 쓰고, 기록이 없으면 `shift-enter`다. 값이 둘 중 하나가 아니면 아무것도 쓰지 않고 종료 코드 1로 끝난다.
+---
 
-온보딩이 직접 쓰는 하위 옵션도 워커에 그대로 열려 있다 — `setup_hooks`의 `--default-mode <모드>`(`auto`/`bypassPermissions`/`default`/`acceptEdits`/`plan`)와 `setup_agentsmd`의 `--force`(기존 지침 파일을 `.bak.<타임스탬프>`로 백업한 뒤 덮어쓰기)다.
+## 제거
 
-`--harness`는 **무엇을 쓸지**가 아니라 **무엇을 읽는지**로 갈린다. Codex·Grok·OpenCode는 루트 `AGENTS.md`를 직접 읽으므로 그 파일 하나면 되고, Claude Code는 `AGENTS.md`를 읽지 않고 `CLAUDE.md`를 읽으므로 `@AGENTS.md` 한 줄짜리 `CLAUDE.md`가 추가로 필요하다(Windows에서 심볼릭 링크는 관리자 권한을 요구해서 import를 쓴다). 그래서 `AGENTS.md`는 항상 설치되고, `CLAUDE.md`는 선택에 `claude`가 있을 때만 생긴다. 여러 하네스를 함께 쓰는 프로젝트가 흔하므로 다중 선택이 기본이며 — `--harness claude,codex` — 온보딩에서도 체크박스로 고른다. 모르는 이름을 주면 아무것도 쓰지 않고 종료 코드 1로 끝난다.
-
-예시 (macOS/Linux/Git Bash — Windows는 위 `scriptblock` 패턴에 `-Hooks`/`-DryRun`/`-Uninstall` 등을 붙이면 된다):
-
-```sh
-# 전역 가드/권한만, 미리보기
-curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN:-$(gh auth token)}" \
-  https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --hooks --dry-run
-
-# 제거
-curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN:-$(gh auth token)}" \
-  https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --uninstall
-```
-
-`--uninstall`은 설치 시 기록한 매니페스트(`~/.claude/.claude-code-setup.json`)를 근거로 우리가 추가한 훅·allow/deny 항목·`model`/`effortLevel`/`language`만 제거하고, `defaultMode`를 이전 값으로 원복하며, 설치가 제거했던 구버전 규칙이 있다면 다시 넣어 준다. 사용자가 원래 갖고 있던 설정과 그 외 키는 그대로 보존되며 변경 전 `settings.json.bak.<타임스탬프>`를 남긴다. `settings.json`을 설치가 새로 만든 경우, 되돌린 뒤 비면 파일도 제거한다. 줄바꿈 키바인딩도 함께 되돌리는데, **무엇을 '우리 것'으로 볼지는 대상마다 다르다.**
-
-- **시그니처로 식별**(VS Code·Cursor): 명령 + `when` + 시퀀스가 우리가 쓰는 것과 정확히 같은 항목만 제거한다. 이 조합은 이 설치가 만들어내는 형태라, 누가 먼저 넣었든 같은 항목이다 — 예컨대 Claude `/terminal-setup`이 넣어둔 `shift+enter` → `sendSequence` 항목도 제거 대상이다. 시퀀스가 다른 사용자 항목(에디터·노트북의 Shift+Enter)은 그대로 둔다.
-- **영수증으로 식별**(tmux·Claude·Codex·Windows Terminal): `extended-keys` 줄, Claude의 `chat:newline`, Codex의 `shift-enter`는 전부 사용자가 직접 쓰는 값과 글자까지 같다. 값이 같다는 이유로 지우면 남의 설정을 지우는 것이므로, 매니페스트에 '설치가 넣었다'는 기록이 있는 항목만 되돌린다. 기록이 없으면 건드리지 않는다. 설치가 기존 값을 덮어썼다면 그 값도 기록해 두었다가 되돌린다.
-
-Codex의 기존 `ctrl-j` 처럼 우리가 넣지 않은 키는 남는다. 우리 키만 빠져 `insert_newline`이 비면 그 줄과 빈 `[tui.keymap.editor]` 테이블까지 지운다 — 빈 배열을 남기면 설치 전에 없던 '줄바꿈 전면 언바인드'라는 새 설정을 만드는 셈이기 때문이다. `--keybinds --uninstall`이면 키바인딩만 제거하고 훅은 건드리지 않는다.
-
-레포를 clone해서 로컬로 실행할 수도 있다:
-
-```sh
-git clone https://github.com/thsvkd/claude-code-setup.git && cd claude-code-setup
-bash scripts/setup.sh --dry-run   # 또는 .\scripts\setup.ps1 -DryRun
-```
+설치 명령에 `--uninstall`(PowerShell은 `-Uninstall`)을 붙인다. 설치가 추가한 훅·권한·키바인딩만 빼고, 원래 있던 설정은 그대로 둔다. 바뀌는 파일은 `<파일>.bak.<타임스탬프>`로 백업된다. 자세한 규칙은 [아래](#제거가-되돌리는-것).
 
 ---
 
 ## 무엇이 설치되나
 
-| 위치                                | 내용                                                                                 |
-| ----------------------------------- | ------------------------------------------------------------------------------------ |
-| `~/.claude/hooks/danger_guard.py`  | 위험 명령 가드 (Bash·PowerShell 툴)                                                  |
-| `~/.claude/hooks/send_to_trash.py` | (Windows) 휴지통 이동 헬퍼                                                           |
-| `~/.claude/hooks/shims/rm`         | 삭제를 휴지통으로 돌리는 `rm` 셰임 (Bash·Git Bash)                                   |
-| `~/.claude/hooks/shims/RmShim.psm1`| 같은 역할의 `Remove-Item` 프록시 (PowerShell, Windows 설치본만)                       |
-| `~/.claude/settings.json`          | 권한 + PreToolUse 훅 등록 + `model`/`effortLevel`/`language`·`env.CLAUDE_CODE_SCROLL_SPEED` 기본값(없을 때만) |
-| `./AGENTS.md`                      | (`--agentsmd` 시) 현재 폴더에 프로젝트 워크플로 규칙 — 이미 있으면 건너뜀 (`--force`면 백업 후 덮어쓰기) |
-| `./CLAUDE.md`                      | (`--agentsmd` + 하네스에 `claude` 포함 시) `@AGENTS.md` 한 줄 — Claude Code는 `AGENTS.md`를 직접 읽지 않는다. 이미 있으면 건너뜀 |
-| `~/.claude/keybindings.json`       | (줄바꿈 키) Claude Code의 `Chat` 컨텍스트에 고른 키 → `chat:newline`                     |
-| `~/.codex/config.toml`             | (줄바꿈 키) `[tui.keymap.editor] insert_newline`에 고른 키를 **합집합**으로 추가         |
-| VS Code / Cursor `keybindings.json` | (줄바꿈 키) 통합 터미널(`when: terminalFocus`)에 고른 키 → `sendSequence`. 경로는 OS별 — Windows `%APPDATA%\Code\User\`, macOS `~/Library/Application Support/Code/User/`, Linux `~/.config/Code/User/` |
-| `~/.tmux.conf`                     | (줄바꿈 키, POSIX) `extended-keys on` + `terminal-features …extkeys` — 없을 때만 추가    |
-| Windows Terminal `settings.json`   | (줄바꿈 키, `ctrl-enter`를 고른 경우만) `Ctrl+Enter` → `sendInput`                        |
+| 위치 | 내용 |
+| --- | --- |
+| `~/.claude/settings.json` | 권한, 훅 등록, 없을 때만 채우는 기본값(`model`·`effortLevel`·`language` 등) |
+| `~/.claude/hooks/` | 가드 훅 `danger_guard.py`, 삭제를 휴지통으로 돌리는 셰임(`shims/rm`, `shims/RmShim.psm1`), Windows 휴지통 헬퍼 |
+| `./AGENTS.md`, `./CLAUDE.md` | 프로젝트 작업 규칙. `CLAUDE.md`는 `@AGENTS.md` 한 줄짜리(하네스에 `claude`가 있을 때만). 이미 있으면 건너뜀 |
+| 줄바꿈 키 | `~/.claude/keybindings.json`, `~/.codex/config.toml`, VS Code·Cursor `keybindings.json`, `~/.tmux.conf`, Windows Terminal(`ctrl-enter`일 때만) |
 
-`settings.json`에는 `permissions.defaultMode: "auto"`, 핵심 툴 `allow`(`Bash`, `PowerShell`, `Read(*)`, `Edit(*)`, `Write(*)`, `Agent(*)`, `WebFetch(*)` 등), `ask`(위험 스킬만 — git 관련 규칙은 없음), `hooks.PreToolUse` 등록, 그리고 없을 때만 채우는 `model: "opus"` / `effortLevel: "xhigh"` / `language: "korean"` 과 `env.CLAUDE_CODE_SCROLL_SPEED: "3"`(마우스 휠 스크롤 속도, `/scroll-speed` 대응)이 병합된다. git 관련 deny/ask를 `permissions`에 두지 않는 이유와 그 대가는 [아래 절](#git-정책을-permissions가-아니라-훅이-담당하는-이유-그리고-그-대가)에서 설명한다. 사용자가 이미 고른 값과 그 외 최상위 키(`statusLine` 등), 그리고 사용자의 기존 `env` 키/값은 건드리지 않는다(우리가 관리하는 `env` 키만 없을 때 추가). 단일 소스는 [`res/settings.json`](res/settings.json)이며, 설치 시 python 실행 명령과 훅 경로만 치환된다.
+필요한 것 — 모든 OS에서 **Python 3.9+**(훅이 `python3`로 실행된다). 휴지통 도구는 macOS 14.4+ 기본 `/usr/bin/trash`, Linux `trash-cli`, Windows `send2trash`를 쓰며, 없으면 설치 중에 pip로 설치를 시도한다.
+
+> `auto` 권한 모드는 계정/버전 자격 요건을 충족해야 켜진다. 설치 후 세션에서 `Shift+Tab`으로 모드를 순환시켜 확인할 수 있다.
+
+**보안 주의**: `CLAUDE_SETUP_REPO`/`CLAUDE_SETUP_REF` 환경변수는 다운로드해 실행할 레포를 바꾼다. 신뢰할 수 없는 입력이 이 변수를 제어할 수 있는 환경(공유 CI 등)에서는 설정하지 않는다.
 
 ---
 
-## 줄바꿈 키
+## 상세
 
-CLI 에이전트의 프롬프트에서 **줄을 넣고 전송하지 않는** 키를 세 OS에서 같은 의미로 만든다. 값은 `shift-enter`(기본) 또는 `ctrl-enter` 하나다. **Enter 단독은 계속 전송**이고, 고르지 않은 쪽 수정 Enter는 각 에이전트 기본값 그대로 둔다.
+설치해서 쓰는 데는 여기까지면 충분하다. 아래는 동작 원리와 설계 이유다.
 
-대상은 Claude Code CLI · Codex CLI · Grok Build CLI다. Gemini CLI와 Cursor/VS Code의 IDE 챗 입력창은 범위 밖이다(그쪽은 이미 Shift+Enter가 줄바꿈이다).
-
-### 두 층으로 맞춘다
-
-1. **터미널 층** — Shift+Enter를 Enter와 구분하지 못하는 터미널(VS Code·Cursor 통합 터미널)에 `고른 키 → 줄바꿈 시퀀스` 바인딩을 넣는다. 시퀀스는 `ESC` + `CR` (바이트 `0x1B 0x0D`) 하나로 고정돼 있고, `when`은 `terminalFocus`만 걸어 에디터·노트북의 Shift+Enter는 건드리지 않는다. POSIX에서는 `~/.tmux.conf`에 `extended-keys`가 없을 때만 추가한다 — 이게 꺼져 있으면 tmux가 수정 Enter를 통째로 삼킨다.
-2. **에이전트 층** — Claude `~/.claude/keybindings.json`의 `Chat` 컨텍스트에 `chat:newline`을, Codex `~/.codex/config.toml`의 `insert_newline`에 고른 키를 **합집합**으로 넣는다. Grok은 키맵을 리맵할 수 없으므로 파일을 만들지 않는다 — 터미널이 보내는 시퀀스에만 의존한다.
-
-Windows Terminal·iTerm2·Ghostty·Kitty·WezTerm 같은 터미널은 Shift+Enter를 이미 Enter와 다르게 보낸다. 여기에 Shift+Enter 시퀀스를 **덧붙이면 줄바꿈이 두 번** 생기므로, `shift-enter`를 고른 경우 Windows Terminal에는 줄바꿈 바인딩을 **넣지 않는다**(이전 설치가 넣어둔 관리 항목이 있으면 그것만 정리한다). `ctrl-enter`를 고른 경우에만 `Ctrl+Enter` 번역을 넣는다.
-
-### 파일을 어떻게 고치나
-
-바꾸기 전 원본을 `<파일>.bak.<타임스탬프>`로 남기고, 임시 파일에 쓴 뒤 교체한다 — 쓰기 도중 끊겨도 원본이 반쯤 잘리지 않는다. 대상이 심볼릭 링크면(dotfile 관리자를 쓰는 경우) 링크를 갈아치우지 않고 가리키는 실체를 고치며, 기존 파일 권한을 그대로 옮긴다. `keybindings.json`은 파싱 후 다시 직렬화하므로 **파일 안의 주석과 들여쓰기 서식은 사라진다**(설정 값과 항목은 전부 보존된다). VS Code가 허용하는 트레일링 콤마는 우리도 읽는다. 그래도 읽지 못한 대상이 있으면 그 사실을 목록으로 알리고 **0이 아닌 종료 코드**로 끝낸다 — 적용되지 않았는데 '완료'라고 말하지 않기 위해서다.
-
-### 안 되는 것
-
-- **gnome-terminal 등 Shift+Enter를 구분하지 못하는 터미널** — 로컬 세션에서는 맞출 수 없다. 설치는 실패하지 않고 경고만 남긴다. Linux는 로컬 gnome-terminal 대신 Windows Terminal/Cursor에서 `ssh`로 붙는 경로를 쓰면 그대로 동작한다.
-- **Grok의 `/multiline`(`/ml`, `Ctrl+M`) 모드** — 이 토글이 켜지면 Enter와 Shift+Enter의 의미가 **반대**가 된다(Enter=줄바꿈, Shift+Enter=전송). Grok은 키를 리맵할 수 없어 이 상태를 Claude/Codex와 한 키로 맞추는 것이 불가능하다. 설치기는 그 토글을 켜거나 끄지 않고 리포트에 한 줄 경고만 한다. 기준은 **Grok 기본 프롬프트(multiline 꺼짐)** 다.
-- **에이전트가 아예 없을 때** — 바이너리와 설정 디렉터리가 **둘 다** 없으면 그 에이전트는 건너뛰고 설치는 성공한다. 하나라도 있으면 키맵을 쓴다.
-
----
-
-## 온보딩
-
-### `curl | sh`에서 대화형 프롬프트가 동작하는 이유
-
-`curl -fsSL install.sh | sh`는 **stdin이 스크립트 본문**이다. 이 상태에서 프롬프트가 stdin을 읽으면 스크립트의 나머지를 삼키거나 EOF를 만난다. 후보 라이브러리 네 개를 pty 위에서 실측해보면 결과가 이렇다:
-
-| 라이브러리 | 일반 실행 | `curl \| sh` | `/dev/tty` 재바인딩 후 |
-| --- | --- | --- | --- |
-| **questionary** (채택) | ✅ | ❌ **조용히 첫 항목 확정** | ✅ |
-| InquirerPy | ✅ | ❌ `EOFError` | ✅ |
-| beaupy | ✅ | ❌ | ❌ 멈춤 |
-| cutie | ✅ | ❌ | ✅ |
-
-주목할 건 questionary의 실패 방식이다 — 에러도 경고도 없이 **첫 항목("전체 설치")을 자동으로 확정**한다. 사용자가 아무것도 고르지 않았는데 전역 설치가 진행되는, 가장 위험한 실패 모드다.
-
-그래서 `res/onboard.py`는 프롬프트를 띄우기 전에 제어 터미널(POSIX `/dev/tty`, Windows `CONIN$`/`CONOUT$`)을 직접 열어 fd 0/1에 얹는다. 터미널을 못 열면 대화형을 **아예 포기한다** — 라이브러리에게 판단을 맡기지 않는다.
-
-### 물어볼 수 없을 때와 사용자가 거부했을 때는 다르다
-
-온보딩은 종료 코드로 세 상황을 구분하고, 호출부는 이를 다르게 처리한다:
-
-| 코드 | 상황 | 설치 동작 |
-| --- | --- | --- |
-| `0` | 사용자가 선택을 마침 | 고른 대로 실행 |
-| `2` | 물어볼 수 없음 (TTY 없음 / CI / 벤더 깨짐) | **예전 기본값으로 그대로 진행** — 실패가 아니다 |
-| `130` | 사용자가 `Ctrl+C`로 취소 | **아무것도 설치하지 않고 중단** |
-
-`2`와 `130`을 뭉뚱그리면 "취소했는데 기본값으로 설치되는" 동작이 된다. CI 감지는 TTY 검사와 별도로 둔다 — `docker -t`나 tmux처럼 CI가 TTY를 붙여주는 경우가 있어 TTY 유무만으로는 못 거른다.
-
-### 의존성을 설치하지 않고 레포에 넣어둔 이유
-
-온보딩은 `questionary`(+`prompt_toolkit`, `wcwidth`)를 쓰는데, 이를 [`res/vendor/`](res/vendor/)에 벤더링해 둔다. 설치 중에 `pip install`을 하지 않기 위해서다 — 최신 배포판은 PEP 668(`externally-managed-environment`)로 시스템 Python에 대한 `pip install`을 거부하고, 네트워크가 막힌 환경에서는 설치가 통째로 실패한다. 설치 스크립트가 사용자의 파이썬 환경을 바꾸는 것 자체도 적절하지 않다.
-
-벤더링 갱신 방법과 주의사항(특히 `prompt_toolkit`의 `dist-info/METADATA`를 지우면 프롬프트를 띄우는 순간 죽는다)은 [`res/vendor/README.md`](res/vendor/README.md)에 있다.
-
-온보딩은 [`tests/test_onboard.py`](tests/test_onboard.py)가 **pty 위에서 실제 키 입력까지 재현해** 검증한다 — 일반 실행, 파이프 설치, `Ctrl+C` 취소, TTY 없는 환경, 기존 `AGENTS.md`가 있는 경우까지. 프롬프트가 "뜨는지"보다 **띄울 수 없을 때 아무것도 고르지 않는지**가 더 중요하므로 양쪽을 같은 비중으로 고정한다.
-
----
+<details>
+<summary><b>가드 정책</b> — 왜 막지 않고 복구하는가, 무엇을 차단하는가</summary>
 
 ## 가드 정책
 
@@ -292,24 +214,124 @@ Claude Code에서 `permissions`의 `deny`/`ask` 규칙은 PreToolUse 훅의 `all
 
 그 대가로 훅이 유일한 방어선이 되지만, **훅이 죽어도 잃는 것은 복구 수단이지 실행 권한이 아니다.** 훅이 예외로 죽으면 Claude Code는 판정 없이 명령을 실행한다(fail-open). 종전에는 이때 확인으로 승격했지만 실측상 그 확인은 전부 마찰이기만 했으므로, 이제 내부 오류는 `guard.log`에 `guard-error`로 남기고 조용히 통과시킨다. 설치 후 셀프테스트가 통과했는지 확인하는 것이 그만큼 더 중요하다.
 
-## 보안 고려사항
+</details>
 
-`CLAUDE_SETUP_REPO` 환경변수를 설정하면 지정한 레포의 스크립트를 다운로드해 그대로 실행한다. 신뢰할 수 없는 입력(CI 환경변수, 공유 환경 등)이 이 변수를 제어할 수 있으면 임의 코드 실행(RCE)으로 이어질 수 있다. `CLAUDE_SETUP_REPO`/`CLAUDE_SETUP_REF`는 신뢰된 환경에서만 설정하고, 공유 CI에서는 외부에서 덮어쓸 수 없도록 접근을 제한하자.
+<details>
+<summary><b>settings.json에 병합되는 것</b></summary>
 
----
+### settings.json 병합
 
-## 요구사항
+`permissions.defaultMode: "auto"`, 핵심 툴 `allow`(`Bash`, `PowerShell`, `Read(*)`, `Edit(*)`, `Write(*)`, `Agent(*)`, `WebFetch(*)` 등), `ask`(위험 스킬만 — git 관련 규칙은 없음), `hooks.PreToolUse` 등록, 그리고 없을 때만 채우는 `model: "opus"` / `effortLevel: "xhigh"` / `language: "korean"` 과 `env.CLAUDE_CODE_SCROLL_SPEED: "3"`(마우스 휠 스크롤 속도, `/scroll-speed` 대응)이 병합된다. git 관련 deny/ask를 `permissions`에 두지 않는 이유는 [위 절](#git-정책을-permissions가-아니라-훅이-담당하는-이유-그리고-그-대가)에 있다.
 
-- **Python 3.9+** (필수) — 훅은 `settings.json`에 `python3`로 등록되므로, Claude Code가 PATH에서 처음 찾는 python3에서 반드시 돌아야 한다 (macOS 기본 `/usr/bin/python3` 포함).
-- **macOS**: 추가 설치 불필요. 14.4+는 `/usr/bin/trash`를 기본 제공. (Homebrew `trash-cli`는 keg-only라 `brew install` 해도 PATH에 안 잡힌다.)
-- **Linux**: `bash`, `trash-cli`(pip로 자동 설치 시도 — 없으면 `rm` 은 경고를 남기고 실제로 삭제된다)
-- **Windows**: `send2trash`(pip로 자동 설치 시도 — Git Bash 의 `rm` 폴백에 쓰인다. PowerShell 셰임은 OS 휴지통 API 를 직접 쓴다)
+사용자가 이미 고른 값과 그 외 최상위 키(`statusLine` 등), 그리고 사용자의 기존 `env` 키/값은 건드리지 않는다(우리가 관리하는 `env` 키만 없을 때 추가). 단일 소스는 [`res/settings.json`](res/settings.json)이며, 설치 시 python 실행 명령과 훅 경로만 치환된다.
 
-> `auto` 모드는 계정/버전 자격 요건을 충족해야 켜진다. 설치 후 세션에서 `Shift+Tab`으로 모드를 순환시켜 확인할 수 있다.
+</details>
 
----
+<details>
+<summary><b>AGENTS.md와 하네스 선택</b></summary>
 
-## 저장소 구조
+### AGENTS.md와 `--harness`
+
+`--harness`는 **무엇을 쓸지**가 아니라 **무엇을 읽는지**로 갈린다. Codex·Grok·OpenCode는 루트 `AGENTS.md`를 직접 읽으므로 그 파일 하나면 되고, Claude Code는 `AGENTS.md`를 읽지 않고 `CLAUDE.md`를 읽으므로 `@AGENTS.md` 한 줄짜리 `CLAUDE.md`가 추가로 필요하다(Windows에서 심볼릭 링크는 관리자 권한을 요구해서 import를 쓴다). 그래서 `AGENTS.md`는 항상 설치되고, `CLAUDE.md`는 선택에 `claude`가 있을 때만 생긴다. 여러 하네스를 함께 쓰는 프로젝트가 흔하므로 다중 선택이 기본이며 — `--harness claude,codex` — 온보딩에서도 체크박스로 고른다. 모르는 이름을 주면 아무것도 쓰지 않고 종료 코드 1로 끝난다.
+
+기존 `AGENTS.md`가 있으면 건너뛴다. 워커 `setup_agentsmd`의 `--force`는 기존 파일을 `.bak.<타임스탬프>`로 백업한 뒤 덮어쓴다. 마찬가지로 `setup_hooks`의 `--default-mode <모드>`(`auto`/`bypassPermissions`/`default`/`acceptEdits`/`plan`)도 직접 쓸 수 있다 — 둘 다 온보딩이 내부적으로 쓰는 옵션이다.
+
+</details>
+
+<details>
+<summary><b>줄바꿈 키</b> — 어떻게 맞추고 무엇이 안 되는가</summary>
+
+## 줄바꿈 키
+
+CLI 에이전트의 프롬프트에서 **줄을 넣고 전송하지 않는** 키를 세 OS에서 같은 의미로 만든다. 값은 `shift-enter`(기본) 또는 `ctrl-enter` 하나다. **Enter 단독은 계속 전송**이고, 고르지 않은 쪽 수정 Enter는 각 에이전트 기본값 그대로 둔다.
+
+대상은 Claude Code CLI · Codex CLI · Grok Build CLI다. Gemini CLI와 Cursor/VS Code의 IDE 챗 입력창은 범위 밖이다(그쪽은 이미 Shift+Enter가 줄바꿈이다).
+
+`--newline`은 다른 플래그와 조합할 수 있다 — `--keybinds --newline ctrl-enter`는 키바인딩만 Ctrl+Enter로, `--no-onboard --newline ctrl-enter`는 전체 설치를 Ctrl+Enter로 한다. 재실행 시 `--newline`을 주지 않으면 매니페스트에 기록된 이전 선택을 그대로 쓰고, 기록이 없으면 `shift-enter`다. 값이 둘 중 하나가 아니면 아무것도 쓰지 않고 종료 코드 1로 끝난다.
+
+### 두 층으로 맞춘다
+
+1. **터미널 층** — Shift+Enter를 Enter와 구분하지 못하는 터미널(VS Code·Cursor 통합 터미널)에 `고른 키 → 줄바꿈 시퀀스` 바인딩을 넣는다. 시퀀스는 `ESC` + `CR` (바이트 `0x1B 0x0D`) 하나로 고정돼 있고, `when`은 `terminalFocus`만 걸어 에디터·노트북의 Shift+Enter는 건드리지 않는다. POSIX에서는 `~/.tmux.conf`에 `extended-keys`가 없을 때만 추가한다 — 이게 꺼져 있으면 tmux가 수정 Enter를 통째로 삼킨다.
+2. **에이전트 층** — Claude `~/.claude/keybindings.json`의 `Chat` 컨텍스트에 `chat:newline`을, Codex `~/.codex/config.toml`의 `insert_newline`에 고른 키를 **합집합**으로 넣는다. Grok은 키맵을 리맵할 수 없으므로 파일을 만들지 않는다 — 터미널이 보내는 시퀀스에만 의존한다.
+
+Windows Terminal·iTerm2·Ghostty·Kitty·WezTerm 같은 터미널은 Shift+Enter를 이미 Enter와 다르게 보낸다. 여기에 Shift+Enter 시퀀스를 **덧붙이면 줄바꿈이 두 번** 생기므로, `shift-enter`를 고른 경우 Windows Terminal에는 줄바꿈 바인딩을 **넣지 않는다**(이전 설치가 넣어둔 관리 항목이 있으면 그것만 정리한다). `ctrl-enter`를 고른 경우에만 `Ctrl+Enter` 번역을 넣는다.
+
+VS Code / Cursor `keybindings.json` 경로는 OS별로 다르다 — Windows `%APPDATA%\Code\User\`, macOS `~/Library/Application Support/Code/User/`, Linux `~/.config/Code/User/`.
+
+### 파일을 어떻게 고치나
+
+바꾸기 전 원본을 `<파일>.bak.<타임스탬프>`로 남기고, 임시 파일에 쓴 뒤 교체한다 — 쓰기 도중 끊겨도 원본이 반쯤 잘리지 않는다. 대상이 심볼릭 링크면(dotfile 관리자를 쓰는 경우) 링크를 갈아치우지 않고 가리키는 실체를 고치며, 기존 파일 권한을 그대로 옮긴다. `keybindings.json`은 파싱 후 다시 직렬화하므로 **파일 안의 주석과 들여쓰기 서식은 사라진다**(설정 값과 항목은 전부 보존된다). VS Code가 허용하는 트레일링 콤마는 우리도 읽는다. 그래도 읽지 못한 대상이 있으면 그 사실을 목록으로 알리고 **0이 아닌 종료 코드**로 끝낸다 — 적용되지 않았는데 '완료'라고 말하지 않기 위해서다.
+
+### 안 되는 것
+
+- **gnome-terminal 등 Shift+Enter를 구분하지 못하는 터미널** — 로컬 세션에서는 맞출 수 없다. 설치는 실패하지 않고 경고만 남긴다. Linux는 로컬 gnome-terminal 대신 Windows Terminal/Cursor에서 `ssh`로 붙는 경로를 쓰면 그대로 동작한다.
+- **Grok의 `/multiline`(`/ml`, `Ctrl+M`) 모드** — 이 토글이 켜지면 Enter와 Shift+Enter의 의미가 **반대**가 된다(Enter=줄바꿈, Shift+Enter=전송). Grok은 키를 리맵할 수 없어 이 상태를 Claude/Codex와 한 키로 맞추는 것이 불가능하다. 설치기는 그 토글을 켜거나 끄지 않고 리포트에 한 줄 경고만 한다. 기준은 **Grok 기본 프롬프트(multiline 꺼짐)** 다.
+- **에이전트가 아예 없을 때** — 바이너리와 설정 디렉터리가 **둘 다** 없으면 그 에이전트는 건너뛰고 설치는 성공한다. 하나라도 있으면 키맵을 쓴다.
+
+</details>
+
+<details>
+<summary><b>제거가 되돌리는 것</b></summary>
+
+### 제거가 되돌리는 것
+
+`--uninstall`은 설치 시 기록한 매니페스트(`~/.claude/.claude-code-setup.json`)를 근거로 우리가 추가한 훅·allow/deny 항목·`model`/`effortLevel`/`language`만 제거하고, `defaultMode`를 이전 값으로 원복하며, 설치가 제거했던 구버전 규칙이 있다면 다시 넣어 준다. 사용자가 원래 갖고 있던 설정과 그 외 키는 그대로 보존되며 변경 전 `settings.json.bak.<타임스탬프>`를 남긴다. `settings.json`을 설치가 새로 만든 경우, 되돌린 뒤 비면 파일도 제거한다. 줄바꿈 키바인딩도 함께 되돌리는데, **무엇을 '우리 것'으로 볼지는 대상마다 다르다.**
+
+- **시그니처로 식별**(VS Code·Cursor): 명령 + `when` + 시퀀스가 우리가 쓰는 것과 정확히 같은 항목만 제거한다. 이 조합은 이 설치가 만들어내는 형태라, 누가 먼저 넣었든 같은 항목이다 — 예컨대 Claude `/terminal-setup`이 넣어둔 `shift+enter` → `sendSequence` 항목도 제거 대상이다. 시퀀스가 다른 사용자 항목(에디터·노트북의 Shift+Enter)은 그대로 둔다.
+- **영수증으로 식별**(tmux·Claude·Codex·Windows Terminal): `extended-keys` 줄, Claude의 `chat:newline`, Codex의 `shift-enter`는 전부 사용자가 직접 쓰는 값과 글자까지 같다. 값이 같다는 이유로 지우면 남의 설정을 지우는 것이므로, 매니페스트에 '설치가 넣었다'는 기록이 있는 항목만 되돌린다. 기록이 없으면 건드리지 않는다. 설치가 기존 값을 덮어썼다면 그 값도 기록해 두었다가 되돌린다.
+
+Codex의 기존 `ctrl-j` 처럼 우리가 넣지 않은 키는 남는다. 우리 키만 빠져 `insert_newline`이 비면 그 줄과 빈 `[tui.keymap.editor]` 테이블까지 지운다 — 빈 배열을 남기면 설치 전에 없던 '줄바꿈 전면 언바인드'라는 새 설정을 만드는 셈이기 때문이다. `--keybinds --uninstall`이면 키바인딩만 제거하고 훅은 건드리지 않는다.
+
+</details>
+
+<details>
+<summary><b>온보딩</b> — 파이프 설치에서 프롬프트가 동작하는 이유</summary>
+
+## 온보딩
+
+### `curl | sh`에서 대화형 프롬프트가 동작하는 이유
+
+`curl -fsSL install.sh | sh`는 **stdin이 스크립트 본문**이다. 이 상태에서 프롬프트가 stdin을 읽으면 스크립트의 나머지를 삼키거나 EOF를 만난다. 후보 라이브러리 네 개를 pty 위에서 실측해보면 결과가 이렇다:
+
+| 라이브러리 | 일반 실행 | `curl \| sh` | `/dev/tty` 재바인딩 후 |
+| --- | --- | --- | --- |
+| **questionary** (채택) | ✅ | ❌ **조용히 첫 항목 확정** | ✅ |
+| InquirerPy | ✅ | ❌ `EOFError` | ✅ |
+| beaupy | ✅ | ❌ | ❌ 멈춤 |
+| cutie | ✅ | ❌ | ✅ |
+
+주목할 건 questionary의 실패 방식이다 — 에러도 경고도 없이 **첫 항목("전체 설치")을 자동으로 확정**한다. 사용자가 아무것도 고르지 않았는데 전역 설치가 진행되는, 가장 위험한 실패 모드다.
+
+그래서 `res/onboard.py`는 프롬프트를 띄우기 전에 제어 터미널(POSIX `/dev/tty`, Windows `CONIN$`/`CONOUT$`)을 직접 열어 fd 0/1에 얹는다. 터미널을 못 열면 대화형을 **아예 포기한다** — 라이브러리에게 판단을 맡기지 않는다.
+
+### 물어볼 수 없을 때와 사용자가 거부했을 때는 다르다
+
+온보딩은 종료 코드로 세 상황을 구분하고, 호출부는 이를 다르게 처리한다:
+
+| 코드 | 상황 | 설치 동작 |
+| --- | --- | --- |
+| `0` | 사용자가 선택을 마침 | 고른 대로 실행 |
+| `2` | 물어볼 수 없음 (TTY 없음 / CI / 벤더 깨짐) | **예전 기본값으로 그대로 진행** — 실패가 아니다 |
+| `130` | 사용자가 `Ctrl+C`로 취소 | **아무것도 설치하지 않고 중단** |
+
+`2`와 `130`을 뭉뚱그리면 "취소했는데 기본값으로 설치되는" 동작이 된다. CI 감지는 TTY 검사와 별도로 둔다 — `docker -t`나 tmux처럼 CI가 TTY를 붙여주는 경우가 있어 TTY 유무만으로는 못 거른다.
+
+### 의존성을 설치하지 않고 레포에 넣어둔 이유
+
+온보딩은 `questionary`(+`prompt_toolkit`, `wcwidth`)를 쓰는데, 이를 [`res/vendor/`](res/vendor/)에 벤더링해 둔다. 설치 중에 `pip install`을 하지 않기 위해서다 — 최신 배포판은 PEP 668(`externally-managed-environment`)로 시스템 Python에 대한 `pip install`을 거부하고, 네트워크가 막힌 환경에서는 설치가 통째로 실패한다. 설치 스크립트가 사용자의 파이썬 환경을 바꾸는 것 자체도 적절하지 않다.
+
+벤더링 갱신 방법과 주의사항(특히 `prompt_toolkit`의 `dist-info/METADATA`를 지우면 프롬프트를 띄우는 순간 죽는다)은 [`res/vendor/README.md`](res/vendor/README.md)에 있다.
+
+온보딩은 [`tests/test_onboard.py`](tests/test_onboard.py)가 **pty 위에서 실제 키 입력까지 재현해** 검증한다 — 일반 실행, 파이프 설치, `Ctrl+C` 취소, TTY 없는 환경, 기존 `AGENTS.md`가 있는 경우까지. 프롬프트가 "뜨는지"보다 **띄울 수 없을 때 아무것도 고르지 않는지**가 더 중요하므로 양쪽을 같은 비중으로 고정한다.
+
+</details>
+
+<details>
+<summary><b>개발 · 테스트</b> — 저장소 구조와 테스트 실행</summary>
+
+## 개발 · 테스트
+
+### 저장소 구조
 
 ```
 res/
@@ -337,22 +359,17 @@ docs/                       # 인증 등 부가 문서
 tests/                      # pytest(훅·병합) + bats(bash) + Pester(PowerShell)
 ```
 
----
+### 테스트
 
-## 개발 · 테스트
+가드 훅과 병합 엔진은 블랙박스로 테스트한다 (JSON을 stdin으로 넣고 판정을 검증). git 백업은 판정뿐 아니라 **실제 git 저장소에서** 스냅샷이 작업을 보존·복구하는지까지 확인한다 ([`tests/test_git_snapshot.py`](tests/test_git_snapshot.py)).
 
-가드 훅과 병합 엔진은 블랙박스로 테스트한다 (JSON을 stdin으로 넣고 판정을 검증). git 정책은
-판정뿐 아니라 **실제 git 저장소에서 실측**한다 — 자동치환(stash-prepend)이 진짜로 작업을
-보존·복구하는지, 안전 판정한 명령이 정말 안전한지까지 확인한다 ([`tests/test_git_guard_realworld.py`](tests/test_git_guard_realworld.py)).
-
-러너가 세 개(pytest / bats / Pester)라 하나씩 기억해 돌리기 번거롭다. `scripts/test.sh`(POSIX)와
-`scripts/test.ps1`(Windows)이 **설치된 러너를 찾아 전부 실행하고 통과·실패·건너뜀을 구분해 보고**한다.
+러너가 세 개(pytest / bats / Pester)라 `scripts/test.sh`(POSIX)와 `scripts/test.ps1`(Windows)이 **설치된 러너를 찾아 전부 실행하고 통과·실패·건너뜀을 구분해 보고**한다.
 
 ```sh
 bash scripts/test.sh                     # 있는 러너로 전부
 bash scripts/test.sh --python-only       # pytest 만
 bash scripts/test.sh --strict            # 러너 미설치로 건너뛴 것도 실패 취급 (CI용)
-bash scripts/test.sh -k git_guard        # 남은 인자는 pytest 로 전달
+bash scripts/test.sh -k git_snapshot     # 남은 인자는 pytest 로 전달
 
 CLAUDE_TEST_PYTHON=.venv/bin/python bash scripts/test.sh   # 인터프리터 직접 지정
 ```
@@ -372,7 +389,7 @@ import 되는** 인터프리터를 찾는데, venv 안이거나 pytest 가 그 �
 개별 러너를 직접 부를 수도 있다.
 
 ```sh
-python -m pytest tests/ -rs              # 훅 정책 + git 실측 + 병합 엔진 + 셋업 스크립트
+python -m pytest tests/ -rs              # 훅 정책 + git 스냅샷 + 병합 엔진 + 셋업 스크립트
 bats tests/setup.bats                    # 셋업 스크립트 (선택 — bats-core 필요)
 ```
 ```powershell
@@ -388,3 +405,5 @@ Linux에 python3.9를 설치하면 그쪽에서도 돈다.
 ([`tests/test_setup_scripts.py`](tests/test_setup_scripts.py)). [`tests/test_hook_compat.py`](tests/test_hook_compat.py)는
 훅이 구버전 python3(macOS 3.9.x)에서도 죽지 않는지 확인한다 — 훅이 예외로 죽으면 Claude Code는
 가드 없이 명령을 실행하므로(fail-open), 최신 인터프리터로만 테스트하면 위험하다.
+
+</details>
