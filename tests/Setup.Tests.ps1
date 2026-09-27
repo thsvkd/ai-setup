@@ -132,14 +132,16 @@ Describe "install.ps1 bootstrap" {
     # 으로 거절하던 회귀. 존재하지 않는 레포를 가리켜 다운로드 단계에서 멈추게 하므로 설치는
     # 일어나지 않고, 오프라인이어도 결론은 같다.
     It "인자 없이 실행해도 옵션 검사를 통과한다" {
-        $oldRepo, $oldTok, $oldUP = $env:CLAUDE_SETUP_REPO, $env:GITHUB_TOKEN, $env:USERPROFILE
+        $oldRepo, $oldTok, $oldUP, $oldTemp = $env:CLAUDE_SETUP_REPO, $env:GITHUB_TOKEN, $env:USERPROFILE, $env:TEMP
         $env:CLAUDE_SETUP_REPO = "thsvkd/does-not-exist-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
         $env:GITHUB_TOKEN = "invalid"
         $env:USERPROFILE = [System.IO.Path]::GetTempPath()
+        # install.ps1 은 Windows 부트스트랩이라 $env:TEMP 를 쓴다. Linux/macOS 의 pwsh 에는 없다.
+        $env:TEMP = [System.IO.Path]::GetTempPath()
         try {
             $r = Invoke-ScriptInline (Join-Path $script:RepoRoot "install.ps1") ""
         } finally {
-            $env:CLAUDE_SETUP_REPO, $env:GITHUB_TOKEN, $env:USERPROFILE = $oldRepo, $oldTok, $oldUP
+            $env:CLAUDE_SETUP_REPO, $env:GITHUB_TOKEN, $env:USERPROFILE, $env:TEMP = $oldRepo, $oldTok, $oldUP, $oldTemp
         }
         $r.Output | Should -Not -Match "알 수 없는 옵션"
         $r.Output | Should -Match "다운로드 실패"
