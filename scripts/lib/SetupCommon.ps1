@@ -312,23 +312,25 @@ function Uninstall-Hooks {
         Remove-Item -Force $shimsDir -ErrorAction SilentlyContinue
     }
 
-    # 매니페스트: keybinds 영수증이 남아 있으면 그 섹션만 남기고 훅 흔적만 지운다.
-    # 통째로 지우면 키바인드 uninstall 이 '우리가 넣은 tmux 줄' 을 식별할 근거를 잃는다.
+    # 매니페스트: 다른 워커의 영수증(keybinds, omc_hud)이 남아 있으면 그 섹션만 남기고 훅 흔적만 지운다.
+    # 통째로 지우면 키바인드 uninstall 이 '우리가 넣은 tmux 줄' 을, OMC uninstall 이 '우리가 넣은
+    # refreshInterval' 을 식별할 근거를 잃는다.
     if (Test-Path $manifestPath) {
         if ($DryRun) {
             Write-Host "  🧪 (dry-run) 제거 예정: $manifestPath"
         } else {
-            $keptKeybinds = $null
+            $payload = [ordered]@{}
             try {
                 $m = Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-                if ($m -and $m.PSObject.Properties.Name -contains "keybinds" -and $m.keybinds) {
-                    $keptKeybinds = $m.keybinds
+                foreach ($key in @("keybinds", "omc_hud")) {
+                    if ($m -and $m.PSObject.Properties.Name -contains $key -and $m.$key) {
+                        $payload[$key] = $m.$key
+                    }
                 }
-            } catch { $keptKeybinds = $null }
-            if ($null -ne $keptKeybinds) {
-                $payload = [ordered]@{ keybinds = $keptKeybinds }
+            } catch { $payload = [ordered]@{} }
+            if ($payload.Count -gt 0) {
                 Set-Content -Path $manifestPath -Value ($payload | ConvertTo-Json -Depth 20) -Encoding UTF8
-                Write-Host "  🧾 유지: $manifestPath (키바인드 영수증만 남김)"
+                Write-Host "  🧾 유지: $manifestPath (다른 워커의 영수증만 남김)"
             } else {
                 Remove-Item -Force $manifestPath -ErrorAction SilentlyContinue
                 Write-Host "  🗑️  제거: $manifestPath"

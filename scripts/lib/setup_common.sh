@@ -128,15 +128,16 @@ uninstall_hooks() {
         fi
     done
 
-    # 매니페스트: keybinds 영수증이 남아 있으면 그 섹션만 남기고 훅 흔적만 지운다.
-    # 통째로 지우면 키바인드 uninstall 이 '우리가 넣은 tmux 줄' 을 식별할 근거를 잃는다.
+    # 매니페스트: 다른 워커의 영수증(keybinds, omc_hud)이 남아 있으면 그 섹션만 남기고 훅 흔적만 지운다.
+    # 통째로 지우면 키바인드 uninstall 이 '우리가 넣은 tmux 줄' 을, OMC uninstall 이 '우리가 넣은
+    # refreshInterval' 을 식별할 근거를 잃는다.
     if [[ -f "$manifest" ]]; then
         if [[ "$dry_run" -eq 1 ]]; then
             echo "  🧪 (dry-run) 제거 예정: $manifest"
         else
-            "$py_exe" -c "import json,os,sys; p=sys.argv[1]; d=json.load(open(p,encoding='utf-8')); kb=d.get('keybinds') if isinstance(d,dict) else None; json.dump({'keybinds':kb},open(p,'w',encoding='utf-8'),ensure_ascii=False,indent=2) if kb else os.remove(p)" "$manifest" 2>/dev/null || rm -f "$manifest"
+            "$py_exe" -c "import json,os,sys; p=sys.argv[1]; d=json.load(open(p,encoding='utf-8')); kept={k:d[k] for k in ('keybinds','omc_hud') if isinstance(d,dict) and d.get(k)}; json.dump(kept,open(p,'w',encoding='utf-8'),ensure_ascii=False,indent=2) if kept else os.remove(p)" "$manifest" 2>/dev/null || rm -f "$manifest"
             if [[ -f "$manifest" ]]; then
-                echo "  🧾 유지: $manifest (키바인드 영수증만 남김)"
+                echo "  🧾 유지: $manifest (다른 워커의 영수증만 남김)"
             else
                 echo "  🗑️  제거: $manifest"
             fi

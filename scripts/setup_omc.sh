@@ -55,10 +55,14 @@ if ! command -v claude &>/dev/null; then
 fi
 
 echo "── OMC 플러그인 ────────────────────────"
-if claude plugin list 2>/dev/null | grep -q "oh-my-claudecode@"; then
+# 출력을 먼저 받아 두고 검사한다. pipefail 아래에서 grep -q 가 일찍 끝나면 claude 가 EPIPE 로
+# 실패해 '미설치' 로 오판할 수 있다.
+plugins="$(claude plugin list 2>/dev/null || true)"
+if [[ "$plugins" == *"oh-my-claudecode@"* ]]; then
     echo "  • 이미 설치됨: $OMC_PLUGIN"
 else
-    if ! claude plugin marketplace list 2>/dev/null | grep -q "$OMC_MARKETPLACE_REPO"; then
+    marketplaces="$(claude plugin marketplace list 2>/dev/null || true)"
+    if [[ "$marketplaces" != *"$OMC_MARKETPLACE_REPO"* ]]; then
         run claude plugin marketplace add "$OMC_MARKETPLACE_REPO"
     fi
     run claude plugin install "$OMC_PLUGIN"

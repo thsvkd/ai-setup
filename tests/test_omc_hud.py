@@ -148,7 +148,7 @@ def test_남은_TTL을_분으로_보여준다():
 @needs_node
 def test_2분_이하는_노랑_1분_미만은_초로_보여준다():
     out = run_ttl({"prompt_cache": {"warm": True, "expires_at": time.time() + 45}}, HUD)
-    assert "cache:\x1b[33m4" in out and "s\x1b[0m" in out
+    assert "cache:\x1b[33m44s\x1b[0m" in out or "cache:\x1b[33m45s\x1b[0m" in out
 
 
 @needs_node
@@ -158,9 +158,73 @@ def test_만료되면_cold로_보여준다():
 
 
 @needs_node
-def test_캐시_정보가_없으면_대시로_보여준다():
-    out = run_ttl({}, HUD)
-    assert "cache:\x1b[2m-\x1b[0m" in out
+def test_캐시_정보가_없으면_session_표시를_그대로_둔다():
+    """구버전 Claude Code 처럼 prompt_cache 가 없으면 쓸모 있는 세션 시간을 지우지 않는다."""
+    assert run_ttl({}, HUD) == HUD + "\n"
+
+
+@needs_node
+def test_안쪽_명령의_실패를_종료코드와_stderr로_전달한다():
+    proc = subprocess.run(
+        ["node", str(TTL), sys.executable, "-c", "import sys; sys.stderr.write('boom'); sys.exit(3)"],
+        input="{}", capture_output=True, text=True, encoding="utf-8", timeout=30,
+    )
+    assert proc.returncode == 3
+    assert "boom" in proc.stderr
+
+
+def test_statusLine이_없던_설치는_uninstall이_만든_것을_모두_치운다(home):
+    assert apply(home).returncode == 0
+    assert apply(home, "--uninstall").returncode == 0
+    assert not (home / ".claude" / "settings.json").exists()
+    assert not (home / ".claude" / "hud").exists()
+    assert not (home / ".claude" / ".claude-code-setup.json").exists()
+
+
+def test_설치_뒤_사용자가_바꾼_refreshInterval은_uninstall이_남긴다(home):
+    write_settings(home, {"statusLine": {"type": "command", "command": OMC_CMD}})
+    assert apply(home).returncode == 0
+    data = settings(home)
+    data["statusLine"]["refreshInterval"] = 2
+    write_settings(home, data)
+    assert apply(home, "--uninstall").returncode == 0
+    assert settings(home)["statusLine"] == {"type": "command", "command": OMC_CMD, "refreshInterval": 2}
+
+
+def test_OMC가_아닌_statusLine이면_hud_파일도_만들지_않는다(home):
+    write_settings(home, {"statusLine": {"type": "command", "command": "~/my-status.sh"}})
+    assert apply(home).returncode == 0
+    assert not (home / ".claude" / "hud").exists()
+
+
+def test_깨진_매니페스트는_덮어쓰지_않고_멈춘다(home):
+    write_settings(home, {"statusLine": {"type": "command", "command": OMC_CMD}})
+    manifest = home / ".claude" / ".claude-code-setup.json"
+    manifest.write_text('{ "hook_files": [', encoding="utf-8")
+    assert apply(home).returncode == 1
+    assert manifest.read_text(encoding="utf-8") == '{ "hook_files": ['
+    assert "omc-hud-ttl" not in settings(home)["statusLine"]["command"]
+
+
+def test_재실행은_settings를_다시_쓰지_않아_백업이_쌓이지_않는다(home):
+    write_settings(home, {"statusLine": {"type": "command", "command": OMC_CMD}})
+    assert apply(home).returncode == 0
+    backups = set((home / ".claude").glob("settings.json.bak.*"))
+    assert apply(home).returncode == 0
+    assert set((home / ".claude").glob("settings.json.bak.*")) == backups
+
+
+@pytest.mark.skipif(os.name == "nt", reason="find-node.sh 는 POSIX 전용")
+def test_OMC의_find_node가_있으면_그것으로_node를_찾는다(home):
+    """PATH 에 node 가 없는 셸에서도 OMC HUD 가 뜨던 곳이면 래퍼도 떠야 한다."""
+    (home / ".claude" / "hud").mkdir()
+    (home / ".claude" / "hud" / "find-node.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    write_settings(home, {"statusLine": {"type": "command", "command": OMC_CMD}})
+    assert apply(home).returncode == 0
+    command = settings(home)["statusLine"]["command"]
+    assert command.startswith('sh "$HOME/.claude/hud/find-node.sh" "$HOME/.claude/hud/omc-hud-ttl.mjs" ')
+    assert apply(home, "--uninstall").returncode == 0
+    assert settings(home)["statusLine"]["command"] == OMC_CMD
 
 
 # ── setup.sh --omc: claude CLI 는 스텁 ────────────────────────────────
@@ -212,6 +276,18 @@ def test_setup_omc_dry_run은_claude를_실행하지_않는다(tmp_path, home):
     assert "(dry-run) claude plugin install oh-my-claudecode@omc" in proc.stdout
     assert "install" not in log.read_text(encoding="utf-8")
     assert not (home / ".claude" / "settings.json").exists()
+
+
+@posix_only
+def test_훅만_먼저_제거해도_OMC_영수증이_남아_나중에_refreshInterval을_되돌린다(tmp_path, home):
+    bin_dir, _ = stub_claude(tmp_path, installed=True)
+    write_settings(home, {"statusLine": {"type": "command", "command": OMC_CMD}})
+    assert run_setup(["--omc"], home, bin_dir).returncode == 0
+    proc = run_setup(["--uninstall", "--hooks"], home, bin_dir)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    proc = run_setup(["--uninstall", "--omc"], home, bin_dir)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert settings(home)["statusLine"] == {"type": "command", "command": OMC_CMD}
 
 
 @posix_only

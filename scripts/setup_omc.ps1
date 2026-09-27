@@ -57,11 +57,19 @@ function Invoke-Step([string[]]$CliArgs) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
+# Windows PowerShell 5.1 은 Stop 아래에서 네이티브 명령의 stderr 리디렉션을 종료 오류로 승격한다.
+# 목록 조회는 실패해도 '미설치' 로 보고 진행하면 되므로 이 구간만 Continue 로 읽는다.
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$plugins = & claude plugin list 2>$null | Out-String
+$marketplaces = & claude plugin marketplace list 2>$null | Out-String
+$ErrorActionPreference = $prevEap
+
 Write-Host "── OMC 플러그인 ────────────────────────"
-if ((& claude plugin list 2>$null | Out-String) -match "oh-my-claudecode@") {
+if ($plugins -match "oh-my-claudecode@") {
     Write-Host "  • 이미 설치됨: $OmcPlugin"
 } else {
-    if ((& claude plugin marketplace list 2>$null | Out-String) -notmatch [regex]::Escape($OmcMarketplaceRepo)) {
+    if ($marketplaces -notmatch [regex]::Escape($OmcMarketplaceRepo)) {
         Invoke-Step @("plugin", "marketplace", "add", $OmcMarketplaceRepo)
     }
     Invoke-Step @("plugin", "install", $OmcPlugin)
