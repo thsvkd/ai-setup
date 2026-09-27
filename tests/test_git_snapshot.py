@@ -290,6 +290,7 @@ def test_plain_push_to_remote_default_branch_passes(repo, tmp_path):
     "git -C . push -f origin main",
     "git -c core.x=y push -f origin main",
     "git push -f origin 'refs/heads/*:refs/heads/*'",
+    "git push -f origin :",                 # 일치하는 브랜치 전부
 ])
 def test_force_push_to_remote_default_branch_asks(repo, tmp_path, cmd):
     """덮어쓴 원격 커밋은 로컬 백업이 닿지 않는다."""
@@ -318,6 +319,17 @@ def test_push_mirror_asks(repo, tmp_path):
     """--mirror 는 원격에만 있는 ref 를 지우고 나머지를 강제로 맞춘다."""
     _with_origin(repo, tmp_path, "main")
     assert _decision("git push --mirror origin", repo) == "ask"
+
+
+def test_force_push_with_quoted_dash_c_path_asks(repo, tmp_path):
+    """`git -C "경로 공백"` 처럼 값이 따옴표로 묶여도 push 를 찾고, 판정은 -C 저장소에서 한다."""
+    _with_origin(repo, tmp_path, "main")
+    (tmp_path / "my repo").symlink_to(repo)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    assert _decision('git -C "%s" push -f origin main' % (tmp_path / "my repo"), elsewhere) == "ask"
+    assert _decision('git -c a=b -C "%s" push -f origin main' % (tmp_path / "my repo"), elsewhere) == "ask"
+    assert _decision('git -C "%s" push origin main' % (tmp_path / "my repo"), elsewhere) is None
 
 
 def test_push_prune_asks(repo, tmp_path):

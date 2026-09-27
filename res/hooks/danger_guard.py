@@ -155,8 +155,10 @@ LEADING_CD_RE = re.compile(r"^\s*cd\s+['\"]?([^\s'\";&|]+)")
 
 # --- git push -------------------------------------------------------------------
 
-# git 전역 옵션 중 -C/-c 는 값을 따로 받는다(`git -C dir push`).
-PUSH_RE = re.compile(r"\bgit\b(?:\s+-[Cc]\s+\S+|\s+-\S+|\s+--\S+=\S+)*\s+push\b([^\n;&|]*)")
+# git 전역 옵션 중 값을 따로 받는 것들(`git -C "my repo" push`). 정규식으로는 따옴표로 묶인
+# 값을 넘길 수 없어 구간을 shlex 로 나눠 본다.
+GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env",
+                  "--super-prefix"}
 PUSH_VALUE_OPTS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
 PUSH_ALL_FLAGS = {"--all", "--branches"}
 PUSH_DELETE_FLAGS = {"--delete", "-d"}
@@ -345,6 +347,31 @@ def _default_branches(cwd):
     return {"main", "master"}
 
 
+def _find_push(command):
+    """명령에서 `git … push` 를 찾는다. 반환: (push 뒤 인자들, -C 디렉터리들) 또는 None."""
+    for segment in SEGMENT_SPLIT_RE.split(command):
+        if "push" not in segment:
+            continue
+        try:
+            toks = shlex.split(segment)
+        except ValueError:
+            continue
+        for i, tok in enumerate(toks):
+            if os.path.basename(tok) != "git":
+                continue
+            j, dirs = i + 1, []
+            while j < len(toks) and toks[j].startswith("-"):
+                if toks[j] in GIT_VALUE_OPTS and j + 1 < len(toks):
+                    if toks[j] == "-C":
+                        dirs.append(toks[j + 1])
+                    j += 2
+                else:
+                    j += 1
+            if j < len(toks) and toks[j] == "push":
+                return toks[j + 1:], dirs
+    return None
+
+
 def push_ask_reason(command, cwd):
     """원격 커밋을 지울 수 있는 push 만 확인한다.
 
@@ -352,14 +379,13 @@ def push_ask_reason(command, cwd):
     히스토리를 지우지 않으므로(되돌리려면 revert) 통과시킨다 — 실사용 로그에서 이 확인은
     23건 모두 평범한 작업 흐름을 멈춰 세우기만 했다.
     """
-    m = PUSH_RE.search(command)
-    if not m:
+    found = _find_push(command)
+    if not found:
         return None
-    if _git(["rev-parse", "--git-dir"], cwd).returncode != 0:
-        return None
-    try:
-        args = shlex.split(m.group(1))
-    except ValueError:
+    args, dirs = found
+    for d in dirs:                          # 판정은 push 가 실제로 도는 저장소에서 한다
+        cwd = os.path.join(cwd, os.path.expanduser(d))
+    if not os.path.isdir(cwd) or _git(["rev-parse", "--git-dir"], cwd).returncode != 0:
         return None
 
     protected = _default_branches(cwd)
@@ -408,7 +434,7 @@ def push_ask_reason(command, cwd):
             if not (force or spec.startswith("+")):   # `+` 는 그 refspec 만 force 한다
                 continue
             dst = spec.split(":")[-1].lstrip("+")
-            if "*" in dst:                            # 글로브는 기본 브랜치도 덮는다
+            if "*" in dst or not dst:                 # 글로브·`:`(일치 브랜치 전부)는 기본 브랜치도 덮는다
                 targets.extend(protected)
             elif dst in ("HEAD", "@"):
                 targets.append(current_branch())
@@ -439,7 +465,8 @@ def write_shim_path(env_file):
         d = "/" + drive.rstrip(":").lower() + rest.replace("\\", "/")
     q = shlex.quote(d)
     # startup/resume/clear/compact 마다 다시 불려 줄이 쌓여도 PATH 가 길어지지 않게 한다.
-    with open(env_file, "a", encoding="utf-8") as f:
+    # newline 고정: Windows 텍스트 모드는 \r\n 을 쓰고, bash 는 그 줄을 문법 오류로 버린다.
+    with open(env_file, "a", encoding="utf-8", newline="\n") as f:
         f.write('case ":$PATH:" in *:%s:*) ;; *) PATH=%s:$PATH; export PATH ;; esac\n' % (q, q))
 
 

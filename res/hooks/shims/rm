@@ -41,11 +41,21 @@ if [ -z "$TRASH" ] && [ -z "$TRASH_PY" ]; then
     exec "$REAL_RM" "$@"
 fi
 
-# 실제 홈은 $HOME 이 아니라 사용자 DB 에서 구한다(`~이름` 은 getpwnam 조회). 테스트·스크립트가
-# HOME 을 임시 디렉터리로 바꿔 두고 정리하는 `rm -rf "$HOME"` 을 홈 삭제로 오인해 막지 않기
-# 위해서다 — bats 의 샌드박스 teardown 이 실제로 막혔다. 조회에 실패하면 $HOME 으로 대신한다.
-REAL_HOME=$(eval "printf %s ~$(id -un 2>/dev/null)" 2>/dev/null) || REAL_HOME=""
-case "$REAL_HOME" in /*) ;; *) REAL_HOME=${HOME:-} ;; esac
+# 보호할 홈은 둘이다. 사용자 DB 의 홈(`~이름` 은 getpwnam 조회)과 $HOME. 다만 $HOME 이 tmp 아래면
+# 테스트·스크립트가 HOME 을 임시 디렉터리로 바꿔 둔 것이므로 보호하지 않는다 — bats 의 샌드박스
+# teardown(`rm -rf "$HOME"`)이 실제로 막혔다. 컨테이너(-e HOME=…)나 `sudo -E` 처럼 $HOME 이
+# 진짜 홈인 경우는 tmp 아래가 아니므로 그대로 보호된다.
+PW_HOME=""
+_user=$(id -un 2>/dev/null) || _user=""
+case "$_user" in
+    ''|*[!A-Za-z0-9._-]*) ;;               # eval 에 셸 문법이 섞이지 않게 안전한 이름만
+    *) PW_HOME=$(eval "printf %s ~$_user" 2>/dev/null) || PW_HOME="" ;;
+esac
+case "$PW_HOME" in /*) ;; *) PW_HOME="" ;; esac
+ENV_HOME=${HOME:-}
+case "$ENV_HOME/" in
+    /tmp/*|/private/tmp/*|/var/folders/*|/private/var/folders/*|/dev/shm/*|/run/user/*) ENV_HOME="" ;;
+esac
 
 # --- 1차 통과: "$@" 를 보존한 채 훑는다. 원본 rm 에게 넘길 판정을 여기서 모두 끝낸다.
 force=0
@@ -86,7 +96,8 @@ for a in "$@"; do
     esac
 
     # 루트/홈 전체 삭제는 어느 경로로 와도 거부한다.
-    if [ "$abs" = "/" ] || { [ -n "$REAL_HOME" ] && [ "$abs" = "${REAL_HOME%/}" ]; }; then
+    if [ "$abs" = "/" ] || { [ -n "$PW_HOME" ] && [ "$abs" = "${PW_HOME%/}" ]; } \
+        || { [ -n "$ENV_HOME" ] && [ "$abs" = "${ENV_HOME%/}" ]; }; then
         echo "rm(shim): 루트/홈 디렉터리 전체($a) 삭제는 거부합니다." >&2
         exit 1
     fi

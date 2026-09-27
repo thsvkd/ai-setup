@@ -101,10 +101,21 @@ def test_matches_real_rm(name, script):
 REFUSED = ["rm -rf ~", 'rm -rf "$HOME"', "rm -rf /"]
 
 
+def _fake_trash_path(tmp_path):
+    """아무것도 지우지 않는 trash-put 을 앞세운 PATH. 거부 테스트가 실제 홈을 대상으로 하므로,
+    셰임이 퇴행해도 실제로는 아무것도 옮겨지지 않게 한다."""
+    fake = tmp_path / "fakebin"
+    fake.mkdir(exist_ok=True)
+    (fake / "trash-put").write_text('#!/bin/sh\necho "TRASHED $*"\n', encoding="utf-8")
+    (fake / "trash-put").chmod(0o755)
+    return os.pathsep.join([str(SHIM_DIR), str(fake), "/usr/bin", "/bin"])
+
+
 @pytest.mark.parametrize("script", REFUSED)
-def test_root_and_home_are_refused(script):
+def test_root_and_home_are_refused(script, tmp_path):
     env = dict(os.environ)
-    env["PATH"] = str(SHIM_DIR) + os.pathsep + env["PATH"]
+    env.pop("CLAUDE_NO_TRASH", None)
+    env["PATH"] = _fake_trash_path(tmp_path)
     proc = subprocess.run(["bash", "-c", script], cwd=str(BASE), env=env,
                           capture_output=True, text=True)
     assert proc.returncode != 0
@@ -165,21 +176,45 @@ def test_macos_builtin_trash_is_used_when_trash_put_is_absent(tmp_path):
     assert sorted(p.name for p in bin_dir.iterdir()) == ["-weird", "a.txt", "sub"]
 
 
-def test_sandboxed_home_can_be_cleaned_up(tmp_path):
+def test_sandboxed_home_under_tmp_can_be_cleaned_up(tmp_path):
     """테스트·스크립트가 HOME 을 임시 디렉터리로 바꿔 두고 `rm -rf "$HOME"` 으로 정리하는 것은
-    홈 삭제가 아니다. 실제 홈은 $HOME 이 아니라 사용자 DB 에서 구해야 한다 — bats 의 샌드박스
-    teardown 이 이 오인으로 막혔다. 가짜 trash-put 이라 아무것도 지우지 않는다."""
-    fake = tmp_path / "bin"
-    fake.mkdir()
-    (fake / "trash-put").write_text('#!/bin/sh\necho "TRASHED $*"\n', encoding="utf-8")
-    (fake / "trash-put").chmod(0o755)
-    sandbox = BASE / "sandbox-home"
-    sandbox.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, HOME=str(sandbox))
+    홈 삭제가 아니다 — bats 의 샌드박스 teardown 이 이 오인으로 막혔다."""
+    sandbox = tmp_path / "sandbox-home"
+    sandbox.mkdir()
+    env = dict(os.environ, HOME=str(sandbox), PATH=_fake_trash_path(tmp_path))
     env.pop("CLAUDE_NO_TRASH", None)
-    env["PATH"] = os.pathsep.join([str(SHIM_DIR), str(fake), "/usr/bin", "/bin"])
     proc = subprocess.run(["bash", "-c", 'rm -rf "$HOME"'], env=env,
                           capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
     assert "거부" not in proc.stderr
-    assert "TRASHED -- %s" % sandbox in proc.stdout
+
+
+def test_overridden_home_outside_tmp_is_still_refused(tmp_path):
+    """컨테이너(-e HOME=…)·`sudo -E` 처럼 passwd 홈과 $HOME 이 다르면 $HOME 도 진짜 홈이다."""
+    app_home = BASE / "app-home"
+    app_home.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, HOME=str(app_home), PATH=_fake_trash_path(tmp_path))
+    env.pop("CLAUDE_NO_TRASH", None)
+    proc = subprocess.run(["bash", "-c", 'rm -rf "$HOME"'], env=env,
+                          capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert "거부" in proc.stderr
+    assert app_home.is_dir()
+
+
+def test_username_is_not_evaluated_as_shell(tmp_path):
+    """실제 홈 조회에 `~이름` 을 eval 한다. 이름에 셸 문법이 섞여도 실행되면 안 된다."""
+    mark = tmp_path / "PWNED"
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    (fake / "id").write_text('#!/bin/sh\necho "x;touch %s"\n' % mark, encoding="utf-8")
+    (fake / "id").chmod(0o755)
+    (fake / "trash-put").write_text('#!/bin/sh\nexit 0\n', encoding="utf-8")
+    (fake / "trash-put").chmod(0o755)
+    d = BASE / "evalcheck"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "f").write_text("x", encoding="utf-8")
+    env = dict(os.environ, PATH=os.pathsep.join([str(SHIM_DIR), str(fake), "/usr/bin", "/bin"]))
+    env.pop("CLAUDE_NO_TRASH", None)
+    subprocess.run(["bash", "-c", "rm f"], cwd=str(d), env=env, capture_output=True)
+    assert not mark.exists()
