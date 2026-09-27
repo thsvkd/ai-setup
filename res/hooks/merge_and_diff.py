@@ -22,7 +22,9 @@ allow/deny/ask 는 합집합(중복 없이 뒤에 추가), defaultMode 는 덮�
 사용자에게 고르게 한 값(auto / bypassPermissions)을 전달하는 통로다. 조각(res/settings.json)
 자체는 건드리지 않으므로 SSoT 는 그대로 유지된다.
 
-usage: merge_and_diff.py [--default-mode <mode>] <fragment.json> <settings_path> <dry_run:0|1> <py_invoke> <hooks_dir> [manifest_path] [hook_files_csv]
+--windows 는 Windows 설치기가 넘긴다. 없으면 조각의 WINDOWS_ONLY_ENV 키를 빼고 병합한다.
+
+usage: merge_and_diff.py [--default-mode <mode>] [--windows] <fragment.json> <settings_path> <dry_run:0|1> <py_invoke> <hooks_dir> [manifest_path] [hook_files_csv]
        merge_and_diff.py --uninstall <settings_path> <dry_run:0|1> <manifest_path>
 """
 import copy
@@ -38,6 +40,10 @@ PY_RE = re.compile(r'[A-Za-z0-9_.\-]+\.py')
 # 스칼라 최상위 설정 키(단일 값). allow/deny 처럼 '없을 때만 추가'하고, 기존 값이 있으면
 # 사용자 선택을 그대로 보존한다. uninstall 은 '우리가 실제로 추가한' 키만 정밀 제거한다.
 SCALAR_KEYS = ("model", "effortLevel", "language")
+
+# Windows 설치기(--windows)에서만 병합하는 env 키. GRAFT_TEST_SYNC_RUN 은 Windows 에만 설치되는
+# graft_sync_hidden.cjs 를 가리키므로, POSIX 에 넣으면 graft 가 없는 파일을 보고 동기화를 건너뛴다.
+WINDOWS_ONLY_ENV = ("GRAFT_TEST_SYNC_RUN",)
 
 # 온보딩이 --default-mode 로 넘길 수 있는 값. Claude Code 가 실제로 아는 모드만 받는다 —
 # 오타가 그대로 settings.json 에 박히면 사용자는 모드가 왜 안 켜지는지 알 길이 없다.
@@ -500,14 +506,18 @@ def main() -> int:
     if argv and argv[0] == "--uninstall":
         return main_uninstall(argv[1:])
 
-    # 위치 인자 사이 어디에 와도 되도록 --default-mode 를 먼저 걷어낸다.
+    # 위치 인자 사이 어디에 와도 되도록 --default-mode / --windows 를 먼저 걷어낸다.
     default_mode = ""
+    windows = False
     positional = []
     i = 0
     while i < len(argv):
         if argv[i] == "--default-mode" and i + 1 < len(argv):
             default_mode = argv[i + 1]
             i += 2
+        elif argv[i] == "--windows":
+            windows = True
+            i += 1
         else:
             positional.append(argv[i])
             i += 1
@@ -519,7 +529,7 @@ def main() -> int:
         return 1
 
     if len(argv) < 5:
-        print("usage: merge_and_diff.py [--default-mode <mode>] <fragment.json> <settings_path> <dry_run> <py_invoke> <hooks_dir> [manifest_path] [hook_files_csv]",
+        print("usage: merge_and_diff.py [--default-mode <mode>] [--windows] <fragment.json> <settings_path> <dry_run> <py_invoke> <hooks_dir> [manifest_path] [hook_files_csv]",
               file=sys.stderr)
         return 1
 
@@ -537,6 +547,9 @@ def main() -> int:
         fragment = json.load(f)
     fragment.pop("_comment", None)
     fragment = substitute(fragment, {"{{PY}}": py_invoke, "{{HOOKS_DIR}}": hooks_dir})
+    if not windows:
+        for key in WINDOWS_ONLY_ENV:
+            fragment.get("env", {}).pop(key, None)
 
     # 온보딩이 고른 권한 모드로 조각의 기본값을 갈아끼운다 (조각 파일 자체는 그대로).
     if default_mode:
