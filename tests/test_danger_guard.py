@@ -2,14 +2,15 @@
 
 이 훅의 계약은 셋뿐이다.
   1) 되돌릴 수 없는 두 부류만 deny — 루트/홈 전체 삭제, 디스크 파괴.
-  2) 원격 기본 브랜치 push 만 ask.
-  3) 그 외에는 명령을 '한 글자도 바꾸지 않고' 통과시키되, 삭제가 섞여 있으면 셰임을
-     PATH/모듈로 끼워 넣는 선행 한 줄만 앞에 붙인다.
+  2) 원격 커밋을 지울 수 있는 push(기본 브랜치 force push, --mirror, 원격 브랜치 삭제)만 ask.
+  3) 그 외에는 명령을 '한 글자도 바꾸지 않고' 통과시킨다. Bash 셰임 PATH 는 SessionStart 가
+     CLAUDE_ENV_FILE 로 설정하고, PowerShell 삭제에만 모듈 Import 선행 한 줄을 붙인다.
 
 그래서 이 파일의 절반은 '무엇을 막는가'가 아니라 '무엇을 막지 않는가'다. 종전 가드가
 실사용 로그에서 실제로 오탐을 낸 명령들을 회귀 케이스로 박아 둔다.
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -187,32 +188,60 @@ def test_grep_for_dangerous_string_is_not_blocked():
 # --- 셰임 선행 줄 ----------------------------------------------------------------
 
 
-def test_bash_rm_gets_shim_path_prefix_and_keeps_command_verbatim():
-    original = 'rm -rf "$FOO/bar" && echo done'
-    p = payload_of(bash(original))
-    out = p["hookSpecificOutput"]
-    assert out["permissionDecision"] == "allow"
-    new = out["updatedInput"]["command"]
-    # 원문이 접미로 그대로 남아야 한다 — 한 글자라도 바꾸면 확장이 깨진다.
-    assert new.endswith(original)
-    assert new[: -len(original)].strip().startswith("case ")
-    assert "shims" in new
+def test_bash_rm_is_not_rewritten():
+    """Bash 명령은 건드리지 않는다. 명령을 바꾸면 권한 규칙이 바뀐 명령에 대해 평가돼
+    `Bash(rm *)` 같은 사용자 허용 규칙이 맞지 않게 되고(실측), 그렇다고 allow 를 붙이면
+    권한 체계를 통째로 우회한다. 셰임 PATH 는 SessionStart 가 맡는다."""
+    assert payload_of(bash('rm -rf "$FOO/bar" && echo done')) is None
 
 
-def test_bash_shim_prefix_is_idempotent_guarded():
-    p = payload_of(bash("rm x"))
-    prefix = p["hookSpecificOutput"]["updatedInput"]["command"]
-    # 툴 셸이 상태를 유지해도 PATH 가 무한히 길어지지 않아야 한다.
-    assert 'case ":$PATH:"' in prefix
+def _session_start(env_file):
+    ev = {"hook_event_name": "SessionStart", "source": "startup"}
+    env = dict(os.environ, CLAUDE_ENV_FILE=str(env_file))
+    return subprocess.run(
+        [sys.executable, "-X", "utf8", str(HOOK_PATH)], input=json.dumps(ev),
+        capture_output=True, text=True, encoding="utf-8", env=env)
 
 
-def test_bash_without_rm_is_untouched():
-    assert payload_of(bash("ls -la && git status")) is None
+def test_session_start_puts_shims_first_on_path_for_later_bash_commands(tmp_path):
+    env_file = tmp_path / "env.sh"
+    proc = _session_start(env_file)
+    assert proc.returncode == 0
+    # SessionStart 의 stdout 은 모델 컨텍스트에 들어간다 — 아무것도 내지 않는다.
+    assert not proc.stdout.strip()
+    # startup/resume/clear/compact 마다 다시 불려 같은 줄이 여러 번 쌓여도 PATH 는 한 번만 는다.
+    _session_start(env_file)
+    out = subprocess.run(
+        ["bash", "-c", '. "$1"; . "$1"; command -v rm; echo "$PATH"', "_", str(env_file)],
+        capture_output=True, text=True).stdout.splitlines()
+    shim_dir = str(HOOK_PATH.parent / "shims")
+    assert out[0] == os.path.join(shim_dir, "rm")
+    assert out[1].split(os.pathsep).count(shim_dir) == 1
+
+
+def test_session_start_without_env_file_is_harmless():
+    proc = subprocess.run(
+        [sys.executable, "-X", "utf8", str(HOOK_PATH)],
+        input=json.dumps({"hook_event_name": "SessionStart"}),
+        capture_output=True, text=True, encoding="utf-8",
+        env={k: v for k, v in os.environ.items() if k != "CLAUDE_ENV_FILE"})
+    assert proc.returncode == 0 and not proc.stdout.strip()
+
+
+def test_shim_prefix_keeps_other_tool_input_fields():
+    """updatedInput 은 입력 객체 전체를 대체한다. command 만 넘기면 timeout·
+    run_in_background 같은 필드가 조용히 사라진다."""
+    ev = {"tool_name": "PowerShell", "tool_input": {
+        "command": "Remove-Item x", "timeout": 600000, "run_in_background": True}}
+    new = payload_of(ev)["hookSpecificOutput"]["updatedInput"]
+    assert new["timeout"] == 600000
+    assert new["run_in_background"] is True
 
 
 def test_powershell_delete_gets_module_import_prefix():
     original = "Remove-Item -Recurse -Force .\\build"
     p = payload_of(ps(original))
+    assert "permissionDecision" not in p["hookSpecificOutput"]
     new = p["hookSpecificOutput"]["updatedInput"]["command"]
     assert new.endswith(original)
     assert "Import-Module" in new and "RmShim" in new

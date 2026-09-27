@@ -202,7 +202,13 @@ function Invoke-HookSelfTest {
         }
 
         $decision = $null
-        try { $decision = ($r.Stdout | ConvertFrom-Json).hookSpecificOutput.permissionDecision } catch { }
+        try {
+            $props = ($r.Stdout | ConvertFrom-Json).hookSpecificOutput.PSObject.Properties
+            # 셰임 선행 줄은 판정 없이 updatedInput 만 낸다 — allow 를 붙이면 권한 프롬프트를
+            # 건너뛴다. StrictMode 에서 없는 속성을 읽으면 예외이므로 존재 여부로 고른다.
+            if ($props['permissionDecision']) { $decision = $props['permissionDecision'].Value }
+            elseif ($props['updatedInput']) { $decision = 'updatedInput' }
+        } catch { }
         if (-not $decision) {
             $failures++
             Write-Host "     ❌ 판정을 파싱할 수 없습니다: $($r.Stdout)" -ForegroundColor Red

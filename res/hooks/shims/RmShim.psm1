@@ -48,9 +48,16 @@ function Send-ClaudeTrash {
     }
 
     $trash = Microsoft.PowerShell.Core\Get-Command trash-put -ErrorAction SilentlyContinue
-    if (-not $trash) { throw '휴지통 도구를 찾지 못했습니다.' }
-    & $trash.Source -- @Paths
-    if ($LASTEXITCODE -ne 0) { throw "trash-put 이 종료 코드 $LASTEXITCODE 로 실패했습니다." }
+    if ($trash) {
+        & $trash.Source -- @Paths
+    }
+    elseif ($IsMacOS -and ($trash = Microsoft.PowerShell.Core\Get-Command trash -ErrorAction SilentlyContinue)) {
+        # macOS 14.4+ 기본 /usr/bin/trash (shims/rm 과 같은 우선순위). `--` 지원이 문서화돼
+        # 있지 않지만 $Paths 는 Get-Item 의 FullName(절대경로)이라 대시로 시작하지 않는다.
+        & $trash.Source @Paths
+    }
+    else { throw '휴지통 도구를 찾지 못했습니다.' }
+    if ($LASTEXITCODE -ne 0) { throw "$($trash.Name) 이 종료 코드 $LASTEXITCODE 로 실패했습니다." }
 }
 
 function Remove-Item {

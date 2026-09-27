@@ -4,7 +4,7 @@ Claude Code를 **더 안전하게** 쓰기 위한 사용자 레벨(user-level) �
 위험한 명령을 자동으로 막거나 휴지통 이동으로 치환하는 **가드 훅**, 합리적인 **권한(permissions)**,
 프로젝트용 **AGENTS.md**, 그리고 OS·터미널·에이전트마다 제각각인 **줄바꿈 키**를 Windows / macOS / Linux에 한 번에 설치한다.
 
-- 🛡️ **가드 훅** — 삭제를 휴지통으로 돌리는 셰임을 `PATH`/모듈로 끼워 넣고(명령 문자열은 건드리지 않는다), `git reset --hard`·`clean` 등 미커밋 변경을 날리는 명령 앞에 `refs/claude-backups/`로 스냅샷을 뜬다. 차단은 되돌릴 수단이 없는 둘뿐 — 루트/홈 전체 삭제와 디스크 파괴. 확인을 요청하는 것도 로컬 백업이 닿지 않는 원격 히스토리(기본·보호 브랜치 push, 원격 브랜치 삭제)뿐이다
+- 🛡️ **가드 훅** — 삭제를 휴지통으로 돌리는 셰임을 `PATH`(세션 시작 시 한 번)/모듈로 끼워 넣고(명령 문자열은 건드리지 않는다), `git reset --hard`·`clean` 등 미커밋 변경을 날리는 명령 앞에 `refs/claude-backups/`로 스냅샷을 뜬다. 차단은 되돌릴 수단이 없는 둘뿐 — 루트/홈 전체 삭제와 디스크 파괴. 확인을 요청하는 것도 원격 커밋을 지울 수 있는 push(기본 브랜치 force push, `--mirror`, 원격 브랜치 삭제)뿐이다
 - 🧩 **외과적 병합** — 권한/훅을 추가하고 `model`·`effortLevel`·`language`는 **없을 때만** 채운다. 사용자가 이미 고른 값과 그 외 키(env, statusLine 등)는 100% 보존
 - ⏎ **줄바꿈 키 통일** — Claude Code / Codex / Grok CLI에서 Shift+Enter(또는 Ctrl+Enter)로 줄을 넣고, Enter는 그대로 전송. VS Code·Cursor 통합 터미널, tmux, Windows Terminal, 에이전트 키맵까지 한 번에 맞춘다
 - 🔁 **멱등성 · dry-run** — 몇 번을 실행해도 안전하고, `--dry-run`으로 실제 적용 전에 바뀔 내용을 미리 확인
@@ -208,7 +208,7 @@ deny/ask 53건 중 진짜 위험한 명령은 **0건**이었다. 반대로 복�
 
 그래서 현재 설계는 셋뿐이다.
 
-1. **명령 문자열을 재작성하지 않는다.** 삭제를 휴지통으로 돌리는 일은 셰임(shim)이 하고, 훅은 셰임을 끼워 넣는 **선행 한 줄**만 앞에 붙인다. 인자 해석은 전적으로 셸/PowerShell 몫이다.
+1. **명령 문자열을 재작성하지 않는다.** 삭제를 휴지통으로 돌리는 일은 셰임(shim)이 한다. Bash 는 세션 시작 때 `PATH` 에 셰임을 한 번 끼워 두고 명령은 건드리지 않는다. PowerShell 만 모듈을 불러오는 **선행 한 줄**을 붙인다. 인자 해석은 전적으로 셸/PowerShell 몫이다.
 2. **git 백업도 명령을 건드리지 않는다.** 훅 프로세스가 직접 스냅샷 커밋을 만들고 원본 명령은 그대로 흘려보낸다.
 3. **deny 는 되돌릴 수단이 아예 없는 두 부류뿐이다.** 루트/홈 전체 삭제와 디스크 파괴. 파싱하지 않고 명령 문자열의 꼴만 본다.
 
@@ -216,8 +216,8 @@ deny/ask 53건 중 진짜 위험한 명령은 **0건**이었다. 반대로 복�
 
 | 툴 | 방식 |
 | --- | --- |
-| Bash (POSIX 셸·Git Bash) | `PATH` 맨 앞에 `~/.claude/hooks/shims` 를 끼워 넣는 한 줄을 붙인다. `shims/rm` 이 셸의 확장이 **끝난 뒤의 argv** 를 받는다 |
-| PowerShell | `shims/RmShim.psm1` 을 `Import-Module` 하는 한 줄을 붙인다. 명령 우선순위가 별칭 > 함수 > cmdlet 이라 같은 이름의 함수가 `Remove-Item` cmdlet 을 가리고, `rm`/`del`/`erase`/`ri`/`rd`/`rmdir` 별칭이 전부 그 함수로 해석된다 |
+| Bash (POSIX 셸·Git Bash) | `SessionStart` 훅이 `CLAUDE_ENV_FILE` 에 `PATH` 맨 앞으로 `~/.claude/hooks/shims` 를 넣는 줄을 적는다. Claude Code 가 매 Bash 명령 전에 이 파일을 source 하므로 명령 문자열도 권한 판정도 건드리지 않는다. `shims/rm` 이 셸의 확장이 **끝난 뒤의 argv** 를 받는다 |
+| PowerShell | `CLAUDE_ENV_FILE` 은 Bash 전용이라, `shims/RmShim.psm1` 을 `Import-Module` 하는 한 줄을 `updatedInput` 으로 붙인다(권한 판정 없이 — `allow` 를 붙이면 권한 프롬프트와 auto mode 분류기를 건너뛴다). 명령 우선순위가 별칭 > 함수 > cmdlet 이라 같은 이름의 함수가 `Remove-Item` cmdlet 을 가리고, `rm`/`del`/`erase`/`ri`/`rd`/`rmdir` 별칭이 전부 그 함수로 해석된다 |
 
 셸이 이미 확장을 끝낸 뒤에 받으므로 **원본 명령과 해석이 어긋날 수 없다.** 종전에 확인을 요구하거나 차단하던 것들이 그냥 동작한다.
 
@@ -239,9 +239,11 @@ deny/ask 53건 중 진짜 위험한 명령은 **0건**이었다. 반대로 복�
 - 휴지통 도구 부재 — 경고를 남기고 실제 삭제한다. `rm` 자체를 못 쓰게 만드는 쪽이 더 해롭다는 판단이다
 - `CLAUDE_NO_TRASH` 가 설정됨 — 명시적 탈출구
 
-루트/홈 전체 삭제는 셰임도 argv 수준에서 한 번 더 거부한다. `bash -c "rm -rf /"` 처럼 훅의 텍스트 규칙을 비껴가는 형태를 여기서 잡는다.
+루트/홈 전체 삭제는 셰임도 argv 수준에서 한 번 더 거부한다. `bash -c "rm -rf /"` 처럼 훅의 텍스트 규칙을 비껴가는 형태를 여기서 잡는다. 이때 홈은 환경 변수 `$HOME` 이 아니라 사용자 DB 의 홈이다 — 테스트가 `HOME` 을 임시 디렉터리로 바꿔 두고 `rm -rf "$HOME"` 으로 정리하는 것까지 막으면 안 된다.
 
-**한계**: `sudo rm` 은 sudo 의 `secure_path` 가 `PATH` 를 버려 셰임을 타지 않는다(실사용 10,329건 중 2건). `find … -delete` 처럼 `rm` 을 거치지 않는 삭제도 커버 밖이다.
+**Bash 에 선행 줄을 붙이지 않는 이유**: 명령 앞에 줄을 붙이면 Claude Code 는 **바뀐 명령**에 대해 권한 규칙을 평가한다. 그래서 `Bash(rm *)` 같은 사용자 허용 규칙이 더 이상 맞지 않고, 그렇다고 `allow` 를 붙이면 `rm` 이라는 낱말만 섞여도 어떤 명령이든 자동 승인된다(둘 다 CC 2.1.283 에서 실측).
+
+**한계**: 세션 도중에 설치하면 다음 세션부터 셰임이 적용된다(`SessionStart` 가 다시 불려야 한다). `sudo rm` 은 sudo 의 `secure_path` 가 `PATH` 를 버려 셰임을 타지 않는다(실사용 10,329건 중 2건). `find … -delete` 처럼 `rm` 을 거치지 않는 삭제도 커버 밖이다.
 
 ### git — 미커밋 변경만 스냅샷
 
@@ -273,8 +275,9 @@ Claude Code 의 체크포인팅(`/rewind`)은 [공식 문서상](https://code.cl
 | `Remove-Item`/`del`/`rd` + 드라이브 루트(`C:\`)·`$env:USERPROFILE`·`$HOME` | ⛔ **차단** |
 | `mkfs*`/`newfs_*`/`fdisk`/`gdisk`/`sgdisk`/`parted`/`wipefs`, `dd of=/dev/*`, `diskutil erase*`, `/dev/sd*` 리다이렉트 | ⛔ **차단** |
 | `format <드라이브>:`, `diskpart`, `Clear-Disk`/`Initialize-Disk`/`Remove-Partition`/`Clear-Volume` | ⛔ **차단** |
-| **원격의 기본·보호 브랜치**로 `git push` (`git symbolic-ref refs/remotes/origin/HEAD` 로 판정, 없으면 `main`/`master`), `--all`/`--mirror` | ❓ **확인** — 원격 히스토리는 로컬 백업이 닿지 않는다 |
+| **원격의 기본 브랜치**로 force push (`-f`/`--force`/`--force-with-lease`, `+refspec`, `HEAD`/`@`, 글로브 refspec; 기본 브랜치는 `git symbolic-ref refs/remotes/origin/HEAD` 로 판정, 없으면 `main`/`master`), `--mirror`, `--prune` | ❓ **확인** — 덮어쓴 원격 커밋은 로컬 백업이 닿지 않는다 |
 | 원격 브랜치 **삭제** (`--delete`/`-d`, `origin :branch`) | ❓ **확인** — 브랜치 이름과 무관하게 |
+| 기본 브랜치로의 일반(fast-forward) push, `--all` | ✅ 통과 — 원격 커밋을 지우지 않는다. 실사용 로그에서 이 확인은 23건 모두 정상 작업이었다 |
 | 곁다리 브랜치 push (force 포함) | ✅ 통과 |
 | 그 외 전부 | ✅ 통과 (판단 안 함) |
 
@@ -286,7 +289,7 @@ Claude Code 의 체크포인팅(`/rewind`)은 [공식 문서상](https://code.cl
 
 ### git 정책을 permissions가 아니라 훅이 담당하는 이유 (그리고 그 대가)
 
-Claude Code에서 `permissions`의 `deny`/`ask` 규칙은 PreToolUse 훅의 `allow` 판정보다 항상 우선한다. 따라서 `Bash(git push *)` 같은 규칙을 `settings.json`에 두면 위의 세밀한 판단(곁다리 브랜치 통과)이 전부 무력화된다. 그래서 git 정책은 전적으로 훅이 담당한다.
+Claude Code에서 `permissions`의 `deny`/`ask` 규칙은 훅이 무엇을 반환하든 항상 평가된다. 따라서 `Bash(git push *)` 같은 규칙을 `settings.json`에 두면 위의 세밀한 판단(fast-forward·곁다리 브랜치 통과)이 전부 무력화된다. 그래서 git 정책은 전적으로 훅이 담당한다.
 
 **업그레이드 시 자동 마이그레이션**: 예전 버전은 `Bash(git push *)`·`Bash(git reset --hard *)`(및 PowerShell 짝)을 `deny`로 배포했다. 병합 엔진은 원래 '추가만' 하므로 그 규칙들이 기존 설치본에 그대로 남고, deny가 훅보다 우선하니 **새로 설치한 사람에게는 동작하고 업그레이드한 사람에게는 조용히 죽는** 상태가 된다. 그래서 설치 중에 *우리가 배포했던 문자열과 정확히 일치하는* 그 규칙들만 제거하고, 무엇을 지웠는지 설치 리포트에 출력한다. 문자열이 조금이라도 다른(=사용자가 직접 넣은) 규칙은 건드리지 않으며, 제거 사실은 매니페스트에 기록돼 `--uninstall` 시 원래대로 복원된다.
 
