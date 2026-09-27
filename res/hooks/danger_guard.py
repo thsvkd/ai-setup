@@ -146,8 +146,10 @@ GIT_WIPE_RE = re.compile(r"""\bgit\b[^\n]*?\b(?:
 CLEAN_IGNORED_RE = re.compile(r"\bclean\b[^\n]*?\s-[a-zA-Z]*[xX]")
 # `git worktree remove <path>` 의 대상은 cwd 가 아니라 인자다.
 WORKTREE_RE = re.compile(r"\bworktree\s+remove\s+(?:(?:--force|-f)\s+)*(\S+)")
-# 명령이 `cd <경로>` 로 시작하면 백업도 거기서 돌아야 한다. 변수가 섞이면 특정 불가 → 포기.
-LEADING_CD_RE = re.compile(r"^\s*cd\s+(?!.*[$`])['\"]?([^\s'\";&|]+)")
+# 명령이 `cd <경로>` 로 시작하면 백업도 거기서 돌아야 한다. 경로에 변수가 섞이면 특정 불가 →
+# 포기한다. 변수 검사는 경로 토큰에만 한다 — 줄 전체를 보면 뒤따르는 `echo "$X"` 때문에 cd 를
+# 놓치고 세션 cwd(엉뚱한 저장소)를 백업한다.
+LEADING_CD_RE = re.compile(r"^\s*cd\s+['\"]?([^\s'\";&|]+)")
 
 # --- git push -------------------------------------------------------------------
 
@@ -222,6 +224,8 @@ def _target_dirs(command, cwd):
     base = cwd
     m = LEADING_CD_RE.match(command)
     if m:
+        if "$" in m.group(1) or "`" in m.group(1):
+            return []
         cand = os.path.expanduser(m.group(1))
         cand = cand if os.path.isabs(cand) else os.path.join(cwd, cand)
         if os.path.isdir(cand):

@@ -159,6 +159,35 @@ def test_leading_cd_with_variable_is_skipped(repo, tmp_path):
     assert backup_count(repo) == 0
 
 
+def _other_repo_with_changes(tmp_path):
+    d = tmp_path / "session-cwd"
+    d.mkdir()
+    git(d, "init", "-q", ".")
+    git(d, "config", "user.email", "t@t")
+    git(d, "config", "user.name", "t")
+    (d / "f.txt").write_text("committed\n", encoding="utf-8")
+    git(d, "add", "-A")
+    git(d, "commit", "-qm", "init")
+    (d / "f.txt").write_text("세션 cwd 미커밋\n", encoding="utf-8")
+    return d
+
+
+def test_leading_cd_wins_even_if_line_has_variables_elsewhere(repo, tmp_path):
+    """회귀: 경로 뒤 어딘가에 `$` 가 있으면 cd 를 무시하고 세션 cwd 를 백업했다."""
+    (repo / "tracked.txt").write_text("다른 디렉터리 편집\n", encoding="utf-8")
+    session = _other_repo_with_changes(tmp_path)
+    run_hook('cd %s && git checkout -- . && echo "$HOME"' % repo, session)
+    assert backup_count(repo) == 1
+    assert backup_count(session) == 0
+
+
+def test_leading_cd_with_variable_does_not_back_up_session_cwd(tmp_path):
+    """cd 대상을 특정할 수 없을 때 세션 cwd 를 대신 백업하면 엉뚱한 저장소를 백업한다."""
+    session = _other_repo_with_changes(tmp_path)
+    run_hook('cd "$TARGET" && git reset --hard', session)
+    assert backup_count(session) == 0
+
+
 # --- 노이즈 비용 ------------------------------------------------------------------
 
 
