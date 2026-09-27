@@ -86,9 +86,17 @@ def run_in_pty(argv, keys, cwd=None, env=None, stdin_pipe=False, timeout=25):
 
     out = bytearray()
 
-    def drain(seconds):
+    def drain(seconds, quiet=None):
+        """seconds 동안 읽는다. quiet 가 있으면 출력이 한 번 나온 뒤 그만큼 멎는 순간 일찍 끝낸다.
+
+        실제 터미널처럼 커서 위치 요청(CPR)에 답한다. 답하지 않으면 prompt_toolkit 이
+        답마다 1초씩 아무것도 찍지 않고 기다려, 무출력 판정이 그 틈에 걸린다.
+        """
         end = time.time() + seconds
+        last = None
         while time.time() < end:
+            if quiet is not None and last is not None and time.time() - last >= quiet:
+                return
             ready, _, _ = select.select([master], [], [], 0.1)
             if not ready:
                 continue
@@ -99,15 +107,24 @@ def run_in_pty(argv, keys, cwd=None, env=None, stdin_pipe=False, timeout=25):
             if not chunk:
                 return
             out.extend(chunk)
+            last = time.time()
+            if b"\x1b[6n" in chunk:
+                try:
+                    os.write(master, b"\x1b[1;1R")
+                except OSError:
+                    return
 
+    # 고정 대기는 느린 기기에서 다음 프롬프트가 그려지기 전에 키를 보내 버린다(선행 입력).
+    # 그러면 선택지가 화면에 안 나오므로, 출력이 잠잠해질 때까지 기다렸다가 보낸다.
+    # 무출력은 '프롬프트가 다 그려졌다'의 근사일 뿐이다. 키마다 최대 15초까지 기다린다.
     try:
-        drain(2.0)              # 첫 프롬프트가 그려질 때까지
+        drain(15.0, quiet=1.0)  # 첫 프롬프트가 그려질 때까지
         for key in keys:
             try:
                 os.write(master, key)
             except OSError:
                 break
-            drain(0.6)          # 선택이 반영될 때까지
+            drain(15.0, quiet=1.0)  # 선택이 반영되고 다음 프롬프트가 그려질 때까지
 
         deadline = time.time() + timeout
         while proc.poll() is None and time.time() < deadline:
@@ -537,10 +554,10 @@ def test_파이프로_실행된_setup_sh에서도_온보딩이_동작한다(tmp_
     project.mkdir()
 
     env = clean_env(HOME=str(home))
-    # 범위=AGENTS.md만(↓↓), 적용=dry-run 먼저(↓) — 권한 모드는 묻지 않는 범위다.
+    # 범위=AGENTS.md만(↓↓), 하네스=전부(Enter), 적용=dry-run 먼저(↓) — 권한 모드는 묻지 않는 범위다.
     code, screen = run_in_pty(
         ["bash", str(ROOT / "scripts" / "setup.sh")],
-        keys=[DOWN, DOWN, ENTER, DOWN, ENTER],
+        keys=[DOWN, DOWN, ENTER, ENTER, DOWN, ENTER],
         cwd=project, env=env, stdin_pipe=True, timeout=90,
     )
     text = screen.decode(errors="replace")
