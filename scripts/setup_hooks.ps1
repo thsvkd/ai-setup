@@ -157,7 +157,7 @@ if ($mergeExit -ne 0) {
 Write-Host ""
 Write-Host "[4/4] 셀프테스트 실행..." -ForegroundColor Yellow
 
-# git 관련 판정(스냅샷 백업, 기본 브랜치 push 확인)은 여기서 돌리지 않는다. 둘 다 cwd 가
+# git 관련 판정(스냅샷 백업, 기본 브랜치 force push 확인)은 여기서 돌리지 않는다. 둘 다 cwd 가
 # git 저장소인지에 따라 결과가 달라지는데, 설치는 저장소 밖에서도 실행된다. 스냅샷은 cwd
 # 저장소에 실제로 백업 ref 를 만들어 dry-run 도 깨뜨린다. 두 경로 모두
 # tests/test_git_snapshot.py 가 임시 저장소를 만들어 검증한다.

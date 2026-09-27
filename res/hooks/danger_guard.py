@@ -40,9 +40,10 @@ Bash 툴(POSIX 셸·Git Bash)과 PowerShell 툴 양쪽을 대상으로 한다. �
        - 디스크 파괴 (mkfs*/fdisk/parted/wipefs, dd of=/dev/*, diskutil erase*, > /dev/sdX,
          format <드라이브>:, diskpart, Clear-Disk/Initialize-Disk/Remove-Partition)
      되돌릴 수단이 아예 없는 두 부류라 오탐 비용을 감수한다. 로그상 발동 0회.
-  4) ask 는 원격 히스토리를 건드릴 때뿐이다 — 원격의 기본/보호 브랜치로 push, 그리고 원격
-     브랜치 삭제. 로컬 백업이 닿지 않는 유일한 영역이다. 곁다리 브랜치 push 는 force 여부와
-     무관하게 확인하지 않는다.
+  4) ask 는 원격 커밋을 지울 수 있을 때뿐이다 — 원격 기본 브랜치로의 force push(`+refspec`,
+     --force-with-lease 포함), --mirror, 원격 브랜치 삭제. 로컬 백업이 닿지 않는 유일한
+     영역이다. fast-forward push 는 기본 브랜치여도 확인하지 않는다(로그상 23건 전부 정상
+     작업이었다). 곁다리 브랜치 push 는 force 여부와 무관하게 확인하지 않는다.
 
   종전에 있었으나 실측 근거로 제거한 것: 포크밤 패턴, curl|sh 패턴, find/xargs 대량 삭제
   ask, 체이닝 삭제 ask, 글로브 미일치 deny, `.`/`..` deny, 대상 100개 초과 ask,
@@ -152,8 +153,10 @@ LEADING_CD_RE = re.compile(r"^\s*cd\s+(?!.*[$`])['\"]?([^\s'\";&|]+)")
 
 PUSH_RE = re.compile(r"\bgit\b(?:\s+-\S+|\s+--\S+=\S+)*\s+push\b([^\n;&|]*)")
 PUSH_VALUE_OPTS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
-PUSH_BROAD_FLAGS = {"--all", "--mirror"}
+PUSH_ALL_FLAGS = {"--all", "--branches"}
 PUSH_DELETE_FLAGS = {"--delete", "-d"}
+# `-f` 는 `-uf` 처럼 다른 짧은 옵션과 묶여 올 수 있다.
+PUSH_FORCE_RE = re.compile(r"^(?:--force|--force-with-lease(?:=.*)?|-[a-zA-Z]*f[a-zA-Z]*)$")
 
 
 def log(entry):
@@ -336,7 +339,12 @@ def _default_branches(cwd):
 
 
 def push_ask_reason(command, cwd):
-    """원격의 기본 브랜치를 건드리는 push 만 확인한다. 곁다리 브랜치는 통과."""
+    """원격 커밋을 지울 수 있는 push 만 확인한다.
+
+    기본 브랜치로의 force push, --mirror, 원격 브랜치 삭제. fast-forward push 는 원격
+    히스토리를 지우지 않으므로(되돌리려면 revert) 통과시킨다 — 실사용 로그에서 이 확인은
+    23건 모두 평범한 작업 흐름을 멈춰 세우기만 했다.
+    """
     m = PUSH_RE.search(command)
     if not m:
         return None
@@ -348,11 +356,10 @@ def push_ask_reason(command, cwd):
         return None
 
     protected = _default_branches(cwd)
-    broad = next((a for a in args if a in PUSH_BROAD_FLAGS), None)
-    if broad:
-        return ("git push %s 는 기본 브랜치(%s)를 포함해 여러 브랜치를 한 번에 원격에 "
-                "반영합니다. 원격 히스토리는 로컬 백업으로 되돌릴 수 없습니다. 계속할까요?"
-                % (broad, ", ".join(sorted(protected))))
+    if "--mirror" in args:
+        return ("git push --mirror 는 원격에만 있는 ref 를 지우고 나머지를 강제로 맞춥니다. "
+                "원격 히스토리는 로컬 백업으로 되돌릴 수 없습니다. 계속할까요?")
+    force = any(PUSH_FORCE_RE.match(a) for a in args)
 
     positionals = []
     skip = False
@@ -378,19 +385,23 @@ def push_ask_reason(command, cwd):
                 "원격 브랜치를 삭제하려고 합니다. 계속할까요?")
 
     refspecs = positionals[1:]              # 첫 위치 인자는 원격 이름
-    if not refspecs:
+    if any(a in PUSH_ALL_FLAGS for a in args):
+        targets = sorted(protected) if force else []
+    elif not refspecs:
         branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd).stdout.strip()
-        targets = [branch] if branch and branch != "HEAD" else []
+        targets = [branch] if force and branch and branch != "HEAD" else []
     else:
         targets = []
         for spec in refspecs:
+            if not (force or spec.startswith("+")):   # `+` 는 그 refspec 만 force 한다
+                continue
             dst = spec.split(":")[-1].lstrip("+")
             targets.append(dst.rsplit("/", 1)[-1] if dst.startswith("refs/") else dst)
 
     hit = [t for t in targets if t in protected]
     if hit:
-        return ("원격의 기본 브랜치(%s)로 push 하려고 합니다. 원격 히스토리는 로컬 백업으로 "
-                "되돌릴 수 없습니다. 계속할까요?" % ", ".join(hit))
+        return ("원격의 기본 브랜치(%s)를 force push 로 덮어쓰려고 합니다. 덮어쓴 원격 커밋은 "
+                "로컬 백업으로 되돌릴 수 없습니다. 계속할까요?" % ", ".join(hit))
     return None
 
 

@@ -234,9 +234,30 @@ def _decision(command, cwd):
     return p["hookSpecificOutput"].get("permissionDecision") if p else None
 
 
-def test_push_to_remote_default_branch_asks(repo, tmp_path):
+def test_plain_push_to_remote_default_branch_passes(repo, tmp_path):
+    """fast-forward push 는 원격 히스토리를 지우지 않는다(되돌리려면 revert).
+    실사용 로그에서 이 확인은 23건 모두 평범한 작업 흐름을 멈춰 세우기만 했다."""
     _with_origin(repo, tmp_path, "main")
-    assert _decision("git push origin main", repo) == "ask"
+    assert _decision("git push origin main", repo) is None
+    assert _decision("git push -u origin main", repo) is None
+    assert _decision("git push", repo) is None
+
+
+@pytest.mark.parametrize("cmd", [
+    "git push --force origin main",
+    "git push -f origin main",
+    "git push -uf origin main",
+    "git push --force-with-lease origin main",
+    "git push --force-with-lease=main:abc123 origin main",
+    "git push origin +main",
+    "git push origin +HEAD:refs/heads/main",
+    "git push -f",
+    "git push --force --all origin",
+])
+def test_force_push_to_remote_default_branch_asks(repo, tmp_path, cmd):
+    """덮어쓴 원격 커밋은 로컬 백업이 닿지 않는다."""
+    _with_origin(repo, tmp_path, "main")
+    assert _decision(cmd, repo) == "ask", cmd
 
 
 def test_push_to_side_branch_passes(repo, tmp_path):
@@ -245,21 +266,28 @@ def test_push_to_side_branch_passes(repo, tmp_path):
 
 
 def test_push_force_to_side_branch_passes(repo, tmp_path):
-    """force 여부는 판정 기준이 아니다 — 어떤 브랜치인지만 본다."""
+    """곁다리 브랜치는 force 여도 확인하지 않는다."""
     _with_origin(repo, tmp_path, "main")
     assert _decision("git push --force origin fix/y", repo) is None
+    assert _decision("git push origin +fix/y", repo) is None
 
 
-def test_push_all_asks(repo, tmp_path):
+def test_push_all_without_force_passes(repo, tmp_path):
     _with_origin(repo, tmp_path, "main")
-    assert _decision("git push --all origin", repo) == "ask"
+    assert _decision("git push --all origin", repo) is None
+
+
+def test_push_mirror_asks(repo, tmp_path):
+    """--mirror 는 원격에만 있는 ref 를 지우고 나머지를 강제로 맞춘다."""
+    _with_origin(repo, tmp_path, "main")
+    assert _decision("git push --mirror origin", repo) == "ask"
 
 
 def test_push_respects_remote_default_branch_name(repo, tmp_path):
     """기본 브랜치가 main 이 아니어도 원격이 지정한 이름을 따른다."""
     _with_origin(repo, tmp_path, "trunk")
-    assert _decision("git push origin trunk", repo) == "ask"
-    assert _decision("git push origin main", repo) is None
+    assert _decision("git push --force origin trunk", repo) == "ask"
+    assert _decision("git push --force origin main", repo) is None
 
 
 def test_push_outside_git_repo_passes(tmp_path):
