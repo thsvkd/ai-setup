@@ -63,6 +63,7 @@ irm -Headers $h https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/
 | `--harness <목록>` / `-Harness <목록>` | 지침을 설치할 하네스 (쉼표 구분: `claude`,`codex`,`grok`,`opencode`,`all`). 기본 `all`   |
 | `--keybinds` / `-Keybinds`   | 줄바꿈 키바인딩만 설치 (VS Code·Cursor·Claude·Codex·tmux·Windows Terminal)                        |
 | `--newline <값>` / `-Newline <값>` | 줄바꿈 키를 고른다 — `shift-enter`(기본) 또는 `ctrl-enter`                                  |
+| `--omc` / `-Omc`             | oh-my-claudecode 플러그인 설치 + HUD에 프롬프트 캐시 TTL 표시 ([아래 참고](#omc와-캐시-ttl-hud)). 기본 전체 설치에는 포함되지 않는다 |
 | `--dry-run` / `-DryRun`      | 아무것도 바꾸지 않고 변경 계획만 출력                                                             |
 | `--no-onboard` / `-NoOnboard`| 온보딩을 띄우지 않고 기본값(전체 설치)으로 실행                                                   |
 | `--uninstall` / `-Uninstall` | 설치가 추가한 것만 정밀 복원 (아래 참고)                                                          |
@@ -145,6 +146,18 @@ Windows Terminal·iTerm2·Ghostty·Kitty·WezTerm 같은 터미널은 Shift+Ente
 - **gnome-terminal 등 Shift+Enter를 구분하지 못하는 터미널** — 로컬 세션에서는 맞출 수 없다. 설치는 실패하지 않고 경고만 남긴다. Linux는 로컬 gnome-terminal 대신 Windows Terminal/Cursor에서 `ssh`로 붙는 경로를 쓰면 그대로 동작한다.
 - **Grok의 `/multiline`(`/ml`, `Ctrl+M`) 모드** — 이 토글이 켜지면 Enter와 Shift+Enter의 의미가 **반대**가 된다(Enter=줄바꿈, Shift+Enter=전송). Grok은 키를 리맵할 수 없어 이 상태를 Claude/Codex와 한 키로 맞추는 것이 불가능하다. 설치기는 그 토글을 켜거나 끄지 않고 리포트에 한 줄 경고만 한다. 기준은 **Grok 기본 프롬프트(multiline 꺼짐)** 다.
 - **에이전트가 아예 없을 때** — 바이너리와 설정 디렉터리가 **둘 다** 없으면 그 에이전트는 건너뛰고 설치는 성공한다. 하나라도 있으면 키맵을 쓴다.
+
+---
+
+## OMC와 캐시 TTL HUD
+
+`--omc`(또는 온보딩의 OMC 질문에 '예')를 고르면 [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode) 플러그인을 `claude plugin marketplace add` / `claude plugin install`로 설치하고, OMC HUD의 세션 경과 시간(`session:45m`) 자리에 **프롬프트 캐시 TTL 잔여 시간**(`cache:57m`)을 띄운다. 서드파티 플러그인이므로 범위를 지정하지 않은 기본 전체 설치에는 포함하지 않는다.
+
+- 값은 Claude Code가 statusLine stdin으로 넘기는 `prompt_cache.expires_at`에서 매 렌더마다 계산한다. 2분 이하면 노랑, 만료되면 `cache:cold`(빨강)이다. 캐시 정보가 없으면(구버전 Claude Code) `session:` 표시를 그대로 둔다. OMC HUD 프리셋에서 session 요소를 끈 경우에는 바꿀 자리가 없어 표시되지 않는다.
+- `~/.claude/hud/omc-hud-ttl.mjs`를 복사하고 기존 `statusLine.command` 앞에 래퍼 실행 명령을 끼운다. node는 OMC와 같은 방식으로 찾는다 — POSIX는 OMC의 `find-node.sh`, Windows는 `~/.claude/.omc-config.json`의 `nodeBinary`, 둘 다 없으면 PATH의 `node`. 입력이 없어도 카운트다운이 흐르도록 `statusLine.refreshInterval`이 없으면 `10`(초)을 넣는다.
+- `statusLine`이 없으면 플러그인의 정본 템플릿으로 OMC HUD를 먼저 설치한다. OMC가 아닌 다른 `statusLine`이 있으면 사용자 설정이므로 파일 하나 만들지 않는다. `settings.json`이나 매니페스트를 파싱할 수 없으면 쓰지 않고 멈춘다.
+- `--uninstall`은 이 설치가 만든 것만 되돌린다 — 래퍼, 우리가 넣은 값 그대로인 `refreshInterval`, 그리고 설치가 새로 만든 `statusLine`·`settings.json`. 설치가 복사한 HUD 파일은 그 `statusLine`도 함께 치울 때, 복사 당시 내용 그대로인 경우에만 지운다 — `omc-setup`이 다시 쓴 파일은 OMC 것이다. 원래 있던 OMC 플러그인과 OMC HUD는 남긴다.
+- CLAUDE.md 등 OMC의 나머지 설정은 Claude Code 안에서 `/oh-my-claudecode:omc-setup`으로 진행한다. 그 과정에서 `statusLine`이 다시 써지면 `--omc`를 한 번 더 실행하면 된다.
 
 ---
 
@@ -322,6 +335,9 @@ res/
   vendor/                   # 온보딩 의존성 (questionary·prompt_toolkit·wcwidth, 벤더링)
   keybinds/
     apply.py                # 줄바꿈 키바인딩 외과적 병합 (VS Code·Cursor·Claude·Codex·WT·tmux)
+  omc/
+    apply.py                # OMC HUD statusLine 에 캐시 TTL 래퍼 연결 / uninstall
+    omc-hud-ttl.mjs         # OMC HUD 출력의 session:NNm 을 cache:NNm 으로 바꾸는 래퍼
   hooks/
     danger_guard.py         # 위험 명령 가드 (Bash + PowerShell, 전 플랫폼 공용)
     shims/rm                # 삭제 → 휴지통 (POSIX 셸·Git Bash)
@@ -333,6 +349,7 @@ scripts/
   setup_hooks.{ps1,sh}      # 가드 훅 + 권한 설치 / uninstall 워커
   setup_agentsmd.{ps1,sh}   # AGENTS.md 설치 워커
   setup_keybinds.{ps1,sh}   # 줄바꿈 키바인딩 설치 / uninstall 워커
+  setup_omc.{ps1,sh}        # oh-my-claudecode 설치 + 캐시 TTL HUD 워커
   test.{ps1,sh}             # 테스트 러너 (pytest + bats + Pester 통합 실행)
   lib/                      # 공용 오케스트레이션 함수
 install.{ps1,sh}            # 원격 설치 부트스트랩 (curl | sh / irm | iex)

@@ -13,6 +13,8 @@ scripts/setup.sh (와 setup.ps1) 가 **인자 없이** 호출됐을 때만 실�
                                줄바꿈 키 (SCOPE=all 일 때만 기록)
   HARNESSES=claude,codex,...   지침을 설치할 하네스 (SCOPE=all|agentsmd 일 때만 기록)
   OVERWRITE_AGENTSMD=0|1       기존 지침 파일을 덮어쓸지
+  OMC=0|1                      oh-my-claudecode 플러그인 + 캐시 TTL HUD 도 설치할지
+                               (SCOPE=all|hooks 일 때만 기록)
   DRY_RUN=0|1                  실제 적용 전에 변경 계획만 볼지
 
 종료 코드로 세 상황을 구분한다:
@@ -251,6 +253,17 @@ def ask_all(questionary, project_dir):
             if overwrite is None:
                 return None
             answers["OVERWRITE_AGENTSMD"] = "1" if overwrite else "0"
+
+    # OMC 는 전역(~/.claude) 설치라 AGENTS.md 단독 범위에서는 묻지 않는다.
+    if scope in (SCOPE_ALL, SCOPE_HOOKS):
+        omc = questionary.confirm(
+            "oh-my-claudecode(OMC) 플러그인도 설치할까요? (HUD 에 프롬프트 캐시 TTL 표시 포함)",
+            default=False,
+            style=style,
+        ).ask()
+        if omc is None:
+            return None
+        answers["OMC"] = "1" if omc else "0"
 
     plan = questionary.select(
         "지금 바로 적용할까요?",
