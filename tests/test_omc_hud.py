@@ -178,6 +178,7 @@ def test_statusLine이_없던_설치는_uninstall이_만든_것을_모두_치운
     assert apply(home).returncode == 0
     assert apply(home, "--uninstall").returncode == 0
     assert not (home / ".claude" / "settings.json").exists()
+    assert not list((home / ".claude").glob("settings.json.bak.*"))
     assert not (home / ".claude" / "hud").exists()
     assert not (home / ".claude" / ".claude-code-setup.json").exists()
 
@@ -194,6 +195,37 @@ def test_OMC가_다시_쓴_HUD_파일은_uninstall이_지우지_않는다(home):
     assert (hud / "omc-hud.mjs").read_text(encoding="utf-8") == "// OMC generated\n"
     assert (hud / "lib" / "config-dir.mjs").is_file()
     assert settings(home)["statusLine"]["command"] == OMC_CMD
+
+
+def test_HUD_파일_하나만_바뀌면_둘_다_남기고_재설치는_빠진_것만_채운다(home):
+    assert apply(home).returncode == 0
+    hud = home / ".claude" / "hud"
+    (hud / "omc-hud.mjs").write_text("// hud setup rewrote me\n", encoding="utf-8")
+    assert apply(home, "--uninstall").returncode == 0
+    assert (hud / "omc-hud.mjs").is_file() and (hud / "lib" / "config-dir.mjs").is_file()
+
+    (hud / "lib" / "config-dir.mjs").unlink()
+    assert apply(home).returncode == 0
+    assert (hud / "lib" / "config-dir.mjs").is_file()
+    assert (hud / "omc-hud.mjs").read_text(encoding="utf-8") == "// hud setup rewrote me\n"
+
+
+def test_벗겨낼_수_없는_래퍼가_있으면_install과_uninstall_모두_멈춘다(home):
+    command = 'FOO=1 node "$HOME/.claude/hud/omc-hud-ttl.mjs" ' + OMC_CMD
+    write_settings(home, {"statusLine": {"type": "command", "command": command}})
+    ttl = home / ".claude" / "hud" / "omc-hud-ttl.mjs"
+    ttl.parent.mkdir(parents=True)
+    ttl.write_text("// in use\n", encoding="utf-8")
+    assert apply(home).returncode == 1
+    assert apply(home, "--uninstall").returncode == 1
+    assert ttl.is_file()
+    assert settings(home)["statusLine"]["command"] == command
+
+
+def test_1차_수정본_영수증_형식도_읽는다(home):
+    manifest = home / ".claude" / ".claude-code-setup.json"
+    manifest.write_text(json.dumps({"omc_hud": {"hud_copied": True}}), encoding="utf-8")
+    assert apply(home).returncode == 0
 
 
 def test_이미_있는_config_dir은_덮어쓰지_않는다(home):
@@ -227,7 +259,7 @@ def test_BOM이_붙은_매니페스트도_읽는다(home):
 def test_래퍼_앞의_사용자_텍스트는_uninstall이_지우지_않는다(home):
     command = 'cd /tmp && node "$HOME/.claude/hud/omc-hud-ttl.mjs" ' + OMC_CMD
     write_settings(home, {"statusLine": {"type": "command", "command": command}})
-    assert apply(home, "--uninstall").returncode == 0
+    assert apply(home, "--uninstall").returncode == 1
     assert settings(home)["statusLine"]["command"] == command
 
 

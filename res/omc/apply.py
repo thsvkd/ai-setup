@@ -113,7 +113,7 @@ def install(claude_dir: Path, dry_run: bool) -> int:
     receipt = dict(manifest.get("omc_hud") or {})
     changes = []
 
-    if not (hud / "omc-hud.mjs").is_file():
+    if not all((hud / name).is_file() for name in HUD_FILES):
         root = latest_plugin_root(claude_dir)
         sources = [root / "scripts" / "lib" / "hud-wrapper-template.txt",
                    root / "scripts" / "lib" / "config-dir.mjs"] if root else []
@@ -123,7 +123,8 @@ def install(claude_dir: Path, dry_run: bool) -> int:
                 (hud / "lib").mkdir(parents=True, exist_ok=True)
                 # 이미 있는 파일은 사용자(또는 OMC) 것이라 덮어쓰지 않는다. 복사한 것만 해시와 함께
                 # 기록해, 나중에 OMC 가 다시 써서 주인이 바뀐 파일은 uninstall 이 지우지 않게 한다.
-                copied = dict(receipt.get("hud_copied") or {})
+                copied = receipt.get("hud_copied")
+                copied = dict(copied) if isinstance(copied, dict) else {}
                 for src, name in zip(sources, HUD_FILES):
                     if not (hud / name).exists():
                         shutil.copyfile(src, hud / name)
@@ -135,6 +136,13 @@ def install(claude_dir: Path, dry_run: bool) -> int:
             print("❌ OMC 플러그인 캐시에서 HUD 템플릿을 찾지 못했습니다. 플러그인 설치를 확인하세요.",
                   file=sys.stderr)
             return 1
+
+    # 우리 래퍼가 들어 있는데 접두 표기로 벗겨 낼 수 없으면(앞에 사용자 텍스트가 붙은 경우)
+    # 다시 감싸면 이중 래핑이 된다. 사용자가 손본 명령이므로 멈춘다.
+    if status is not None and TTL_SCRIPT in status["command"] and not PREFIX_RE.match(status["command"]):
+        print(f"❌ statusLine 에 캐시 TTL 래퍼가 알 수 없는 형태로 들어 있어 멈춥니다: {status['command']}",
+              file=sys.stderr)
+        return 1
 
     launcher = node_launcher(claude_dir, ref)
     if status is None:
@@ -204,14 +212,20 @@ def uninstall(claude_dir: Path, dry_run: bool) -> int:
             statusline_removed = True
             changes.append("설치가 추가한 statusLine 제거")
     settings_changed = bool(changes)
+    if isinstance(status, dict) and TTL_SCRIPT in str(status.get("command")):
+        # 벗겨 내지 못한 래퍼가 남아 있다. 여기서 스크립트나 영수증을 지우면 HUD 가 빈 줄이 된다.
+        print(f"❌ statusLine 의 캐시 TTL 래퍼를 알 수 없는 형태라 벗겨 내지 못했습니다: {status['command']}\n"
+              "   직접 정리한 뒤 다시 실행하세요. 아무것도 바꾸지 않았습니다.", file=sys.stderr)
+        return 1
 
-    # 복사한 HUD 파일은 그것을 가리키던 statusLine 도 함께 치울 때, 그리고 복사 당시 내용
-    # 그대로일 때만 지운다. OMC 가 다시 썼거나 statusLine 이 남는다면 지우면 HUD 가 깨진다.
+    # 복사한 HUD 파일은 그것을 가리키던 statusLine 도 함께 치울 때, 그리고 복사한 파일이 모두
+    # 복사 당시 내용 그대로일 때만 한꺼번에 지운다. 하나만 지우면 남은 omc-hud.mjs 가 lib 없이
+    # 깨지고, OMC 가 다시 쓴 파일은 이미 OMC 것이다.
     copied = receipt.get("hud_copied") if isinstance(receipt.get("hud_copied"), dict) else {}
+    copied = {n: d for n, d in copied.items() if n in HUD_FILES and (hud / n).is_file()}
     files = [hud / TTL_SCRIPT]
-    if statusline_removed:
-        files += [hud / name for name, digest in copied.items()
-                  if name in HUD_FILES and (hud / name).is_file() and sha256(hud / name) == digest]
+    if statusline_removed and copied and all(sha256(hud / n) == d for n, d in copied.items()):
+        files += [hud / n for n in copied]
     files = [p for p in files if p.is_file()]
     changes += [f"{p} 삭제" for p in files]
 
@@ -222,10 +236,10 @@ def uninstall(claude_dir: Path, dry_run: bool) -> int:
         return 0
 
     if settings_changed:
-        backup_file(str(settings_path))
         if not settings and receipt.get("settings_created"):
             settings_path.unlink()
         else:
+            backup_file(str(settings_path))
             write_json(str(settings_path), settings)
     for p in files:
         p.unlink()

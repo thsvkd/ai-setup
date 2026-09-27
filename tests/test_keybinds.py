@@ -967,6 +967,7 @@ def test_온보딩에서_ctrl_enter를_고르면_설치결과_ctrl_enter(kb_sand
         keys=[onboard_tests.ENTER,                 # all
               onboard_tests.ENTER,                 # auto
               onboard_tests.DOWN, onboard_tests.ENTER,  # Ctrl+Enter
+              onboard_tests.ENTER,                 # OMC: 아니오
               onboard_tests.ENTER],                # apply
         cwd=kb_sandbox.project, env=env, timeout=90,
     )
