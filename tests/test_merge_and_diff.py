@@ -10,8 +10,9 @@ FRAGMENT = ROOT / "res" / "settings.json"
 
 
 def run_merge(target: Path, dry="0", py="python3", hooks_dir="/home/u/.claude/hooks",
-              manifest_path=None, hook_files="danger_guard.py,shims/rm"):
-    args = [sys.executable, "-X", "utf8", str(MERGE), str(FRAGMENT), str(target), dry, py, hooks_dir]
+              manifest_path=None, hook_files="danger_guard.py,shims/rm", windows=False):
+    args = [sys.executable, "-X", "utf8", str(MERGE)] + (["--windows"] if windows else [])
+    args += [str(FRAGMENT), str(target), dry, py, hooks_dir]
     if manifest_path is not None:
         args += [str(manifest_path), hook_files]
     proc = subprocess.run(args, capture_output=True, text=True, encoding="utf-8")
@@ -393,6 +394,20 @@ def test_uninstall_does_not_clobber_user_changed_env(tmp_path):
     target.write_text(json.dumps(s), encoding="utf-8")
     _, result = run_uninstall(target, manifest)
     assert result["env"]["CLAUDE_CODE_SCROLL_SPEED"] == "7"   # 우리 값이 아니므로 안 건드림
+
+
+# --- Windows 전용 env 키(GRAFT_TEST_SYNC_RUN) — Windows 설치기(--windows)에서만 병합 ---
+
+def test_windows_sets_graft_sync_wrapper_env(tmp_path):
+    # graft 의 Stop 훅이 sync-run.js 대신 숨김 콘솔 래퍼를 띄우도록 훅 디렉터리의 래퍼를 가리킨다.
+    _, result = run_merge(tmp_path / "settings.json", windows=True)
+    assert result["env"]["GRAFT_TEST_SYNC_RUN"] == "/home/u/.claude/hooks/graft_sync_hidden.cjs"
+
+
+def test_posix_skips_graft_sync_wrapper_env(tmp_path):
+    # POSIX 에는 래퍼가 설치되지 않으므로, 키를 넣으면 graft 동기화가 멈춘다 — 넣지 않는다.
+    _, result = run_merge(tmp_path / "settings.json")
+    assert "GRAFT_TEST_SYNC_RUN" not in result["env"]
 
 
 # --- 재실행(멱등)이 설치 영수증을 파괴하지 않는다 ---

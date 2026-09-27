@@ -124,7 +124,8 @@ Install-HookFiles -HooksDir $hooksDir -Files @(
     @{ Source = (Join-Path $ResDir "hooks/danger_guard.py");   DestName = "danger_guard.py" },
     @{ Source = (Join-Path $ResDir "hooks/send_to_trash.py");  DestName = "send_to_trash.py" },
     @{ Source = (Join-Path $ResDir "hooks/shims/rm");          DestName = "shims/rm" },
-    @{ Source = (Join-Path $ResDir "hooks/shims/RmShim.psm1"); DestName = "shims/RmShim.psm1" }
+    @{ Source = (Join-Path $ResDir "hooks/shims/RmShim.psm1"); DestName = "shims/RmShim.psm1" },
+    @{ Source = (Join-Path $ResDir "hooks/graft_sync_hidden.cjs"); DestName = "graft_sync_hidden.cjs" }
 ) | Out-Null
 # 구버전이 심어둔 훅 파일을 걷어낸다. settings.json 쪽 등록 해제는 merge 가 한다.
 $retired = Join-Path $hooksDir "secrets_guard.py"
@@ -132,7 +133,7 @@ if (-not $DryRun -and (Test-Path $retired)) {
     Microsoft.PowerShell.Management\Remove-Item -Force $retired
     Write-Host "  🗑️  구버전 훅 제거: secrets_guard.py (더 이상 배포하지 않습니다)" -ForegroundColor DarkGray
 }
-Write-Host "  ✅ Hook 파일 준비 완료: danger_guard.py, send_to_trash.py, shims/rm, shims/RmShim.psm1" -ForegroundColor Green
+Write-Host "  ✅ Hook 파일 준비 완료: danger_guard.py, send_to_trash.py, shims/rm, shims/RmShim.psm1, graft_sync_hidden.cjs" -ForegroundColor Green
 
 # --- 4. settings.json 병합 계획 수립 및 실행 ---
 Write-Host ""
@@ -147,7 +148,7 @@ $mergeExit = Invoke-SettingsMerge `
     -MergeScriptPath (Join-Path $ResDir "hooks\merge_and_diff.py") `
     -PyExe $py.Exe -PyArgs $py.Args `
     -ManifestPath (Join-Path $WorkHome ".claude\$MANIFEST_NAME") `
-    -HookFilesCsv "danger_guard.py,send_to_trash.py,shims/rm,shims/RmShim.psm1" `
+    -HookFilesCsv "danger_guard.py,send_to_trash.py,shims/rm,shims/RmShim.psm1,graft_sync_hidden.cjs" `
     -DefaultMode $DefaultMode
 if ($mergeExit -ne 0) {
     throw "병합 검증 실패 — 예상치 못한 최상위 키 변경이 감지되었습니다. 수동 확인이 필요합니다."
@@ -186,7 +187,8 @@ Write-SetupReport -DryRun:$DryRun -InstalledFiles @(
     (Join-Path $RealHooksDir "danger_guard.py"),
     (Join-Path $RealHooksDir "send_to_trash.py"),
     (Join-Path $RealHooksDir "shims/rm"),
-    (Join-Path $RealHooksDir "shims/RmShim.psm1")
+    (Join-Path $RealHooksDir "shims/RmShim.psm1"),
+    (Join-Path $RealHooksDir "graft_sync_hidden.cjs")
 ) -SettingsPath $RealSettingsPath -GuardLogPath (Join-Path $RealHooksDir "guard.log") -DependencyWarning $depWarning -DefaultMode $DefaultMode
 # 설치 영수증(매니페스트)은 위 Invoke-SettingsMerge 안에서 merge 가 기록한다.
 

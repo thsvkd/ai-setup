@@ -101,7 +101,7 @@ curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercon
 | 위치 | 내용 |
 | --- | --- |
 | `~/.claude/settings.json` | 권한, 훅 등록, 없을 때만 채우는 기본값(`model`·`effortLevel`·`language` 등) |
-| `~/.claude/hooks/` | 가드 훅 `danger_guard.py`, 삭제를 휴지통으로 돌리는 셰임(`shims/rm`, `shims/RmShim.psm1`), Windows 휴지통 헬퍼 |
+| `~/.claude/hooks/` | 가드 훅 `danger_guard.py`, 삭제를 휴지통으로 돌리는 셰임(`shims/rm`, `shims/RmShim.psm1`), Windows 휴지통 헬퍼와 graft 동기화 래퍼 |
 | `./AGENTS.md`, `./CLAUDE.md` | 프로젝트 작업 규칙. `CLAUDE.md`는 `@AGENTS.md` 한 줄짜리(하네스에 `claude`가 있을 때만). 이미 있으면 건너뜀 |
 | 줄바꿈 키 | `~/.claude/keybindings.json`, `~/.codex/config.toml`, VS Code·Cursor `keybindings.json`(에디터가 없어도 만든다), `~/.tmux.conf`(POSIX만), Windows Terminal(`ctrl-enter`일 때만) |
 
@@ -232,7 +232,7 @@ Claude Code에서 `permissions`의 `deny`/`ask` 규칙은 PreToolUse 훅의 `all
 
 ### settings.json 병합
 
-`permissions.defaultMode: "auto"`, 핵심 툴 `allow`(`Bash`, `PowerShell`, `Read(*)`, `Edit(*)`, `Write(*)`, `Agent(*)`, `WebFetch(*)` 등), `ask`(위험 스킬만 — git 관련 규칙은 없음), `hooks.PreToolUse` 등록, 그리고 없을 때만 채우는 `model: "opus"` / `effortLevel: "xhigh"` / `language: "korean"` 과 `env.CLAUDE_CODE_SCROLL_SPEED: "3"`(마우스 휠 스크롤 속도, `/scroll-speed` 대응)이 병합된다. git 관련 deny/ask를 `permissions`에 두지 않는 이유는 [위 절](#git-정책을-permissions가-아니라-훅이-담당하는-이유-그리고-그-대가)에 있다.
+`permissions.defaultMode: "auto"`, 핵심 툴 `allow`(`Bash`, `PowerShell`, `Read(*)`, `Edit(*)`, `Write(*)`, `Agent(*)`, `WebFetch(*)` 등), `ask`(위험 스킬만 — git 관련 규칙은 없음), `hooks.PreToolUse` 등록, 그리고 없을 때만 채우는 `model: "opus"` / `effortLevel: "xhigh"` / `language: "korean"` 과 `env.CLAUDE_CODE_SCROLL_SPEED: "3"`(마우스 휠 스크롤 속도, `/scroll-speed` 대응)이 병합된다. Windows에서는 `env.GRAFT_TEST_SYNC_RUN`도 없을 때만 채운다 — [graft](https://github.com/NanoNets/context-graph-engine)의 Stop 훅이 턴 종료 때 돌리는 `graft build`가 빈 콘솔 창을 띄우지 않도록, 원래 동기화 스크립트를 숨김 콘솔로 다시 실행하는 `~/.claude/hooks/graft_sync_hidden.cjs`를 가리킨다(graft가 없으면 쓰이지 않는다). git 관련 deny/ask를 `permissions`에 두지 않는 이유는 [위 절](#git-정책을-permissions가-아니라-훅이-담당하는-이유-그리고-그-대가)에 있다.
 
 사용자가 이미 고른 값과 그 외 최상위 키(`statusLine` 등), 그리고 사용자의 기존 `env` 키/값은 건드리지 않는다(우리가 관리하는 `env` 키만 없을 때 추가). 단일 소스는 [`res/settings.json`](res/settings.json)이며, 설치 시 python 실행 명령과 훅 경로만 치환된다.
 
@@ -357,6 +357,7 @@ res/
     shims/rm                # 삭제 → 휴지통 (POSIX 셸·Git Bash)
     shims/RmShim.psm1       # 삭제 → 휴지통 (PowerShell)
     send_to_trash.py        # Windows 휴지통 헬퍼
+    graft_sync_hidden.cjs   # Windows: graft 턴 종료 동기화를 숨김 콘솔로 실행
     merge_and_diff.py       # 자리표시자 치환 + 외과적 병합 엔진
 scripts/
   setup.{ps1,sh}            # CLI 디스패처 (엔트리포인트)

@@ -192,8 +192,10 @@ Describe "실제 설치 경로 (S2)" {
         Test-Path (Join-Path $hooksDir "shims/rm") | Should -Be $true
         Test-Path (Join-Path $hooksDir "shims/RmShim.psm1") | Should -Be $true
         Test-Path (Join-Path $hooksDir "secrets_guard.py") | Should -Be $false
+        Test-Path (Join-Path $hooksDir "graft_sync_hidden.cjs") | Should -Be $true
         $settings = Get-Content (Join-Path $env:USERPROFILE ".claude\settings.json") -Raw | ConvertFrom-Json
         $settings.hooks.PreToolUse.Count | Should -Be 1
+        $settings.env.GRAFT_TEST_SYNC_RUN | Should -Match '/hooks/graft_sync_hidden\.cjs$'
     }
 
     It "멱등 재실행 후에도 중복 없이 영수증(added_allow)이 보존된다" {
