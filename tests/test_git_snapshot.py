@@ -282,6 +282,14 @@ def test_plain_push_to_remote_default_branch_passes(repo, tmp_path):
     "git push origin +HEAD:refs/heads/main",
     "git push -f",
     "git push --force --all origin",
+    # 리뷰에서 나온 누락: HEAD/@ 는 현재 브랜치, 값을 받는 git 전역 옵션, 글로브 refspec
+    "git push -f origin HEAD",
+    "git push origin +HEAD",
+    "git push -f origin @",
+    "git push --force-with-lease origin HEAD",
+    "git -C . push -f origin main",
+    "git -c core.x=y push -f origin main",
+    "git push -f origin 'refs/heads/*:refs/heads/*'",
 ])
 def test_force_push_to_remote_default_branch_asks(repo, tmp_path, cmd):
     """덮어쓴 원격 커밋은 로컬 백업이 닿지 않는다."""
@@ -310,6 +318,18 @@ def test_push_mirror_asks(repo, tmp_path):
     """--mirror 는 원격에만 있는 ref 를 지우고 나머지를 강제로 맞춘다."""
     _with_origin(repo, tmp_path, "main")
     assert _decision("git push --mirror origin", repo) == "ask"
+
+
+def test_push_prune_asks(repo, tmp_path):
+    """--prune 은 로컬에 없는 원격 브랜치를 지운다 — 원격 브랜치 삭제와 같다."""
+    _with_origin(repo, tmp_path, "main")
+    assert _decision("git push --prune origin 'refs/heads/*:refs/heads/*'", repo) == "ask"
+
+
+def test_force_push_not_touching_default_branch_passes(repo, tmp_path):
+    _with_origin(repo, tmp_path, "main")
+    assert _decision("git push --tags -f origin", repo) is None
+    assert _decision("git push -f origin refs/heads/release/main", repo) is None
 
 
 def test_push_respects_remote_default_branch_name(repo, tmp_path):

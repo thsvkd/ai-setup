@@ -41,7 +41,7 @@ Bash 툴(POSIX 셸·Git Bash)과 PowerShell 툴 양쪽을 대상으로 한다. �
          format <드라이브>:, diskpart, Clear-Disk/Initialize-Disk/Remove-Partition)
      되돌릴 수단이 아예 없는 두 부류라 오탐 비용을 감수한다. 로그상 발동 0회.
   4) ask 는 원격 커밋을 지울 수 있을 때뿐이다 — 원격 기본 브랜치로의 force push(`+refspec`,
-     --force-with-lease 포함), --mirror, 원격 브랜치 삭제. 로컬 백업이 닿지 않는 유일한
+     --force-with-lease, HEAD/@, 글로브 refspec 포함), --mirror/--prune, 원격 브랜치 삭제. 로컬 백업이 닿지 않는 유일한
      영역이다. fast-forward push 는 기본 브랜치여도 확인하지 않는다(로그상 23건 전부 정상
      작업이었다). 곁다리 브랜치 push 는 force 여부와 무관하게 확인하지 않는다.
 
@@ -153,7 +153,8 @@ LEADING_CD_RE = re.compile(r"^\s*cd\s+['\"]?([^\s'\";&|]+)")
 
 # --- git push -------------------------------------------------------------------
 
-PUSH_RE = re.compile(r"\bgit\b(?:\s+-\S+|\s+--\S+=\S+)*\s+push\b([^\n;&|]*)")
+# git 전역 옵션 중 -C/-c 는 값을 따로 받는다(`git -C dir push`).
+PUSH_RE = re.compile(r"\bgit\b(?:\s+-[Cc]\s+\S+|\s+-\S+|\s+--\S+=\S+)*\s+push\b([^\n;&|]*)")
 PUSH_VALUE_OPTS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
 PUSH_ALL_FLAGS = {"--all", "--branches"}
 PUSH_DELETE_FLAGS = {"--delete", "-d"}
@@ -360,9 +361,10 @@ def push_ask_reason(command, cwd):
         return None
 
     protected = _default_branches(cwd)
-    if "--mirror" in args:
-        return ("git push --mirror 는 원격에만 있는 ref 를 지우고 나머지를 강제로 맞춥니다. "
-                "원격 히스토리는 로컬 백업으로 되돌릴 수 없습니다. 계속할까요?")
+    wipe = next((a for a in args if a in ("--mirror", "--prune")), None)
+    if wipe:
+        return ("git push %s 는 로컬에 없는 원격 ref 를 지웁니다. 원격 히스토리는 로컬 백업으로 "
+                "되돌릴 수 없습니다. 계속할까요?" % wipe)
     force = any(PUSH_FORCE_RE.match(a) for a in args)
 
     positionals = []
@@ -388,19 +390,28 @@ def push_ask_reason(command, cwd):
                 "없습니다. 계속할까요?" % ", ".join(names) if names else
                 "원격 브랜치를 삭제하려고 합니다. 계속할까요?")
 
+    def current_branch():
+        b = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd).stdout.strip()
+        return b if b and b != "HEAD" else None
+
     refspecs = positionals[1:]              # 첫 위치 인자는 원격 이름
     if any(a in PUSH_ALL_FLAGS for a in args):
         targets = sorted(protected) if force else []
     elif not refspecs:
-        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd).stdout.strip()
-        targets = [branch] if force and branch and branch != "HEAD" else []
+        # `--tags` 만 있으면 브랜치는 보내지 않는다.
+        targets = [current_branch()] if force and "--tags" not in args else []
     else:
         targets = []
         for spec in refspecs:
             if not (force or spec.startswith("+")):   # `+` 는 그 refspec 만 force 한다
                 continue
             dst = spec.split(":")[-1].lstrip("+")
-            targets.append(dst.rsplit("/", 1)[-1] if dst.startswith("refs/") else dst)
+            if "*" in dst:                            # 글로브는 기본 브랜치도 덮는다
+                targets.extend(protected)
+            elif dst in ("HEAD", "@"):
+                targets.append(current_branch())
+            else:
+                targets.append(dst[len("refs/heads/"):] if dst.startswith("refs/heads/") else dst)
 
     hit = [t for t in targets if t in protected]
     if hit:

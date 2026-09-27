@@ -57,7 +57,7 @@ function Send-ClaudeTrash {
         & $trash.Source @Paths
     }
     else { throw '휴지통 도구를 찾지 못했습니다.' }
-    if ($LASTEXITCODE -ne 0) { throw "trash-put 이 종료 코드 $LASTEXITCODE 로 실패했습니다." }
+    if ($LASTEXITCODE -ne 0) { throw "$($trash.Name) 이 종료 코드 $LASTEXITCODE 로 실패했습니다." }
 }
 
 function Remove-Item {
