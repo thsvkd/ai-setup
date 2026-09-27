@@ -32,6 +32,7 @@ param(
     [switch]$Hooks,
     [switch]$AgentsMd,
     [switch]$Keybinds,
+    [switch]$Omc,
     [string]$Newline,
     [switch]$Uninstall,
     [switch]$DryRun,
@@ -136,6 +137,7 @@ function Invoke-Install {
         [switch]$Hooks,
         [switch]$AgentsMd,
         [switch]$Keybinds,
+        [switch]$Omc,
         [string]$Newline,
         [switch]$Uninstall,
         [switch]$DryRun,
@@ -156,6 +158,7 @@ function Invoke-Install {
             '^--hooks$'              { $Hooks = $true }
             '^--agents-?md$'         { $AgentsMd = $true }
             '^--keybinds$'           { $Keybinds = $true }
+            '^--omc$'                { $Omc = $true }
             '^--uninstall$'          { $Uninstall = $true }
             '^--dry-run$'            { $DryRun = $true }
             '^--no-onboard$'         { $NoOnboard = $true }
@@ -179,7 +182,7 @@ claude-code-setup 원격 설치 부트스트랩 (Windows)
   & ([scriptblock]::Create((irm .../install.ps1))) -DryRun               # 미리보기
   & ([scriptblock]::Create((irm .../install.ps1))) -NoOnboard            # 온보딩 없이 전체 설치
 
-install.sh 와 같은 긴 표기(--hooks / --agentsmd / --keybinds / --newline VAL /
+install.sh 와 같은 긴 표기(--hooks / --agentsmd / --keybinds / --omc / --newline VAL /
 --uninstall / --dry-run / --no-onboard / --help)도 그대로 받습니다.
 
 플래그 없이 실행하면 설치 범위·권한 모드(auto/bypassPermissions)를 고르는 온보딩이 뜹니다.
@@ -232,7 +235,7 @@ install.sh 와 같은 긴 표기(--hooks / --agentsmd / --keybinds / --newline V
         # $PSBoundParameters 가 아니라 변수에서 읽는다 — 위 긴 표기(--dry-run) 해석 결과는
         # $PSBoundParameters 에 남지 않는다.
         $fwd = @{}
-        foreach ($k in 'Hooks', 'AgentsMd', 'Uninstall', 'DryRun', 'NoOnboard', 'Keybinds') {
+        foreach ($k in 'Hooks', 'AgentsMd', 'Uninstall', 'DryRun', 'NoOnboard', 'Keybinds', 'Omc') {
             if (Get-Variable -Name $k -ValueOnly) { $fwd[$k] = $true }
         }
         if ($newlineGiven) {

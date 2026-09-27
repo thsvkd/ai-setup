@@ -38,6 +38,7 @@ claude-code-setup 원격 설치 부트스트랩
   curl -fsSL .../install.sh | sh -s -- --dry-run  # 아무것도 바꾸지 않고 미리보기
   curl -fsSL .../install.sh | sh -s -- --no-onboard # 온보딩 없이 전체 설치
   curl -fsSL .../install.sh | sh -s -- --keybinds # 줄바꿈 키바인딩만
+  curl -fsSL .../install.sh | sh -s -- --omc      # oh-my-claudecode + 캐시 TTL HUD
   curl -fsSL .../install.sh | sh -s -- --newline ctrl-enter
   curl -fsSL .../install.sh | sh -s -- --help     # 이 도움말
 

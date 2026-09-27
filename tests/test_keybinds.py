@@ -916,6 +916,7 @@ def test_온보딩_hooks_범위는_키바인드를_설치하지_않는다(kb_san
         ["bash", str(SETUP_SH)],
         keys=[onboard_tests.DOWN, onboard_tests.ENTER,  # hooks
               onboard_tests.ENTER,                      # auto
+              onboard_tests.ENTER,                      # OMC: 아니오
               onboard_tests.ENTER],                     # apply
         cwd=kb_sandbox.project, env=env, timeout=90,
     )
