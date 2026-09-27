@@ -16,6 +16,7 @@ scripts/setup_omc.sh(.ps1) 가 OMC 플러그인을 설치한 뒤 호출한다.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -31,9 +32,9 @@ MANIFEST_NAME = ".claude-code-setup.json"
 TTL_SCRIPT = "omc-hud-ttl.mjs"
 REFRESH_SECONDS = 10
 PLUGIN_CACHE = Path("plugins") / "cache" / "omc" / "oh-my-claudecode"
-# 우리 접두는 따옴표로 감싼 TTL 스크립트 경로에서 끝난다. 그 앞의 node 실행기 표기는 설치
-# 환경마다 다르므로(node / find-node.sh / 절대 경로) 스크립트 경로까지를 한 덩어리로 본다.
-PREFIX_RE = re.compile(r'^.*?"[^"]*' + re.escape(TTL_SCRIPT) + r'" ')
+# 우리 접두: node 실행기(node_launcher 가 만드는 세 가지 표기) + 따옴표로 감싼 TTL 스크립트 경로.
+# 실행기 표기를 명시해야 앞에 붙은 사용자 텍스트(cd … &&, FOO=1 등)까지 우리 것으로 삼키지 않는다.
+PREFIX_RE = re.compile(r'^(?:node|sh "[^"]*find-node\.sh"|"[^"]*") "[^"]*' + re.escape(TTL_SCRIPT) + r'" ')
 HUD_FILES = ("omc-hud.mjs", "lib/config-dir.mjs")
 
 
@@ -76,10 +77,15 @@ def load_json_object(path: Path) -> dict:
     """없으면 {}. 있는데 읽을 수 없으면 ValueError — 호출부는 쓰지 않고 멈춘다."""
     if not path.is_file():
         return {}
-    data = json.loads(path.read_text(encoding="utf-8"))
+    # utf-8-sig: Windows PowerShell 5.1 의 Set-Content -Encoding UTF8 은 BOM 을 붙인다.
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(data, dict):
         raise ValueError("최상위가 객체가 아닙니다")
     return data
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def install(claude_dir: Path, dry_run: bool) -> int:
@@ -95,7 +101,8 @@ def install(claude_dir: Path, dry_run: bool) -> int:
         return 1
 
     status = settings.get("statusLine")
-    if status is not None and not (isinstance(status, dict) and status.get("command")):
+    if status is not None and not (isinstance(status, dict) and isinstance(status.get("command"), str)
+                                   and status["command"]):
         print("❌ statusLine 형식을 알 수 없어 멈춥니다. 직접 확인하세요.", file=sys.stderr)
         return 1
     if status is not None and "omc-hud" not in status["command"]:
@@ -114,9 +121,14 @@ def install(claude_dir: Path, dry_run: bool) -> int:
             changes.append(f"OMC HUD 래퍼 복사: {sources[0]} → {hud / 'omc-hud.mjs'}")
             if not dry_run:
                 (hud / "lib").mkdir(parents=True, exist_ok=True)
+                # 이미 있는 파일은 사용자(또는 OMC) 것이라 덮어쓰지 않는다. 복사한 것만 해시와 함께
+                # 기록해, 나중에 OMC 가 다시 써서 주인이 바뀐 파일은 uninstall 이 지우지 않게 한다.
+                copied = dict(receipt.get("hud_copied") or {})
                 for src, name in zip(sources, HUD_FILES):
-                    shutil.copyfile(src, hud / name)
-                receipt["hud_copied"] = True
+                    if not (hud / name).exists():
+                        shutil.copyfile(src, hud / name)
+                        copied[name] = sha256(hud / name)
+                receipt["hud_copied"] = copied
         elif dry_run:
             changes.append("OMC HUD 래퍼 복사 (플러그인 설치 후 결정)")
         else:
@@ -124,17 +136,22 @@ def install(claude_dir: Path, dry_run: bool) -> int:
                   file=sys.stderr)
             return 1
 
+    launcher = node_launcher(claude_dir, ref)
     if status is None:
-        status = {"type": "command", "command": f'node "{ref}/omc-hud.mjs"'}
+        status = {"type": "command", "command": f'{launcher} "{ref}/omc-hud.mjs"'}
         settings["statusLine"] = status
         receipt["statusline_added"] = status["command"]
         receipt.setdefault("settings_created", not settings_path.is_file())
         changes.append("statusLine 추가: OMC HUD")
 
     changes.append(f"캐시 TTL 래퍼 복사: {hud / TTL_SCRIPT}")
-    if not PREFIX_RE.match(status["command"]):
-        status["command"] = f'{node_launcher(claude_dir, ref)} "{ref}/{TTL_SCRIPT}" ' + status["command"]
-        changes.append("statusLine.command 앞에 캐시 TTL 래퍼 연결 (session → cache)")
+    # 이전 버전 접두가 있으면 벗겨 내고 현재 표기로 다시 붙인다 — 재설치가 곧 갱신이 되게.
+    inner = PREFIX_RE.sub("", status["command"], count=1)
+    wrapped = f'{launcher} "{ref}/{TTL_SCRIPT}" ' + inner
+    if status["command"] != wrapped:
+        changes.append("statusLine.command 앞에 캐시 TTL 래퍼 연결 (session → cache)"
+                       if inner == status["command"] else "statusLine.command 의 캐시 TTL 래퍼 표기 갱신")
+        status["command"] = wrapped
     if "refreshInterval" not in status:
         status["refreshInterval"] = REFRESH_SECONDS
         receipt["refresh_interval_added"] = True
@@ -172,8 +189,9 @@ def uninstall(claude_dir: Path, dry_run: bool) -> int:
 
     changes = []
     status = settings.get("statusLine")
-    if isinstance(status, dict):
-        if PREFIX_RE.match(status.get("command") or ""):
+    statusline_removed = False
+    if isinstance(status, dict) and isinstance(status.get("command"), str):
+        if PREFIX_RE.match(status["command"]):
             status["command"] = PREFIX_RE.sub("", status["command"], count=1)
             changes.append("statusLine.command 에서 캐시 TTL 래퍼 제거")
         # 사용자가 나중에 바꾼 값은 사용자 것이다. 우리가 넣은 값 그대로일 때만 지운다.
@@ -183,10 +201,17 @@ def uninstall(claude_dir: Path, dry_run: bool) -> int:
         if receipt.get("statusline_added") and status == {"type": "command",
                                                           "command": receipt["statusline_added"]}:
             del settings["statusLine"]
+            statusline_removed = True
             changes.append("설치가 추가한 statusLine 제거")
     settings_changed = bool(changes)
 
-    files = [hud / TTL_SCRIPT] + ([hud / name for name in HUD_FILES] if receipt.get("hud_copied") else [])
+    # 복사한 HUD 파일은 그것을 가리키던 statusLine 도 함께 치울 때, 그리고 복사 당시 내용
+    # 그대로일 때만 지운다. OMC 가 다시 썼거나 statusLine 이 남는다면 지우면 HUD 가 깨진다.
+    copied = receipt.get("hud_copied") if isinstance(receipt.get("hud_copied"), dict) else {}
+    files = [hud / TTL_SCRIPT]
+    if statusline_removed:
+        files += [hud / name for name, digest in copied.items()
+                  if name in HUD_FILES and (hud / name).is_file() and sha256(hud / name) == digest]
     files = [p for p in files if p.is_file()]
     changes += [f"{p} 삭제" for p in files]
 

@@ -329,7 +329,8 @@ function Uninstall-Hooks {
                 }
             } catch { $payload = [ordered]@{} }
             if ($payload.Count -gt 0) {
-                Set-Content -Path $manifestPath -Value ($payload | ConvertTo-Json -Depth 20) -Encoding UTF8
+                # BOM 없이 쓴다. Windows PowerShell 5.1 의 Set-Content -Encoding UTF8 은 BOM 을 붙인다.
+                [IO.File]::WriteAllText($manifestPath, ($payload | ConvertTo-Json -Depth 20), (New-Object Text.UTF8Encoding $false))
                 Write-Host "  🧾 유지: $manifestPath (다른 워커의 영수증만 남김)"
             } else {
                 Remove-Item -Force $manifestPath -ErrorAction SilentlyContinue

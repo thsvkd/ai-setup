@@ -164,12 +164,13 @@ def test_캐시_정보가_없으면_session_표시를_그대로_둔다():
 
 
 @needs_node
-def test_안쪽_명령의_실패를_종료코드와_stderr로_전달한다():
+def test_안쪽_명령의_실패는_stderr로_전달하고_종료코드는_0이다():
+    """OMC find-node.sh 처럼 statusLine 을 0 이 아닌 코드로 끝내지 않는다."""
     proc = subprocess.run(
         ["node", str(TTL), sys.executable, "-c", "import sys; sys.stderr.write('boom'); sys.exit(3)"],
         input="{}", capture_output=True, text=True, encoding="utf-8", timeout=30,
     )
-    assert proc.returncode == 3
+    assert proc.returncode == 0
     assert "boom" in proc.stderr
 
 
@@ -179,6 +180,62 @@ def test_statusLine이_없던_설치는_uninstall이_만든_것을_모두_치운
     assert not (home / ".claude" / "settings.json").exists()
     assert not (home / ".claude" / "hud").exists()
     assert not (home / ".claude" / ".claude-code-setup.json").exists()
+
+
+def test_OMC가_다시_쓴_HUD_파일은_uninstall이_지우지_않는다(home):
+    """omc-setup 이 HUD 파일과 statusLine 을 다시 쓰면 그 파일은 더 이상 우리 것이 아니다."""
+    assert apply(home).returncode == 0
+    hud = home / ".claude" / "hud"
+    (hud / "omc-hud.mjs").write_text("// OMC generated\n", encoding="utf-8")
+    data = settings(home)
+    data["statusLine"]["command"] = data["statusLine"]["command"].rsplit('" ', 1)[0] + '" ' + OMC_CMD
+    write_settings(home, data)
+    assert apply(home, "--uninstall").returncode == 0
+    assert (hud / "omc-hud.mjs").read_text(encoding="utf-8") == "// OMC generated\n"
+    assert (hud / "lib" / "config-dir.mjs").is_file()
+    assert settings(home)["statusLine"]["command"] == OMC_CMD
+
+
+def test_이미_있는_config_dir은_덮어쓰지_않는다(home):
+    lib = home / ".claude" / "hud" / "lib"
+    lib.mkdir(parents=True)
+    (lib / "config-dir.mjs").write_text("// mine\n", encoding="utf-8")
+    assert apply(home).returncode == 0
+    assert apply(home, "--uninstall").returncode == 0
+    assert (lib / "config-dir.mjs").read_text(encoding="utf-8") == "// mine\n"
+
+
+def test_이전_버전_접두는_재설치하면_현재_표기로_바뀐다(home):
+    old = 'node "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hud/omc-hud-ttl.mjs" ' + OMC_CMD
+    write_settings(home, {"statusLine": {"type": "command", "command": old, "refreshInterval": 10}})
+    assert apply(home).returncode == 0
+    command = settings(home)["statusLine"]["command"]
+    assert "CLAUDE_CONFIG_DIR:-$HOME/.claude}/hud/omc-hud-ttl" not in command
+    assert command.endswith('/omc-hud-ttl.mjs" ' + OMC_CMD) and command.count("omc-hud-ttl.mjs") == 1
+
+
+def test_BOM이_붙은_매니페스트도_읽는다(home):
+    """Windows PowerShell 5.1 의 Set-Content -Encoding UTF8 은 BOM 을 붙여 쓴다."""
+    write_settings(home, {"statusLine": {"type": "command", "command": OMC_CMD}})
+    assert apply(home).returncode == 0
+    manifest = home / ".claude" / ".claude-code-setup.json"
+    manifest.write_bytes(b"\xef\xbb\xbf" + manifest.read_bytes())
+    assert apply(home, "--uninstall").returncode == 0
+    assert settings(home)["statusLine"] == {"type": "command", "command": OMC_CMD}
+
+
+def test_래퍼_앞의_사용자_텍스트는_uninstall이_지우지_않는다(home):
+    command = 'cd /tmp && node "$HOME/.claude/hud/omc-hud-ttl.mjs" ' + OMC_CMD
+    write_settings(home, {"statusLine": {"type": "command", "command": command}})
+    assert apply(home, "--uninstall").returncode == 0
+    assert settings(home)["statusLine"]["command"] == command
+
+
+def test_문자열이_아닌_command는_멈춘다(home):
+    write_settings(home, {"statusLine": {"type": "command", "command": 123}})
+    assert apply(home).returncode == 1
+    assert apply(home, "--uninstall").returncode == 0
+    assert settings(home)["statusLine"]["command"] == 123
 
 
 def test_설치_뒤_사용자가_바꾼_refreshInterval은_uninstall이_남긴다(home):

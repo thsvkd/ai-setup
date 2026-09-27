@@ -199,6 +199,43 @@ Describe "실제 설치 경로 (S2)" {
         $after.model | Should -Be "sonnet"
         $after.permissions.defaultMode | Should -Be "auto"
     }
+
+    # OMC 설치는 실제 claude CLI 를 부르므로, 설치 결과(settings + 영수증)를 심어 두고 제거 경로만 검증한다.
+    It "-Uninstall -Hooks 는 omc_hud 영수증을 남기고, 이어서 -Uninstall -Omc 가 캐시 TTL 설정을 되돌린다" {
+        Invoke-Script $script:Setup @("-Hooks") | Out-Null
+        $claudeDir = Join-Path $env:USERPROFILE ".claude"
+        $settingsPath = Join-Path $claudeDir "settings.json"
+        $manifestPath = Join-Path $claudeDir ".claude-code-setup.json"
+        $omcCmd = 'sh "$HOME/.claude/hud/omc-hud-cache.sh" "$HOME/.claude/hud/omc-hud.mjs"'
+        $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
+        $settings | Add-Member -NotePropertyName statusLine -NotePropertyValue ([pscustomobject]@{
+            type = "command"; command = 'node "$HOME/.claude/hud/omc-hud-ttl.mjs" ' + $omcCmd; refreshInterval = 10 })
+        Set-Content -Path $settingsPath -Value ($settings | ConvertTo-Json -Depth 20) -Encoding utf8
+        $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+        $manifest | Add-Member -NotePropertyName omc_hud -NotePropertyValue ([pscustomobject]@{ refresh_interval_added = $true })
+        Set-Content -Path $manifestPath -Value ($manifest | ConvertTo-Json -Depth 20) -Encoding utf8
+
+        (Invoke-Script $script:Setup @("-Uninstall", "-Hooks")).ExitCode | Should -Be 0
+        (Get-Content $manifestPath -Raw | ConvertFrom-Json).omc_hud.refresh_interval_added | Should -Be $true
+
+        $r = Invoke-Script $script:Setup @("-Uninstall", "-Omc")
+        $r.ExitCode | Should -Be 0
+        $after = (Get-Content $settingsPath -Raw | ConvertFrom-Json).statusLine
+        $after.command | Should -Be $omcCmd
+        $after.PSObject.Properties.Name | Should -Not -Contain "refreshInterval"
+        Test-Path $manifestPath | Should -Be $false
+    }
+
+    It "-Omc -Uninstall -DryRun 은 아무것도 바꾸지 않는다" {
+        New-Item -ItemType Directory -Force -Path (Join-Path $env:USERPROFILE ".claude") | Out-Null
+        $settingsPath = Join-Path $env:USERPROFILE ".claude\settings.json"
+        $seed = '{"statusLine": {"type": "command", "command": "node \"$HOME/.claude/hud/omc-hud-ttl.mjs\" node x/omc-hud.mjs", "refreshInterval": 10}}'
+        Set-Content -Path $settingsPath -Value $seed -Encoding utf8
+        $r = Invoke-Script $script:Setup @("-Omc", "-Uninstall", "-DryRun")
+        $r.ExitCode | Should -Be 0
+        $r.Output | Should -Match "DRY RUN"
+        (Get-Content $settingsPath -Raw).Trim() | Should -Be $seed
+    }
 }
 
 # Windows PowerShell 5.1 은 BOM 없는 UTF-8 .ps1 을 OS ANSI 코드페이지([System.Text.Encoding]::Default)

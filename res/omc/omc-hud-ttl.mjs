@@ -29,10 +29,10 @@ try { cache = JSON.parse(input).prompt_cache; } catch { /* 파싱 불가면 원�
 const [cmd, ...args] = process.argv.slice(2);
 if (!cmd) process.exit(0);
 const r = spawnSync(cmd, args, { input, encoding: "utf8", timeout: 10000 });
-// HUD 가 사라졌을 때 원인을 찾을 수 있도록 안쪽 명령의 실패를 그대로 전달한다.
+// HUD 가 사라졌을 때 원인을 찾을 수 있도록 안쪽 명령의 실패는 stderr 로 전달한다. 종료 코드는
+// OMC find-node.sh 처럼 항상 0 — statusLine 이 0 이 아닌 코드로 끝나 표시가 버려지지 않게.
 if (r.error) process.stderr.write(`[omc-hud-ttl] ${r.error.message}\n`);
 if (r.stderr) process.stderr.write(r.stderr);
-process.exitCode = r.status ?? 1;
 
 let out = r.stdout || "";
 // 캐시 정보가 없으면(구버전 Claude Code 등) 쓸모 있는 session 표시를 그대로 둔다.
