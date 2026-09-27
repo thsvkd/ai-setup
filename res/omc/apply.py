@@ -109,6 +109,13 @@ def install(claude_dir: Path, dry_run: bool) -> int:
         print(f"⚠️ statusLine 이 OMC HUD 가 아닙니다 ({status['command']}). 사용자 설정이라 건드리지 않습니다.")
         return 0
 
+    # 우리 래퍼가 들어 있는데 접두 표기로 벗겨 낼 수 없으면(앞에 사용자 텍스트가 붙은 경우)
+    # 다시 감싸면 이중 래핑이 된다. 사용자가 손본 명령이므로 아무것도 쓰기 전에 멈춘다.
+    if status is not None and TTL_SCRIPT in status["command"] and not PREFIX_RE.match(status["command"]):
+        print(f"❌ statusLine 에 캐시 TTL 래퍼가 알 수 없는 형태로 들어 있어 멈춥니다: {status['command']}",
+              file=sys.stderr)
+        return 1
+
     before = json.dumps(settings, sort_keys=True)
     receipt = dict(manifest.get("omc_hud") or {})
     changes = []
@@ -137,13 +144,6 @@ def install(claude_dir: Path, dry_run: bool) -> int:
                   file=sys.stderr)
             return 1
 
-    # 우리 래퍼가 들어 있는데 접두 표기로 벗겨 낼 수 없으면(앞에 사용자 텍스트가 붙은 경우)
-    # 다시 감싸면 이중 래핑이 된다. 사용자가 손본 명령이므로 멈춘다.
-    if status is not None and TTL_SCRIPT in status["command"] and not PREFIX_RE.match(status["command"]):
-        print(f"❌ statusLine 에 캐시 TTL 래퍼가 알 수 없는 형태로 들어 있어 멈춥니다: {status['command']}",
-              file=sys.stderr)
-        return 1
-
     launcher = node_launcher(claude_dir, ref)
     if status is None:
         status = {"type": "command", "command": f'{launcher} "{ref}/omc-hud.mjs"'}
@@ -154,7 +154,9 @@ def install(claude_dir: Path, dry_run: bool) -> int:
 
     changes.append(f"캐시 TTL 래퍼 복사: {hud / TTL_SCRIPT}")
     # 이전 버전 접두가 있으면 벗겨 내고 현재 표기로 다시 붙인다 — 재설치가 곧 갱신이 되게.
-    inner = PREFIX_RE.sub("", status["command"], count=1)
+    inner = status["command"]
+    while PREFIX_RE.match(inner):  # 이전 버그가 남긴 이중 래핑도 한 겹으로 정리한다
+        inner = PREFIX_RE.sub("", inner, count=1)
     wrapped = f'{launcher} "{ref}/{TTL_SCRIPT}" ' + inner
     if status["command"] != wrapped:
         changes.append("statusLine.command 앞에 캐시 TTL 래퍼 연결 (session → cache)"

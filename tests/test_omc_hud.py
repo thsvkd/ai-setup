@@ -217,6 +217,8 @@ def test_벗겨낼_수_없는_래퍼가_있으면_install과_uninstall_모두_�
     ttl.parent.mkdir(parents=True)
     ttl.write_text("// in use\n", encoding="utf-8")
     assert apply(home).returncode == 1
+    assert not (home / ".claude" / "hud" / "omc-hud.mjs").exists()
+    assert not (home / ".claude" / ".claude-code-setup.json").exists()
     assert apply(home, "--uninstall").returncode == 1
     assert ttl.is_file()
     assert settings(home)["statusLine"]["command"] == command
@@ -226,6 +228,18 @@ def test_1차_수정본_영수증_형식도_읽는다(home):
     manifest = home / ".claude" / ".claude-code-setup.json"
     manifest.write_text(json.dumps({"omc_hud": {"hud_copied": True}}), encoding="utf-8")
     assert apply(home).returncode == 0
+    assert isinstance(json.loads(manifest.read_text(encoding="utf-8"))["omc_hud"]["hud_copied"], dict)
+    assert apply(home, "--uninstall").returncode == 0
+    assert not (home / ".claude" / "hud").exists()
+
+
+def test_이중으로_감싼_래퍼는_재설치가_한_겹으로_정리한다(home):
+    wrapped = 'node "$HOME/.claude/hud/omc-hud-ttl.mjs" '
+    write_settings(home, {"statusLine": {"type": "command", "command": wrapped * 2 + OMC_CMD}})
+    assert apply(home).returncode == 0
+    assert settings(home)["statusLine"]["command"].count("omc-hud-ttl.mjs") == 1
+    assert apply(home, "--uninstall").returncode == 0
+    assert settings(home)["statusLine"]["command"] == OMC_CMD
 
 
 def test_이미_있는_config_dir은_덮어쓰지_않는다(home):
