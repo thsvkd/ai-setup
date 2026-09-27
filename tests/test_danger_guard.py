@@ -191,12 +191,26 @@ def test_bash_rm_gets_shim_path_prefix_and_keeps_command_verbatim():
     original = 'rm -rf "$FOO/bar" && echo done'
     p = payload_of(bash(original))
     out = p["hookSpecificOutput"]
-    assert out["permissionDecision"] == "allow"
+    # 판정을 내지 않는다. `allow` 를 붙이면 권한 프롬프트·auto mode 분류기를 건너뛰어,
+    # `rm` 이 섞였다는 이유만으로 아무 명령이나 자동 승인된다(실측: 권한 규칙 없는 명령이
+    # allow+updatedInput 이면 실행되고, updatedInput 만이면 평소대로 거부된다).
+    assert "permissionDecision" not in out
     new = out["updatedInput"]["command"]
     # 원문이 접미로 그대로 남아야 한다 — 한 글자라도 바꾸면 확장이 깨진다.
     assert new.endswith(original)
     assert new[: -len(original)].strip().startswith("case ")
     assert "shims" in new
+
+
+def test_shim_prefix_keeps_other_tool_input_fields():
+    """updatedInput 은 입력 객체 전체를 대체한다. command 만 넘기면 timeout·
+    run_in_background 같은 필드가 조용히 사라진다."""
+    ev = {"tool_name": "Bash", "tool_input": {
+        "command": "rm x", "timeout": 600000, "run_in_background": True, "description": "d"}}
+    new = payload_of(ev)["hookSpecificOutput"]["updatedInput"]
+    assert new["timeout"] == 600000
+    assert new["run_in_background"] is True
+    assert new["description"] == "d"
 
 
 def test_bash_shim_prefix_is_idempotent_guarded():
@@ -213,6 +227,7 @@ def test_bash_without_rm_is_untouched():
 def test_powershell_delete_gets_module_import_prefix():
     original = "Remove-Item -Recurse -Force .\\build"
     p = payload_of(ps(original))
+    assert "permissionDecision" not in p["hookSpecificOutput"]
     new = p["hookSpecificOutput"]["updatedInput"]["command"]
     assert new.endswith(original)
     assert "Import-Module" in new and "RmShim" in new

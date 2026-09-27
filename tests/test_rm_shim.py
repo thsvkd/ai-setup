@@ -133,3 +133,33 @@ def test_deleted_content_is_recoverable():
     assert not (d / "sub").exists()
     listing = subprocess.run(["trash-list"], capture_output=True, text=True).stdout
     assert str(d / "sub") in listing
+
+
+def test_macos_builtin_trash_is_used_when_trash_put_is_absent(tmp_path):
+    """macOS 14.4+ 는 /usr/bin/trash 를 기본 제공한다. 설치기(setup_hooks.sh)는 이것을
+    휴지통 도구로 인정하므로, 셰임도 이것을 써야 한다 — 아니면 '휴지통 있음'으로 설치해 놓고
+    실제로는 삭제한다. trash-put 이 없는 PATH 에 가짜 uname(Darwin)·trash 를 둬서 흉내 낸다.
+    """
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "uname").write_text("#!/bin/sh\necho Darwin\n", encoding="utf-8")
+    # 대시로 시작하는 인자를 받으면 옵션으로 오인했다는 뜻이다 — 실패로 기록한다.
+    (fake / "trash").write_text(
+        '#!/bin/sh\nfor a; do case "$a" in -*) echo "OPT:$a" >> "$LOG"; exit 2 ;; esac\n'
+        'echo "$a" >> "$LOG"; mv -- "$a" "$BIN_DIR/"; done\n', encoding="utf-8")
+    for f in fake.iterdir():
+        f.chmod(0o755)
+    d = BASE / "mac"
+    make_fixture(d)
+    bin_dir = tmp_path / "trashbin"
+    bin_dir.mkdir()
+    log = tmp_path / "log"
+    env = dict(os.environ, LOG=str(log), BIN_DIR=str(bin_dir))
+    env.pop("CLAUDE_NO_TRASH", None)
+    env["PATH"] = os.pathsep.join([str(SHIM_DIR), str(fake), "/usr/bin", "/bin"])
+    proc = subprocess.run(["bash", "-c", "rm -rf sub a.txt -- -weird"], cwd=str(d), env=env,
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert "휴지통 없이" not in proc.stderr
+    assert "OPT:" not in log.read_text(encoding="utf-8")
+    assert sorted(p.name for p in bin_dir.iterdir()) == ["-weird", "a.txt", "sub"]

@@ -179,13 +179,13 @@ def emit(decision, reason, updated_input=None, context=None):
     않아야 하는' 정보에 쓴다.
     """
     out = {"hookEventName": "PreToolUse"}
-    if updated_input is not None:
-        out["permissionDecision"] = "allow"
-        out["permissionDecisionReason"] = reason
-        out["updatedInput"] = updated_input
-    elif decision is not None:
+    if decision is not None:
         out["permissionDecision"] = decision
         out["permissionDecisionReason"] = reason
+    # updatedInput 은 판정 없이도 적용된다. 여기에 allow 를 붙이면 권한 프롬프트와 auto mode
+    # 분류기를 건너뛰므로, 셰임 선행 줄은 반드시 판정 없이 내보낸다(실측, CC 2.1.283).
+    if updated_input is not None:
+        out["updatedInput"] = updated_input
     if context:
         out["additionalContext"] = context
     print(json.dumps({"hookSpecificOutput": out}, ensure_ascii=False))
@@ -470,8 +470,7 @@ def main():
     prefix = shim_prefix(tool_name, command)
     if prefix:
         log({"tool": tool_name, "command": command, "decision": "prepend-shim"})
-        emit("allow", "삭제 → 휴지통 셰임 경유 (선행 한 줄, 명령 원문 그대로)",
-             updated_input={"command": prefix + command},
+        emit(None, "", updated_input=dict(data.get("tool_input", {}), command=prefix + command),
              context="\n".join(notes) if notes else None)
 
     if notes:
