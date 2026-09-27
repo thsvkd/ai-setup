@@ -288,7 +288,7 @@ function Uninstall-Hooks {
     }
     if (-not $files -or $files.Count -eq 0) {
         $files = @("danger_guard.py", "secrets_guard.py", "send_to_trash.py",
-                   "shims/rm", "shims/RmShim.psm1")
+                   "shims/rm", "shims/RmShim.psm1", "graft_sync_hidden.cjs")
     }
 
     Write-Host "[1/2] settings.json 정밀 복원 (설치가 건드린 것만)..."
