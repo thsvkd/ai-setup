@@ -18,11 +18,15 @@ Bash 툴(POSIX 셸·Git Bash)과 PowerShell 툴 양쪽을 대상으로 한다. �
 
 정책:
   1) 삭제 → 휴지통. 인자를 건드리지 않는다.
-     Bash      : PATH 맨 앞에 shims/ 를 끼워 넣는 한 줄만 붙인다. shims/rm 은 셸이 확장을
-                 끝낸 뒤의 argv 를 받으므로 해석이 원본 rm 과 어긋날 수 없다. 덤으로
-                 `find -exec rm`·`xargs rm`·스크립트 내부 rm 도 PATH 로 해석되므로 같은
-                 경로를 탄다 — 종전에 ask 로 막던 것들이다.
-     PowerShell: shims/RmShim.psm1 을 Import-Module 하는 한 줄만 붙인다. 명령 우선순위가
+     Bash      : SessionStart 에서 CLAUDE_ENV_FILE 에 'PATH 맨 앞에 shims/' 를 적는다. Claude
+                 Code 가 이 파일을 매 Bash 명령 전에 source 하므로 명령 문자열을 바꿀 필요가
+                 없다. 종전처럼 명령 앞에 줄을 붙이면 권한 규칙이 바뀐 명령에 대해 평가돼
+                 `Bash(rm *)` 같은 사용자 허용 규칙이 맞지 않게 되고, allow 를 붙이면 권한
+                 체계를 통째로 우회한다(둘 다 실측, CC 2.1.283). shims/rm 은 셸이 확장을
+                 끝낸 뒤의 argv 를 받으므로 해석이 원본 rm 과 어긋날 수 없고, `find -exec rm`·
+                 `xargs rm`·스크립트 내부 rm 도 PATH 로 해석되므로 같은 경로를 탄다.
+     PowerShell: CLAUDE_ENV_FILE 은 Bash 전용이라, shims/RmShim.psm1 을 Import-Module 하는
+                 한 줄을 updatedInput 으로 붙인다(판정 없이 — allow 를 붙이면 권한 우회). 명령 우선순위가
                  별칭 > 함수 > cmdlet 이라 같은 이름의 함수가 Remove-Item cmdlet 을 가리고,
                  rm/del/erase/ri/rd/rmdir 별칭이 전부 그 함수로 해석된다.
      한계: `sudo rm` 은 sudo 의 secure_path 가 PATH 를 버려 셰임을 타지 않는다
@@ -117,8 +121,6 @@ DISK_DESTROY_RE = re.compile(
 )
 
 # --- 셰임 선행 ------------------------------------------------------------------
-
-BASH_DELETE_RE = re.compile(r"\brm\b")
 
 # --- git 스냅샷 -----------------------------------------------------------------
 
@@ -423,18 +425,29 @@ def push_ask_reason(command, cwd):
 # --- 셰임 선행 줄 ----------------------------------------------------------------
 
 
-def shim_prefix(tool_name, command):
-    """명령 앞에 붙일 한 줄. 붙일 이유가 없으면 None.
+def write_shim_path(env_file):
+    """SessionStart: 이후 모든 Bash 명령의 PATH 맨 앞에 shims/ 를 둔다.
 
-    원본 명령은 한 글자도 바꾸지 않는다 — 인자 해석은 전적으로 셸/PowerShell 몫이다.
+    stdout 에는 아무것도 쓰지 않는다 — SessionStart 의 stdout 은 모델 컨텍스트에 들어간다.
     """
-    if tool_name == "Bash":
-        if not BASH_DELETE_RE.search(command) or not os.path.isdir(SHIM_DIR):
-            return None
-        q = shlex.quote(SHIM_DIR)
-        # 툴 셸이 상태를 유지하는 경우 PATH 가 무한히 길어지지 않게 이미 있으면 건너뛴다.
-        return 'case ":$PATH:" in *:%s:*) ;; *) PATH=%s:$PATH ;; esac\n' % (q, q)
+    if not env_file or not os.path.isdir(SHIM_DIR):
+        return
+    d = SHIM_DIR
+    if os.name == "nt":
+        # Git Bash 의 PATH 는 ':' 구분이라 `C:\...` 를 그대로 넣으면 쪼개진다 → /c/... 로.
+        drive, rest = os.path.splitdrive(d)
+        d = "/" + drive.rstrip(":").lower() + rest.replace("\\", "/")
+    q = shlex.quote(d)
+    # startup/resume/clear/compact 마다 다시 불려 줄이 쌓여도 PATH 가 길어지지 않게 한다.
+    with open(env_file, "a", encoding="utf-8") as f:
+        f.write('case ":$PATH:" in *:%s:*) ;; *) PATH=%s:$PATH; export PATH ;; esac\n' % (q, q))
 
+
+def shim_prefix(tool_name, command):
+    """PowerShell 명령 앞에 붙일 한 줄. 붙일 이유가 없으면 None.
+
+    원본 명령은 한 글자도 바꾸지 않는다 — 인자 해석은 전적으로 PowerShell 몫이다.
+    """
     if tool_name == "PowerShell":
         if not PS_DELETE_RE.search(command) or not os.path.isfile(PS_SHIM):
             return None
@@ -465,6 +478,10 @@ def main():
         raw = read_event_json()
         data = json.loads(raw) if raw else {}
     except (json.JSONDecodeError, ValueError):
+        sys.exit(0)
+
+    if data.get("hook_event_name") == "SessionStart":
+        write_shim_path(os.environ.get("CLAUDE_ENV_FILE"))
         sys.exit(0)
 
     tool_name = data.get("tool_name", "")

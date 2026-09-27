@@ -191,7 +191,7 @@ echo "[4/4] 셀프테스트 실행..."
 # 스냅샷은 cwd 저장소에 실제로 백업 ref 를 만들어 dry-run 도 깨뜨린다. 두 경로 모두
 # tests/test_git_snapshot.py 가 임시 저장소를 만들어 검증한다.
 run_hook_self_test "$PY" "$HOOKS_DIR/danger_guard.py" \
-    'rm -rf temp/ → 셰임 PATH 선행 기대:::{"tool_name":"Bash","tool_input":{"command":"rm -rf temp/"}}' \
+    'rm -rf temp/ → 통과(무판단) 기대 — 셰임 PATH 는 SessionStart 가 설정:::{"tool_name":"Bash","tool_input":{"command":"rm -rf temp/"}}' \
     'rm -rf "$V/x" → 변수 확장을 깨지 않고 통과 기대:::{"tool_name":"Bash","tool_input":{"command":"rm -rf \"$V/x\""}}' \
     'rm -rf ~ → deny 기대 (홈 디렉터리 전체):::{"tool_name":"Bash","tool_input":{"command":"rm -rf ~"}}' \
     'find . -exec rm -f {} + → 통과 기대 (종전 ask):::{"tool_name":"Bash","tool_input":{"command":"find . -name x -exec rm -f {} +"}}' \

@@ -85,6 +85,8 @@ def test_setup_hooks_installs_for_real(sandbox_home, stub_bin):
     assert (hooks / "danger_guard.py").exists()
     assert (hooks / "shims" / "rm").exists()
     assert settings(sandbox_home)["hooks"]["PreToolUse"]
+    # 셰임 PATH 는 SessionStart 가 CLAUDE_ENV_FILE 로 한 번 설정한다.
+    assert settings(sandbox_home)["hooks"]["SessionStart"]
 
 
 def test_setup_no_args_installs_hooks_and_agentsmd(sandbox_home, stub_bin, tmp_path):
@@ -146,6 +148,7 @@ def test_uninstall_after_rerun_restores_prior_state(sandbox_home, stub_bin):
     assert result["permissions"]["defaultMode"] == "acceptEdits"
     assert "effortLevel" not in result
     assert not result.get("hooks", {}).get("PreToolUse")
+    assert not result.get("hooks", {}).get("SessionStart")
 
 
 # --- install.sh 부트스트랩 (네트워크는 curl 스텁으로 대체) ---
