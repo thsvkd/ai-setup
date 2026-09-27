@@ -99,7 +99,8 @@ function Invoke-SettingsMerge {
     )
     $PSNativeCommandUseErrorActionPreference = $false   # S1 방어 — 아래 exit code 는 $LASTEXITCODE 로 판정
     $dry = if ($DryRun) { "1" } else { "0" }
-    $modeFlag = if ($DefaultMode) { @("--default-mode", $DefaultMode) } else { @() }
+    $modeFlag = @("--windows")   # Windows 전용 env 키(graft 래퍼 경로)도 병합한다
+    if ($DefaultMode) { $modeFlag += @("--default-mode", $DefaultMode) }
     # 출력을 변수로 캡처해서 다시 Write-Host 로 찍는다 — 그냥 & 로 호출하면 stdout 줄들이
     # 이 함수의 파이프라인 출력에 섞여 들어가서 호출부가 $exitCode 로 받는 값이 오염된다.
     $output = & $PyExe @($PyArgs) -X utf8 $MergeScriptPath @modeFlag $FragmentPath $SettingsPath $dry $PyInvoke $RealHooksDir $ManifestPath $HookFilesCsv

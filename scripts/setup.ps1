@@ -75,7 +75,7 @@ claude-code-setup — Claude Code 사용자 레벨 설정
   · 지금 적용할지, 변경 계획(-DryRun)만 먼저 볼지
 
 setup.sh 와 같은 긴 표기도 그대로 받습니다:
-  --hooks  --agentsmd  --keybinds  --omc  --newline VAL  --uninstall  --dry-run
+  --hooks  --agentsmd  --harness L  --keybinds  --omc  --newline VAL  --uninstall  --dry-run
   --no-onboard  --help
 "@
 }
@@ -83,6 +83,7 @@ setup.sh 와 같은 긴 표기도 그대로 받습니다:
 # param 블록의 $Rest 로 흘러든 토큰을 setup.sh 와 같은 규칙으로 해석한다. 조용히 버리면
 # 오타(--keybind)가 '전체 설치' 로 둔갑하므로, 모르는 것은 사용법과 함께 거절한다.
 $newlineGiven = $PSBoundParameters.ContainsKey("Newline")
+$harnessGiven = $PSBoundParameters.ContainsKey("Harness")
 $unknownArgs = @()
 for ($i = 0; $i -lt $Rest.Count; $i++) {
     switch -Regex ($Rest[$i]) {
@@ -95,6 +96,11 @@ for ($i = 0; $i -lt $Rest.Count; $i++) {
         '^--dry-run$'            { $DryRun = $true }
         '^--no-onboard$'         { $NoOnboard = $true }
         '^--newline=(.*)$'       { $Newline = $Matches[1]; $newlineGiven = $true }
+        '^--harness=(.*)$'       { $Harness = @($Matches[1]); $harnessGiven = $true }
+        '^--harness$' {
+            $harnessGiven = $true
+            $Harness = if ($i + 1 -lt $Rest.Count) { @($Rest[++$i]) } else { @("") }
+        }
         '^--newline$' {
             # 값이 없으면 빈 문자열로 둬서 아래 검증에 걸리게 한다 (--newline "" 도 오류다).
             $newlineGiven = $true
@@ -190,7 +196,7 @@ function Invoke-Onboarding {
     }
 }
 
-$hadArgs = $Hooks -or $AgentsMd -or $Keybinds -or $Omc -or $Uninstall -or $DryRun -or $NoOnboard -or $newlineGiven -or $PSBoundParameters.ContainsKey("Harness")
+$hadArgs = $Hooks -or $AgentsMd -or $Keybinds -or $Omc -or $Uninstall -or $DryRun -or $NoOnboard -or $newlineGiven -or $harnessGiven
 if (-not $hadArgs) {
     $answers = Invoke-Onboarding
     if ($answers) {
@@ -212,7 +218,7 @@ if (-not $hadArgs) {
         # the worker, whose ValidateSet-free parameter would pass it through.
         if ($answers.ContainsKey("HARNESSES") -and
             $answers["HARNESSES"] -match "^[a-z,-]+$" -and
-            -not $PSBoundParameters.ContainsKey("Harness")) {
+            -not $harnessGiven) {
             $harnesses = $answers["HARNESSES"] -split ","
         }
         if ($answers["OVERWRITE_AGENTSMD"] -eq "1") { $forceAgentsMd = $true }

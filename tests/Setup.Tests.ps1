@@ -117,6 +117,33 @@ Describe "install.ps1 bootstrap" {
         $r.Output | Should -Match "--bogus"
         $r.Output | Should -Not -Match "--dry-run"
     }
+
+    # README 옵션 표의 -Harness 가 부트스트랩에서 '알 수 없는 옵션' 으로 죽던 회귀.
+    # 값까지 소비해야 하므로 --bogus 만 거절되는지로 본다 (다운로드 전이라 네트워크 없음).
+    It "-Harness 와 --harness 를 값과 함께 소비한다" {
+        foreach ($a in @("-Harness claude,codex --bogus", "--harness claude --bogus")) {
+            $r = Invoke-ScriptInline (Join-Path $script:RepoRoot "install.ps1") $a
+            $r.ExitCode | Should -Not -Be 0
+            $r.Output | Should -Match "(?m)알 수 없는 옵션: --bogus\r?$" -Because $a
+        }
+    }
+
+    # README 의 `irm | iex` 는 인자를 하나도 넘기지 않는다. 그 경로가 빈 인자를 '알 수 없는 옵션'
+    # 으로 거절하던 회귀. 존재하지 않는 레포를 가리켜 다운로드 단계에서 멈추게 하므로 설치는
+    # 일어나지 않고, 오프라인이어도 결론은 같다.
+    It "인자 없이 실행해도 옵션 검사를 통과한다" {
+        $oldRepo, $oldTok, $oldUP = $env:CLAUDE_SETUP_REPO, $env:GITHUB_TOKEN, $env:USERPROFILE
+        $env:CLAUDE_SETUP_REPO = "thsvkd/does-not-exist-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
+        $env:GITHUB_TOKEN = "invalid"
+        $env:USERPROFILE = [System.IO.Path]::GetTempPath()
+        try {
+            $r = Invoke-ScriptInline (Join-Path $script:RepoRoot "install.ps1") ""
+        } finally {
+            $env:CLAUDE_SETUP_REPO, $env:GITHUB_TOKEN, $env:USERPROFILE = $oldRepo, $oldTok, $oldUP
+        }
+        $r.Output | Should -Not -Match "알 수 없는 옵션"
+        $r.Output | Should -Match "다운로드 실패"
+    }
 }
 
 # S2: 기존 Pester 스위트는 -Help / -DryRun 만 밟고 실제 설치 경로를 한 번도 실행하지 않았다.
@@ -165,9 +192,11 @@ Describe "실제 설치 경로 (S2)" {
         Test-Path (Join-Path $hooksDir "shims/rm") | Should -Be $true
         Test-Path (Join-Path $hooksDir "shims/RmShim.psm1") | Should -Be $true
         Test-Path (Join-Path $hooksDir "secrets_guard.py") | Should -Be $false
+        Test-Path (Join-Path $hooksDir "graft_sync_hidden.cjs") | Should -Be $true
         $settings = Get-Content (Join-Path $env:USERPROFILE ".claude\settings.json") -Raw | ConvertFrom-Json
         $settings.hooks.PreToolUse.Count | Should -Be 1
         $settings.hooks.SessionStart.Count | Should -Be 1
+        $settings.env.GRAFT_TEST_SYNC_RUN | Should -Match '/hooks/graft_sync_hidden\.cjs$'
     }
 
     It "멱등 재실행 후에도 중복 없이 영수증(added_allow)이 보존된다" {
@@ -247,7 +276,7 @@ Describe "Windows .ps1 인코딩 회귀 (BOM)" {
     It "배포되는 .ps1 파일은 전부 UTF-8 BOM 으로 시작해야 한다" {
         $files = @(
             "scripts\setup.ps1", "scripts\setup_hooks.ps1", "scripts\setup_agentsmd.ps1",
-            "scripts\lib\SetupCommon.ps1", "install.ps1", "tests\Setup.Tests.ps1"
+            "scripts\lib\SetupCommon.ps1", "tests\Setup.Tests.ps1"
         )
         foreach ($f in $files) {
             $path = Join-Path $script:RepoRoot $f
@@ -255,6 +284,15 @@ Describe "Windows .ps1 인코딩 회귀 (BOM)" {
             $hasBom = ($bytes.Length -ge 3) -and ($bytes[0] -eq 0xEF) -and ($bytes[1] -eq 0xBB) -and ($bytes[2] -eq 0xBF)
             $hasBom | Should -Be $true -Because "$f 에 BOM이 없으면 Windows PowerShell 5.1 + DBCS 로케일에서 파싱이 깨질 수 있음"
         }
+    }
+
+    # install.ps1 은 파일로 실행되지 않고 `irm | iex` 로 문자열이 된다. 5.1 의 irm 은 BOM 을
+    # U+FEFF 문자로 남기고, 파서는 그걸 공백이 아닌 명령 이름으로 읽어 첫 줄 `<#` 주석부터
+    # 무너진다 (실측). 디코딩은 raw.githubusercontent 의 charset=utf-8 헤더가 맡으므로 BOM 이 필요 없다.
+    It "install.ps1 은 BOM 없이 시작해야 한다 (irm | iex 경로)" {
+        $bytes = [System.IO.File]::ReadAllBytes((Join-Path $script:RepoRoot "install.ps1"))
+        $hasBom = ($bytes.Length -ge 3) -and ($bytes[0] -eq 0xEF) -and ($bytes[1] -eq 0xBB) -and ($bytes[2] -eq 0xBF)
+        $hasBom | Should -Be $false -Because "Windows PowerShell 5.1 에서 irm | iex 가 파싱 오류로 실패함"
     }
 
     # powershell.exe 는 Windows 에만 있다. 없는 곳에서 '실패'로 잡으면 진짜 실패가 묻힌다 —
@@ -574,6 +612,19 @@ Describe "프로젝트 지침 하네스 선택" {
         $backups.Count | Should -Be 1 -Because "AGENTS.md 와 같은 복구 보장을 받아야 한다"
         (Get-Content $backups[0].FullName -Raw) | Should -Match "사용자가 손댄 내용"
         (Get-Content $target -Raw) | Should -Match "@AGENTS\.md"
+    }
+
+    # setup.sh 처럼 긴 표기 --harness 도 디스패처를 거쳐 워커까지 가야 한다.
+    It "setup.ps1 --agentsmd --harness codex 는 CLAUDE.md 를 만들지 않는다" {
+        $oldUP = $env:USERPROFILE
+        $env:USERPROFILE = $script:proj
+        Push-Location $script:proj
+        try {
+            $r = Invoke-ScriptInline $script:Setup "--agentsmd --harness codex"
+        } finally { Pop-Location; $env:USERPROFILE = $oldUP }
+        $r.ExitCode | Should -Be 0
+        Test-Path (Join-Path $script:proj "AGENTS.md") | Should -Be $true
+        Test-Path (Join-Path $script:proj "CLAUDE.md") | Should -Be $false
     }
 }
 

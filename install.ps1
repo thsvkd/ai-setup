@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     claude-code-setup 원격 설치 부트스트랩 (Windows PowerShell)
 .DESCRIPTION
@@ -34,12 +34,13 @@ param(
     [switch]$Keybinds,
     [switch]$Omc,
     [string]$Newline,
+    [string[]]$Harness,
     [switch]$Uninstall,
     [switch]$DryRun,
     [switch]$NoOnboard,
     [Alias("h")]
     [switch]$Help,
-    [Parameter(ValueFromRemainingArguments = $true)] $Rest
+    [Parameter(ValueFromRemainingArguments = $true)] [string[]]$Rest = @()
 )
 
 Set-StrictMode -Version Latest
@@ -139,18 +140,22 @@ function Invoke-Install {
         [switch]$Keybinds,
         [switch]$Omc,
         [string]$Newline,
+        [string[]]$Harness,
         [switch]$Uninstall,
         [switch]$DryRun,
         [switch]$NoOnboard,
         [Alias("h")]
         [switch]$Help,
-        [Parameter(ValueFromRemainingArguments = $true)] $Rest
+        [Parameter(ValueFromRemainingArguments = $true)] [string[]]$Rest = @()
     )
 
     # 남은 토큰을 install.sh 와 같은 긴 표기로 해석한다. PowerShell 은 이름에 하이픈이
     # 들어간 플래그(--dry-run)를 파라미터로 인식하지 못하므로 여기서 직접 읽는다.
-    $restTokens = @($Rest)
+    # 인자가 없으면 $Rest 는 빈 배열이다 — 타입 없이 받으면 @($null) 이 원소 하나짜리가 되어
+    # 빈 문자열이 "알 수 없는 옵션" 으로 걸리고, 인자 없는 `irm | iex` 가 매번 죽었다.
+    $restTokens = $Rest
     $newlineGiven = $PSBoundParameters.ContainsKey("Newline")
+    $harnessGiven = $PSBoundParameters.ContainsKey("Harness")
     $unknownArgs = @()
     for ($i = 0; $i -lt $restTokens.Count; $i++) {
         switch -Regex ([string]$restTokens[$i]) {
@@ -163,6 +168,11 @@ function Invoke-Install {
             '^--dry-run$'            { $DryRun = $true }
             '^--no-onboard$'         { $NoOnboard = $true }
             '^--newline=(.*)$'       { $Newline = $Matches[1]; $newlineGiven = $true }
+            '^--harness=(.*)$'       { $Harness = @($Matches[1]); $harnessGiven = $true }
+            '^--harness$' {
+                $harnessGiven = $true
+                $Harness = if ($i + 1 -lt $restTokens.Count) { @([string]$restTokens[++$i]) } else { @("") }
+            }
             '^--newline$' {
                 $newlineGiven = $true
                 $Newline = if ($i + 1 -lt $restTokens.Count) { [string]$restTokens[++$i] } else { "" }
@@ -179,10 +189,11 @@ claude-code-setup 원격 설치 부트스트랩 (Windows)
   irm .../install.ps1 | iex                                              # 대화형 온보딩 → 고른 대로
   & ([scriptblock]::Create((irm .../install.ps1))) -Hooks                 # 전역 가드/권한만
   & ([scriptblock]::Create((irm .../install.ps1))) -AgentsMd             # 현재 폴더에 AGENTS.md
+  & ([scriptblock]::Create((irm .../install.ps1))) -AgentsMd -Harness codex  # 하네스 지정
   & ([scriptblock]::Create((irm .../install.ps1))) -DryRun               # 미리보기
   & ([scriptblock]::Create((irm .../install.ps1))) -NoOnboard            # 온보딩 없이 전체 설치
 
-install.sh 와 같은 긴 표기(--hooks / --agentsmd / --keybinds / --omc / --newline VAL /
+install.sh 와 같은 긴 표기(--hooks / --agentsmd / --harness L / --keybinds / --omc / --newline VAL /
 --uninstall / --dry-run / --no-onboard / --help)도 그대로 받습니다.
 
 플래그 없이 실행하면 설치 범위·권한 모드(auto/bypassPermissions)를 고르는 온보딩이 뜹니다.
@@ -240,6 +251,9 @@ install.sh 와 같은 긴 표기(--hooks / --agentsmd / --keybinds / --omc / --n
         }
         if ($newlineGiven) {
             $fwd['Newline'] = $Newline
+        }
+        if ($harnessGiven) {
+            $fwd['Harness'] = $Harness
         }
         & $setup @fwd
     } finally {
