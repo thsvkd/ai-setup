@@ -41,6 +41,12 @@ if [ -z "$TRASH" ] && [ -z "$TRASH_PY" ]; then
     exec "$REAL_RM" "$@"
 fi
 
+# 실제 홈은 $HOME 이 아니라 사용자 DB 에서 구한다(`~이름` 은 getpwnam 조회). 테스트·스크립트가
+# HOME 을 임시 디렉터리로 바꿔 두고 정리하는 `rm -rf "$HOME"` 을 홈 삭제로 오인해 막지 않기
+# 위해서다 — bats 의 샌드박스 teardown 이 실제로 막혔다. 조회에 실패하면 $HOME 으로 대신한다.
+REAL_HOME=$(eval "printf %s ~$(id -un 2>/dev/null)" 2>/dev/null) || REAL_HOME=""
+case "$REAL_HOME" in /*) ;; *) REAL_HOME=${HOME:-} ;; esac
+
 # --- 1차 통과: "$@" 를 보존한 채 훑는다. 원본 rm 에게 넘길 판정을 여기서 모두 끝낸다.
 force=0
 targets=0
@@ -80,7 +86,7 @@ for a in "$@"; do
     esac
 
     # 루트/홈 전체 삭제는 어느 경로로 와도 거부한다.
-    if [ "$abs" = "/" ] || { [ -n "${HOME:-}" ] && [ "$abs" = "${HOME%/}" ]; }; then
+    if [ "$abs" = "/" ] || { [ -n "$REAL_HOME" ] && [ "$abs" = "${REAL_HOME%/}" ]; }; then
         echo "rm(shim): 루트/홈 디렉터리 전체($a) 삭제는 거부합니다." >&2
         exit 1
     fi

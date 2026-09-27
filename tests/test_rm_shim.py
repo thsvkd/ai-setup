@@ -163,3 +163,23 @@ def test_macos_builtin_trash_is_used_when_trash_put_is_absent(tmp_path):
     assert "휴지통 없이" not in proc.stderr
     assert "OPT:" not in log.read_text(encoding="utf-8")
     assert sorted(p.name for p in bin_dir.iterdir()) == ["-weird", "a.txt", "sub"]
+
+
+def test_sandboxed_home_can_be_cleaned_up(tmp_path):
+    """테스트·스크립트가 HOME 을 임시 디렉터리로 바꿔 두고 `rm -rf "$HOME"` 으로 정리하는 것은
+    홈 삭제가 아니다. 실제 홈은 $HOME 이 아니라 사용자 DB 에서 구해야 한다 — bats 의 샌드박스
+    teardown 이 이 오인으로 막혔다. 가짜 trash-put 이라 아무것도 지우지 않는다."""
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "trash-put").write_text('#!/bin/sh\necho "TRASHED $*"\n', encoding="utf-8")
+    (fake / "trash-put").chmod(0o755)
+    sandbox = BASE / "sandbox-home"
+    sandbox.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, HOME=str(sandbox))
+    env.pop("CLAUDE_NO_TRASH", None)
+    env["PATH"] = os.pathsep.join([str(SHIM_DIR), str(fake), "/usr/bin", "/bin"])
+    proc = subprocess.run(["bash", "-c", 'rm -rf "$HOME"'], env=env,
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert "거부" not in proc.stderr
+    assert "TRASHED -- %s" % sandbox in proc.stdout
