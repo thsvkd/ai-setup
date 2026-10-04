@@ -31,15 +31,16 @@ claude-code-setup — Claude Code 사용자 레벨 설정
   --agentsmd    현재 폴더에 프로젝트 지침만 설치
   --harness L   지침을 설치할 하네스 (쉼표 구분: claude,codex,grok,opencode,all)
                 claude 를 고르면 CLAUDE.md 도 함께 설치된다. 기본값은 all.
+  --skills      번들 스킬만 설치 (~/.claude/skills)
   --keybinds    줄바꿈 키바인딩만 설치 (VS Code/Cursor/Claude/Codex/tmux)
   --newline VAL 줄바꿈 키 (shift-enter | ctrl-enter). 기본 shift-enter
-  --uninstall   가드 훅 + 관리 키바인딩 제거 (권한·사용자 항목은 보존)
+  --uninstall   가드 훅 + 관리 키바인딩·스킬 제거 (권한·사용자 항목은 보존)
   --dry-run     아무것도 바꾸지 않고 변경 계획만 출력
   --no-onboard  대화형 온보딩을 띄우지 않고 기본값으로 실행
   --help, -h    이 도움말
 
 온보딩에서 고를 수 있는 것:
-  · 설치 범위 (전체 / 가드 훅+권한만 / AGENTS.md만)
+  · 설치 범위 (전체(번들 스킬 포함) / 가드 훅+권한만 / AGENTS.md만)
   · 권한 모드 (auto / bypassPermissions)
   · 줄바꿈 키 (Shift+Enter / Ctrl+Enter) — 범위=전체일 때만
   · 기존 AGENTS.md 덮어쓰기 여부 (파일이 이미 있을 때만 물음)
@@ -50,6 +51,7 @@ EOF
 RUN_HOOKS=0
 RUN_AGENTSMD=0
 RUN_KEYBINDS=0
+RUN_SKILLS=0
 DRY_RUN=0
 UNINSTALL=0
 NO_ONBOARD=0
@@ -65,6 +67,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --hooks) RUN_HOOKS=1; HAD_ARGS=1; shift ;;
         --agentsmd) RUN_AGENTSMD=1; HAD_ARGS=1; shift ;;
+        --skills) RUN_SKILLS=1; HAD_ARGS=1; shift ;;
         --keybinds) RUN_KEYBINDS=1; HAD_ARGS=1; shift ;;
         --harness)
             if [[ -z "${2:-}" ]]; then
@@ -153,7 +156,7 @@ run_onboarding() {
         case "$key" in
             SCOPE)
                 case "$value" in
-                    all) RUN_HOOKS=1; RUN_AGENTSMD=1; RUN_KEYBINDS=1 ;;
+                    all) RUN_HOOKS=1; RUN_AGENTSMD=1; RUN_KEYBINDS=1; RUN_SKILLS=1 ;;
                     hooks) RUN_HOOKS=1 ;;
                     agentsmd) RUN_AGENTSMD=1 ;;
                 esac ;;
@@ -208,15 +211,21 @@ if [[ "$UNINSTALL" -eq 1 ]]; then
     # 않는다"(핵심 결정 4)를 제거 쪽에서만 어기는 것이 된다.
     UN_KEYBINDS="$RUN_KEYBINDS"
     UN_HOOKS="$RUN_HOOKS"
-    if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 && "$RUN_KEYBINDS" -eq 0 ]]; then
+    UN_SKILLS="$RUN_SKILLS"
+    if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 && "$RUN_KEYBINDS" -eq 0 && "$RUN_SKILLS" -eq 0 ]]; then
         UN_KEYBINDS=1
         UN_HOOKS=1
+        UN_SKILLS=1
     fi
     # 키바인드를 '먼저' 지운다. 훅 uninstall 이 매니페스트를 손보는데, 키바인드 제거는
     # 그 영수증(tmux_added 등)이 있어야 '우리가 넣은 것' 과 사용자 것을 구분할 수 있다.
     # set -e 아래라 한쪽이 실패해도 나머지가 돌도록 종료 코드를 받아 둔다.
     kb_exit=0
     hooks_exit=0
+    skills_exit=0
+    if [[ "$UN_SKILLS" -eq 1 ]]; then
+        bash "$SCRIPT_DIR/setup_skills.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || skills_exit=$?
+    fi
     if [[ "$UN_KEYBINDS" -eq 1 ]]; then
         bash "$SCRIPT_DIR/setup_keybinds.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || kb_exit=$?
     fi
@@ -224,15 +233,17 @@ if [[ "$UNINSTALL" -eq 1 ]]; then
         bash "$SCRIPT_DIR/setup_hooks.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || hooks_exit=$?
     fi
     [[ "$hooks_exit" -ne 0 ]] && exit "$hooks_exit"
+    [[ "$skills_exit" -ne 0 ]] && exit "$skills_exit"
     exit "$kb_exit"
 fi
 
-# 범위 플래그가 하나도 없으면 전체 설치 (훅 + AGENTS.md + 키바인드).
+# 범위 플래그가 하나도 없으면 전체 설치 (훅 + AGENTS.md + 키바인드 + 스킬).
 # --hooks 만 / --agentsmd 만 / --keybinds 만이면 그 범위만.
-if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 && "$RUN_KEYBINDS" -eq 0 ]]; then
+if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 && "$RUN_KEYBINDS" -eq 0 && "$RUN_SKILLS" -eq 0 ]]; then
     RUN_HOOKS=1
     RUN_AGENTSMD=1
     RUN_KEYBINDS=1
+    RUN_SKILLS=1
 fi
 
 if [[ "$RUN_HOOKS" -eq 1 ]]; then
@@ -245,4 +256,8 @@ fi
 
 if [[ "$RUN_KEYBINDS" -eq 1 ]]; then
     bash "$SCRIPT_DIR/setup_keybinds.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} ${NEWLINE_FLAG[@]+"${NEWLINE_FLAG[@]}"}
+fi
+
+if [[ "$RUN_SKILLS" -eq 1 ]]; then
+    bash "$SCRIPT_DIR/setup_skills.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"}
 fi

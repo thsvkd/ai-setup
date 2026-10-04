@@ -19,6 +19,7 @@ param(
     [switch]$Hooks,
     [switch]$AgentsMd,
     [switch]$Keybinds,
+    [switch]$Skills,
     [string[]]$Harness = @(),
     [string]$Newline = "",
     [switch]$Uninstall,
@@ -54,22 +55,23 @@ claude-code-setup — Claude Code 사용자 레벨 설정
   -AgentsMd     현재 폴더에 프로젝트 지침만 설치
   -Harness L    지침을 설치할 하네스 (쉼표 구분: claude,codex,grok,opencode,all)
                 claude 를 고르면 CLAUDE.md 도 함께 설치된다. 기본값은 all.
+  -Skills       번들 스킬만 설치 (~/.claude/skills)
   -Keybinds     줄바꿈 키바인딩만 설치 (VS Code/Cursor/Claude/Codex)
   -Newline VAL  줄바꿈 키 (shift-enter | ctrl-enter). 기본 shift-enter
-  -Uninstall    가드 훅 + 관리 키바인딩 제거 (권한·사용자 항목은 보존)
+  -Uninstall    가드 훅 + 관리 키바인딩·스킬 제거 (권한·사용자 항목은 보존)
   -DryRun       아무것도 바꾸지 않고 변경 계획만 출력
   -NoOnboard    대화형 온보딩을 띄우지 않고 기본값으로 실행
   -Help         이 도움말
 
 온보딩에서 고를 수 있는 것:
-  · 설치 범위 (전체 / 가드 훅+권한만 / AGENTS.md만)
+  · 설치 범위 (전체(번들 스킬 포함) / 가드 훅+권한만 / AGENTS.md만)
   · 권한 모드 (auto / bypassPermissions)
   · 줄바꿈 키 (Shift+Enter / Ctrl+Enter) — 범위=전체일 때만
   · 기존 AGENTS.md 덮어쓰기 여부 (파일이 이미 있을 때만 물음)
   · 지금 적용할지, 변경 계획(-DryRun)만 먼저 볼지
 
 setup.sh 와 같은 긴 표기도 그대로 받습니다:
-  --hooks  --agentsmd  --harness L  --keybinds  --newline VAL  --uninstall  --dry-run
+  --hooks  --agentsmd  --harness L  --skills  --keybinds  --newline VAL  --uninstall  --dry-run
   --no-onboard  --help
 "@
 }
@@ -84,6 +86,7 @@ for ($i = 0; $i -lt $Rest.Count; $i++) {
         '^(--help|-help|/[?h])$' { $Help = $true }
         '^--hooks$'              { $Hooks = $true }
         '^--agents-?md$'         { $AgentsMd = $true }
+        '^--skills$'             { $Skills = $true }
         '^--keybinds$'           { $Keybinds = $true }
         '^--uninstall$'          { $Uninstall = $true }
         '^--dry-run$'            { $DryRun = $true }
@@ -123,6 +126,7 @@ $forceAgentsMd = $false
 $runHooks = [bool]$Hooks
 $runAgentsMd = [bool]$AgentsMd
 $runKeybinds = [bool]$Keybinds
+$runSkills = [bool]$Skills
 $dryRun = [bool]$DryRun
 $newlineChord = $Newline
 $harnesses = $Harness
@@ -188,12 +192,12 @@ function Invoke-Onboarding {
     }
 }
 
-$hadArgs = $Hooks -or $AgentsMd -or $Keybinds -or $Uninstall -or $DryRun -or $NoOnboard -or $newlineGiven -or $harnessGiven
+$hadArgs = $Hooks -or $AgentsMd -or $Keybinds -or $Skills -or $Uninstall -or $DryRun -or $NoOnboard -or $newlineGiven -or $harnessGiven
 if (-not $hadArgs) {
     $answers = Invoke-Onboarding
     if ($answers) {
         switch ($answers["SCOPE"]) {
-            "all"      { $runHooks = $true; $runAgentsMd = $true; $runKeybinds = $true }
+            "all"      { $runHooks = $true; $runAgentsMd = $true; $runKeybinds = $true; $runSkills = $true }
             "hooks"    { $runHooks = $true }
             "agentsmd" { $runAgentsMd = $true }
         }
@@ -222,14 +226,20 @@ if (-not $hadArgs) {
 # -Hooks -Uninstall 이 키바인딩까지 지우면 "-Hooks 는 키바인딩을 건드리지 않는다"
 # (핵심 결정 4)를 제거 쪽에서만 어기는 것이 된다.
 if ($Uninstall) {
-    $hadScope = $Hooks -or $AgentsMd -or $Keybinds
+    $hadScope = $Hooks -or $AgentsMd -or $Keybinds -or $Skills
     $unKeybinds = if ($hadScope) { [bool]$Keybinds } else { $true }
     $unHooks = if ($hadScope) { [bool]$Hooks } else { $true }
+    $unSkills = if ($hadScope) { [bool]$Skills } else { $true }
 
     # 키바인드를 '먼저' 지운다. 훅 uninstall 이 매니페스트를 손보는데, 키바인드 제거는
     # 그 영수증(tmux_added 등)이 있어야 '우리가 넣은 것' 과 사용자 것을 구분할 수 있다.
     $kbExit = 0
     $hooksExit = 0
+    $skillsExit = 0
+    if ($unSkills) {
+        & (Join-Path $PSScriptRoot "setup_skills.ps1") -Uninstall -DryRun:$dryRun
+        $skillsExit = $LASTEXITCODE
+    }
     if ($unKeybinds) {
         & (Join-Path $PSScriptRoot "setup_keybinds.ps1") -Uninstall -DryRun:$dryRun
         $kbExit = $LASTEXITCODE
@@ -239,13 +249,15 @@ if ($Uninstall) {
         $hooksExit = $LASTEXITCODE
     }
     if ($hooksExit -ne 0) { exit $hooksExit }
+    if ($skillsExit -ne 0) { exit $skillsExit }
     exit $kbExit
 }
 
-if (-not ($runHooks -or $runAgentsMd -or $runKeybinds)) {
+if (-not ($runHooks -or $runAgentsMd -or $runKeybinds -or $runSkills)) {
     $runHooks = $true
     $runAgentsMd = $true
     $runKeybinds = $true
+    $runSkills = $true
 }
 
 if ($runHooks) {
@@ -268,6 +280,11 @@ if ($runKeybinds) {
     $kbParams = @{ DryRun = $dryRun }
     if ($newlineChord) { $kbParams["Newline"] = $newlineChord }
     & (Join-Path $PSScriptRoot "setup_keybinds.ps1") @kbParams
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
+if ($runSkills) {
+    & (Join-Path $PSScriptRoot "setup_skills.ps1") -DryRun:$dryRun
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 

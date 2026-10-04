@@ -1,0 +1,278 @@
+"""Bundled skills: real installation in isolated homes, ownership and CLI scopes."""
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKER = ROOT / "res" / "skills" / "apply.py"
+SOURCE = ROOT / "res" / "skills" / "design-lab" / "SKILL.md"
+RELATIVE = "design-lab/SKILL.md"
+
+
+def installed(home):
+    return home / ".claude" / "skills" / RELATIVE
+
+
+def receipt(home):
+    return home / ".claude" / ".claude-code-setup-skills.json"
+
+
+def run_worker(home, *args):
+    return subprocess.run(
+        [sys.executable, "-X", "utf8", str(WORKER), "--home", str(home), *args],
+        capture_output=True, text=True, encoding="utf-8", timeout=30,
+    )
+
+
+def test_install_reinstall_uninstall_and_user_files(tmp_path):
+    home = tmp_path / "home"
+    assert run_worker(home).returncode == 0
+    assert installed(home).read_bytes() == SOURCE.read_bytes()
+    initial_receipt = receipt(home).read_bytes()
+    assert run_worker(home).returncode == 0
+    assert receipt(home).read_bytes() == initial_receipt
+    note = installed(home).with_name("notes.txt")
+    note.write_text("user notes", encoding="utf-8")
+    other = home / ".claude" / "skills" / "user-skill" / "SKILL.md"
+    other.parent.mkdir()
+    other.write_text("user skill", encoding="utf-8")
+    assert run_worker(home, "--uninstall").returncode == 0
+    assert not installed(home).exists()
+    assert not receipt(home).exists()
+    assert note.read_text() == "user notes"
+    assert other.read_text() == "user skill"
+
+
+def test_dry_run_does_not_create_home(tmp_path):
+    home = tmp_path / "absent"
+    result = run_worker(home, "--dry-run")
+    assert result.returncode == 0, result.stderr
+    assert "design-lab" in result.stdout
+    assert not home.exists()
+
+
+def test_uninstall_dry_run_preserves_installed_bytes(tmp_path):
+    assert run_worker(tmp_path).returncode == 0
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    assert run_worker(tmp_path, "--uninstall", "--dry-run").returncode == 0
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
+@pytest.mark.parametrize("same_content", [False, True])
+def test_preexisting_skill_is_not_claimed_or_removed(tmp_path, same_content):
+    target = installed(tmp_path)
+    target.parent.mkdir(parents=True)
+    content = SOURCE.read_bytes() if same_content else b"user skill"
+    target.write_bytes(content)
+    result = run_worker(tmp_path)
+    assert result.returncode == (0 if same_content else 1)
+    assert target.read_bytes() == content
+    assert not receipt(tmp_path).exists()
+    assert run_worker(tmp_path, "--uninstall").returncode == 0
+    assert target.read_bytes() == content
+
+
+def test_edited_managed_skill_is_preserved_on_install_and_uninstall(tmp_path):
+    assert run_worker(tmp_path).returncode == 0
+    target = installed(tmp_path)
+    target.write_text("user edit", encoding="utf-8")
+    manifest = receipt(tmp_path).read_bytes()
+    for args in [(), ("--uninstall",)]:
+        result = run_worker(tmp_path, *args)
+        assert result.returncode == 1
+        assert "preserv" in result.stdout.lower()
+        assert target.read_bytes() == b"user edit"
+        assert receipt(tmp_path).read_bytes() == manifest
+
+
+def test_upgrade_of_unmodified_managed_skill(tmp_path):
+    target = installed(tmp_path)
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"previous bundled version")
+    receipt(tmp_path).write_text(json.dumps({
+        "version": 1, "files": {RELATIVE: hashlib.sha256(target.read_bytes()).hexdigest()},
+    }), encoding="utf-8")
+    assert run_worker(tmp_path).returncode == 0
+    assert target.read_bytes() == SOURCE.read_bytes()
+    assert json.loads(receipt(tmp_path).read_text())["files"][RELATIVE] == hashlib.sha256(SOURCE.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("value", ["{", '{"version": 1, "files": {"../../victim": "x"}}', '{"version": 1, "files": []}'])
+def test_invalid_receipt_is_not_overwritten(tmp_path, value):
+    receipt(tmp_path).parent.mkdir()
+    receipt(tmp_path).write_text(value, encoding="utf-8")
+    for args in [(), ("--uninstall",)]:
+        assert run_worker(tmp_path, *args).returncode == 1
+        assert receipt(tmp_path).read_text() == value
+        assert not installed(tmp_path).exists()
+
+
+def test_linked_skill_directory_is_not_changed(tmp_path):
+    external = tmp_path / "external"
+    external.mkdir()
+    target = installed(tmp_path)
+    target.parent.parent.mkdir(parents=True)
+    if sys.platform == "win32":
+        result = subprocess.run(["cmd", "/c", "mklink", "/J", str(target.parent), str(external)], capture_output=True)
+        assert result.returncode == 0
+    else:
+        target.parent.symlink_to(external, target_is_directory=True)
+    result = run_worker(tmp_path)
+    assert result.returncode == 1
+    assert not list(external.iterdir())
+    assert not receipt(tmp_path).exists()
+
+
+def run_setup(home, *args):
+    env = dict(os.environ)
+    env.update(USERPROFILE=str(home), HOME=str(home), CI="1")
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env["PATH"]
+    # All writable editor/terminal paths live in the same sandbox.
+    env.update(APPDATA=str(home / "appdata"), LOCALAPPDATA=str(home / "local"),
+               CLAUDE_SETUP_VSCODE_KEYBINDINGS=str(home / "vscode.json"),
+               CLAUDE_SETUP_CURSOR_KEYBINDINGS=str(home / "cursor.json"),
+               CLAUDE_SETUP_WT_SETTINGS=str(home / "wt.json"))
+    home.mkdir(exist_ok=True)
+    if sys.platform == "win32":
+        command = ["pwsh", "-NoProfile", "-File", str(ROOT / "scripts" / "setup.ps1"), *args]
+    else:
+        command = ["bash", str(ROOT / "scripts" / "setup.sh"), *args]
+    return subprocess.run(command, env=env, cwd=home, capture_output=True, text=True, encoding="utf-8", timeout=180)
+
+
+def test_dispatcher_skills_scope_and_long_option(tmp_path):
+    home = tmp_path / "home"
+    for _ in range(2):
+        result = run_setup(home, "--skills")
+        assert result.returncode == 0, result.stdout + result.stderr
+    assert installed(home).read_bytes() == SOURCE.read_bytes()
+    assert not (home / ".claude" / "settings.json").exists()
+    assert not (home / "AGENTS.md").exists()
+    result = run_setup(home, "--skills", "--uninstall")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not installed(home).exists()
+
+
+@pytest.mark.parametrize("scope", ["--hooks", "--agentsmd", "--keybinds"])
+def test_other_scopes_do_not_install_skills(tmp_path, scope):
+    home = tmp_path / "home"
+    result = run_setup(home, scope, "--dry-run")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "design-lab" not in result.stdout
+    assert not installed(home).exists()
+
+
+def test_default_dry_run_includes_skills_without_writes(tmp_path):
+    home = tmp_path / "home"
+    result = run_setup(home, "--dry-run")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "design-lab" in result.stdout
+    assert not installed(home).exists()
+    assert not receipt(home).exists()
+
+
+
+def test_default_real_install_includes_skills(tmp_path):
+    result = run_setup(tmp_path / "home", "--no-onboard")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert installed(tmp_path / "home").read_bytes() == SOURCE.read_bytes()
+
+
+@pytest.mark.parametrize("long_option", [False, True])
+def test_remote_bootstrap_installs_skills_from_local_archive(tmp_path, long_option):
+    """No network: real unpack and forwarding to the real skills dispatcher."""
+    import tarfile
+    import zipfile
+
+    home = tmp_path / "home"
+    home.mkdir()
+    bundle = ["scripts/setup.sh", "scripts/setup.ps1", "scripts/setup_skills.sh",
+              "scripts/setup_skills.ps1", "scripts/lib/setup_common.sh",
+              "scripts/lib/SetupCommon.ps1", "res/skills/apply.py",
+              "res/skills/design-lab/SKILL.md"]
+    env = dict(os.environ)
+    env.update(USERPROFILE=str(home), HOME=str(home), CI="1",
+               GITHUB_TOKEN="", GH_TOKEN="")
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env["PATH"]
+    if sys.platform == "win32":
+        archive = tmp_path / "repo.zip"
+        with zipfile.ZipFile(archive, "w") as packed:
+            for filename in bundle:
+                packed.write(ROOT / filename, "repo/" + filename)
+        env.update(CLAUDE_SKILL_TEST_ARCHIVE=str(archive),
+                   CLAUDE_SKILL_TEST_BOOTSTRAP=str(ROOT / "install.ps1"),
+                   CLAUDE_SKILL_TEST_OPTION="--skills" if long_option else "-Skills")
+        driver = tmp_path / "bootstrap-driver.ps1"
+        driver.write_text(r"""
+function Invoke-WebRequest {
+    param($Uri, $OutFile, $Headers, [switch]$UseBasicParsing)
+    Copy-Item -LiteralPath $env:CLAUDE_SKILL_TEST_ARCHIVE -Destination $OutFile
+}
+function gh { return }
+$bootstrap = [scriptblock]::Create((Get-Content -LiteralPath $env:CLAUDE_SKILL_TEST_BOOTSTRAP -Raw))
+if ($env:CLAUDE_SKILL_TEST_OPTION -eq "--skills") { & $bootstrap --skills }
+else { & $bootstrap -Skills }
+exit $LASTEXITCODE
+""", encoding="utf-8-sig")
+        command = ["pwsh", "-NoProfile", "-File", str(driver)]
+    else:
+        archive = tmp_path / "repo.tar.gz"
+        with tarfile.open(archive, "w:gz") as packed:
+            for filename in bundle:
+                packed.add(ROOT / filename, arcname="repo/" + filename)
+        stub = tmp_path / "bin"
+        stub.mkdir()
+        curl = stub / "curl"
+        curl.write_text('#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n  if [ "$1" = "-o" ]; then shift; cp "$CLAUDE_SKILL_TEST_ARCHIVE" "$1"; exit 0; fi\n  shift\ndone\nexit 1\n', encoding="utf-8")
+        curl.chmod(0o755)
+        gh = stub / "gh"
+        gh.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        gh.chmod(0o755)
+        env["PATH"] = str(stub) + os.pathsep + env["PATH"]
+        env["CLAUDE_SKILL_TEST_ARCHIVE"] = str(archive)
+        command = ["sh", str(ROOT / "install.sh"), "--skills"]
+    result = subprocess.run(command, cwd=home, env=env, capture_output=True,
+                            text=True, encoding="utf-8", timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert installed(home).read_bytes() == SOURCE.read_bytes()
+    assert not (home / "AGENTS.md").exists()
+    assert not (home / ".claude" / "settings.json").exists()
+
+
+
+@pytest.mark.parametrize("upgrade", [False, True])
+def test_receipt_failure_rolls_back_skill_content(tmp_path, monkeypatch, upgrade):
+    import runpy
+
+    apply = runpy.run_path(str(WORKER))["apply"]
+    namespace = apply.__globals__
+    write = namespace["atomic_write"]
+    target = installed(tmp_path)
+    original = b"previous bundled version" if upgrade else None
+    if upgrade:
+        target.parent.mkdir(parents=True)
+        target.write_bytes(original)
+        receipt(tmp_path).write_text(json.dumps({
+            "version": 1, "files": {RELATIVE: hashlib.sha256(original).hexdigest()},
+        }), encoding="utf-8")
+    old_receipt = receipt(tmp_path).read_bytes() if upgrade else None
+
+    def fail_receipt(path, data):
+        if path == receipt(tmp_path):
+            raise PermissionError("receipt is locked")
+        write(path, data)
+
+    monkeypatch.setitem(namespace, "atomic_write", fail_receipt)
+    with pytest.raises(PermissionError, match="receipt is locked"):
+        apply(tmp_path)
+    assert (target.read_bytes() if target.exists() else None) == original
+    assert (receipt(tmp_path).read_bytes() if receipt(tmp_path).exists() else None) == old_receipt
+    monkeypatch.setitem(namespace, "atomic_write", write)
+    assert apply(tmp_path) == 0
+    assert apply(tmp_path, uninstall=True) == 0
+    assert not target.exists()

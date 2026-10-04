@@ -153,7 +153,7 @@ def ask_all(questionary, project_dir):
     scope = questionary.select(
         "무엇을 설치할까요?",
         choices=[
-            questionary.Choice("전체 — 가드 훅/권한(전역) + AGENTS.md(현재 폴더)", value=SCOPE_ALL),
+            questionary.Choice("전체 — 가드 훅/권한(전역) + AGENTS.md(현재 폴더) + 번들 스킬", value=SCOPE_ALL),
             questionary.Choice("가드 훅 + 권한만 (~/.claude, 모든 프로젝트에 적용)", value=SCOPE_HOOKS),
             questionary.Choice("AGENTS.md 만 (현재 폴더)", value=SCOPE_AGENTSMD),
         ],

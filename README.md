@@ -6,6 +6,7 @@ Claude Code를 **실수해도 되돌릴 수 있게** 만드는 사용자 레벨 
 - 💾 **git 작업 자동 백업** — `git reset --hard`·`git clean` 같은 명령 전에 미커밋 변경을 스냅샷으로 남긴다
 - ⛔ **되돌릴 수 없는 것만 차단** — 루트/홈 전체 삭제, 디스크 포맷. 그 밖에는 작업을 막지 않는다
 - ⏎ **줄바꿈 키 통일** — Claude Code·Codex·Grok CLI에서 Shift+Enter(또는 Ctrl+Enter)로 줄바꿈
+- 🎨 **design-lab** — 디자인 시안마다 풀 앱을 체험하고 선택·의견을 남기는 갤러리 제작 스킬
 - 📄 **AGENTS.md** — 프로젝트에 에이전트용 작업 규칙 파일을 깔아 준다
 
 기존 설정은 덮어쓰지 않고 필요한 항목만 끼워 넣으며, `--uninstall`로 설치가 넣은 항목만 골라 뺄 수 있다.
@@ -38,7 +39,7 @@ irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubuserco
 
 ```
 ? 무엇을 설치할까요? (↑↓ 이동, Enter 선택)
- » 전체 — 가드 훅/권한(전역) + AGENTS.md(현재 폴더)
+ » 전체 — 가드 훅/권한(전역) + AGENTS.md(현재 폴더) + 번들 스킬
    가드 훅 + 권한만 (~/.claude, 모든 프로젝트에 적용)
    AGENTS.md 만 (현재 폴더)
 ```
@@ -61,6 +62,7 @@ irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubuserco
 | `--hooks` | `-Hooks` | 가드 훅 + 권한만 설치 (`~/.claude`) |
 | `--agentsmd` | `-AgentsMd` | 현재 폴더에 `AGENTS.md`만 설치 |
 | `--harness <목록>` | `-Harness <목록>` | 지침을 설치할 하네스: `claude`,`codex`,`grok`,`opencode`,`all` (기본 `all`) |
+| `--skills` | `-Skills` | 번들 스킬만 설치 (`~/.claude/skills`) |
 | `--keybinds` | `-Keybinds` | 줄바꿈 키바인딩만 설치 |
 | `--newline <값>` | `-Newline <값>` | 줄바꿈 키: `shift-enter`(기본) 또는 `ctrl-enter` |
 | `--no-onboard` | `-NoOnboard` | 질문 없이 전체 설치 |
@@ -90,7 +92,7 @@ curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercon
 & ([scriptblock]::Create((irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -Uninstall
 ```
 
-설치가 추가한 훅·권한·키바인딩 항목만 빼고, 원래 있던 설정은 그대로 둔다. 바뀌는 파일은 `<파일>.bak.<타임스탬프>`로 백업된다.
+설치가 추가한 훅·권한·키바인딩·수정되지 않은 관리 스킬만 빼고, 원래 있던 설정은 그대로 둔다. 바뀌는 파일은 `<파일>.bak.<타임스탬프>`로 백업된다.
 
 남는 것도 있다 — 프로젝트의 `AGENTS.md`/`CLAUDE.md`는 지우지 않으니 필요하면 직접 지운다. 설치가 새로 만든 키바인딩 파일은 우리 항목만 빠진 빈 파일(`[]` 등)로 남는다. 자세한 규칙은 [아래](#제거가-되돌리는-것).
 
@@ -103,6 +105,7 @@ curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercon
 | `~/.claude/settings.json` | 권한, 훅 등록, 없을 때만 채우는 기본값(`model`·`effortLevel`·`language` 등) |
 | `~/.claude/hooks/` | 가드 훅 `danger_guard.py`, 삭제를 휴지통으로 돌리는 셰임(`shims/rm`, `shims/RmShim.psm1`), Windows 휴지통 헬퍼와 graft 동기화 래퍼 |
 | `./AGENTS.md`, `./CLAUDE.md` | 프로젝트 작업 규칙. `CLAUDE.md`는 `@AGENTS.md` 한 줄짜리(하네스에 `claude`가 있을 때만). 이미 있으면 건너뜀 |
+| `~/.claude/skills/design-lab/SKILL.md` | 시안 갤러리·풀 앱 체험·모바일·라이트/다크·선택/의견·브라우저 검증 절차 |
 | 줄바꿈 키 | `~/.claude/keybindings.json`, `~/.codex/config.toml`, VS Code·Cursor `keybindings.json`(에디터가 없어도 만든다), `~/.tmux.conf`(POSIX만), Windows Terminal(`ctrl-enter`일 때만) |
 
 필요한 것 — 모든 OS에서 **Python 3.9+**(훅이 `python3`, Windows에서는 `python`으로 실행된다). 휴지통 도구는 macOS 14.4+ 기본 `/usr/bin/trash`, Linux `trash-cli`, Windows `send2trash`를 쓰며, 없으면 설치 중에 pip로 설치를 시도한다.
@@ -110,6 +113,35 @@ curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercon
 > `auto` 권한 모드는 계정/버전 자격 요건을 충족해야 켜진다. 설치 후 세션에서 `Shift+Tab`으로 모드를 순환시켜 확인할 수 있다.
 
 **보안 주의**: `CLAUDE_SETUP_REPO`/`CLAUDE_SETUP_REF` 환경변수는 다운로드해 실행할 레포를 바꾼다. 신뢰할 수 없는 입력이 이 변수를 제어할 수 있는 환경(공유 CI 등)에서는 설정하지 않는다.
+
+---
+
+## 번들 스킬
+
+전체 설치 또는 `--skills` / `-Skills`로 [design-lab](res/skills/design-lab/SKILL.md)을
+설치한다. Claude Code에서 `/design-lab 예약 앱 시안 3개를 비교할 갤러리를 만들어줘`로
+사용하거나, 시안 비교를 요청하면 관련 설명에 따라 자동으로 불러올 수 있다.
+개인 스킬 경로와 호출 방식은 [Claude Code 공식 문서](https://code.claude.com/docs/en/skills)를 따른다.
+
+각 시안은 동일한 데이터와 핵심 흐름을 가진 풀 앱이며, 모바일·라이트/다크 테마와
+시안 선택·의견 입력을 포함한다. 디자인 미리보기 요청 자체로 실제 결제나 운영 데이터
+쓰기를 수행하지 않는다. 홈서버 공유는 요청받은 LAN/tailnet 범위에서 진행한다.
+
+설치 기록은 훅/키바인딩과 별도인 `~/.claude/.claude-code-setup-skills.json`에 파일 해시로
+남긴다. 동명의 기존 사용자 스킬은 소유권을 가져오지 않으며, 내용이 다르면 종료 코드 1로
+알린다. 설치된 스킬을 사용자가 수정한 경우 재설치와 제거 모두 보존하고 종료 코드 1로
+알린다. 설치 기록이 손상되었거나 경로가 심볼릭 링크·junction이면 변경하지 않고 실패한다.
+보충 파일과 다른 사용자 스킬은 제거하지 않는다. `--skills --uninstall` / `-Skills -Uninstall`은
+관리 스킬만 제거한다. `--dry-run` / `-DryRun`은 파일을 쓰지 않는다.
+
+`finish-session-git`은 번들에 추가하지 않는다. 브랜치 통합·worktree 정리는 기존
+[Superpowers finishing-a-development-branch](https://github.com/obra/superpowers/blob/main/skills/finishing-a-development-branch/SKILL.md),
+변경 검토·부분 스테이징·논리별 커밋은
+[commit-work](https://github.com/softaworks/agent-toolkit/blob/main/skills/commit-work/SKILL.md)가
+더 구체적으로 다룬다. 이들은 이번 설치에서 추가로 내려받거나 설치하지 않는다.
+둘 다 세션별 변경 소유권을 완전히 보장하지 않으므로 저장소 지침·사전 상태 기록과 함께
+사용하며, 기존 승인과 커밋 규칙을 우선한다. Superpowers의 worktree 폴더명만으로 소유권을
+판단하는 규칙이나 commit-work의 전체 clean 목표를 다른 사용자 변경에 적용하지 않는다.
 
 ---
 
@@ -363,6 +395,7 @@ scripts/
   setup.{ps1,sh}            # CLI 디스패처 (엔트리포인트)
   setup_hooks.{ps1,sh}      # 가드 훅 + 권한 설치 / uninstall 워커
   setup_agentsmd.{ps1,sh}   # AGENTS.md 설치 워커
+  setup_skills.{ps1,sh}     # 번들 스킬 설치 / uninstall 워커
   setup_keybinds.{ps1,sh}   # 줄바꿈 키바인딩 설치 / uninstall 워커
   test.{ps1,sh}             # 테스트 러너 (pytest + bats + Pester 통합 실행)
   lib/                      # 공용 오케스트레이션 함수
