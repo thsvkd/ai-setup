@@ -37,7 +37,9 @@ or production writes only when the task authorizes them.
 
 ## 3. Make comparison usable
 
-Support responsive desktop and mobile layouts, plus a working light/dark toggle
+Support responsive desktop and mobile layouts. Keep cards and grids within the
+available width even on narrow screens; do not hide overflow to conceal clipping.
+Provide a working light/dark toggle
 with readable colors in every variant. Give the gallery variant selection and
 per-variant feedback fields. Show the storage scope: browser-local state is
 enough by default; shared feedback needs an explicitly requested server store.

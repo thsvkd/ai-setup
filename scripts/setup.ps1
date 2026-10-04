@@ -10,6 +10,7 @@
     powershell -ExecutionPolicy Bypass -File setup.ps1                       # 온보딩 → 선택대로
     powershell -ExecutionPolicy Bypass -File setup.ps1 -Hooks                # 훅/권한만
     powershell -ExecutionPolicy Bypass -File setup.ps1 -AgentsMd             # AGENTS.md만
+    powershell -ExecutionPolicy Bypass -File setup.ps1 -Omc                  # OMC + 캐시 TTL HUD만
     powershell -ExecutionPolicy Bypass -File setup.ps1 -DryRun               # 미리보기 (전체)
     powershell -ExecutionPolicy Bypass -File setup.ps1 -NoOnboard            # 온보딩 끄기
 #>
@@ -20,6 +21,7 @@ param(
     [switch]$AgentsMd,
     [switch]$Keybinds,
     [switch]$Skills,
+    [switch]$Omc,
     [string[]]$Harness = @(),
     [string]$Newline = "",
     [switch]$Uninstall,
@@ -58,7 +60,10 @@ claude-code-setup — Claude Code 사용자 레벨 설정
   -Skills       번들 스킬만 설치 (~/.claude/skills)
   -Keybinds     줄바꿈 키바인딩만 설치 (VS Code/Cursor/Claude/Codex)
   -Newline VAL  줄바꿈 키 (shift-enter | ctrl-enter). 기본 shift-enter
-  -Uninstall    가드 훅 + 관리 키바인딩·스킬 제거 (권한·사용자 항목은 보존)
+  -Omc          oh-my-claudecode 플러그인 설치 + HUD 에 캐시 TTL 표시
+                (범위 지정이 없는 기본 설치에는 포함되지 않는다)
+  -Uninstall    가드 훅 + 관리 키바인딩·스킬 + 캐시 TTL HUD 설정 제거
+                (권한·사용자 항목·OMC 플러그인은 보존)
   -DryRun       아무것도 바꾸지 않고 변경 계획만 출력
   -NoOnboard    대화형 온보딩을 띄우지 않고 기본값으로 실행
   -Help         이 도움말
@@ -67,11 +72,12 @@ claude-code-setup — Claude Code 사용자 레벨 설정
   · 설치 범위 (전체(번들 스킬 포함) / 가드 훅+권한만 / AGENTS.md만)
   · 권한 모드 (auto / bypassPermissions)
   · 줄바꿈 키 (Shift+Enter / Ctrl+Enter) — 범위=전체일 때만
+  · oh-my-claudecode 설치 여부 — 범위=전체/훅일 때만
   · 기존 AGENTS.md 덮어쓰기 여부 (파일이 이미 있을 때만 물음)
   · 지금 적용할지, 변경 계획(-DryRun)만 먼저 볼지
 
 setup.sh 와 같은 긴 표기도 그대로 받습니다:
-  --hooks  --agentsmd  --harness L  --skills  --keybinds  --newline VAL  --uninstall  --dry-run
+  --hooks  --agentsmd  --harness L  --skills  --keybinds  --omc  --newline VAL  --uninstall  --dry-run
   --no-onboard  --help
 "@
 }
@@ -88,6 +94,7 @@ for ($i = 0; $i -lt $Rest.Count; $i++) {
         '^--agents-?md$'         { $AgentsMd = $true }
         '^--skills$'             { $Skills = $true }
         '^--keybinds$'           { $Keybinds = $true }
+        '^--omc$'                { $Omc = $true }
         '^--uninstall$'          { $Uninstall = $true }
         '^--dry-run$'            { $DryRun = $true }
         '^--no-onboard$'         { $NoOnboard = $true }
@@ -127,6 +134,7 @@ $runHooks = [bool]$Hooks
 $runAgentsMd = [bool]$AgentsMd
 $runKeybinds = [bool]$Keybinds
 $runSkills = [bool]$Skills
+$runOmc = [bool]$Omc
 $dryRun = [bool]$DryRun
 $newlineChord = $Newline
 $harnesses = $Harness
@@ -192,7 +200,7 @@ function Invoke-Onboarding {
     }
 }
 
-$hadArgs = $Hooks -or $AgentsMd -or $Keybinds -or $Skills -or $Uninstall -or $DryRun -or $NoOnboard -or $newlineGiven -or $harnessGiven
+$hadArgs = $Hooks -or $AgentsMd -or $Keybinds -or $Skills -or $Omc -or $Uninstall -or $DryRun -or $NoOnboard -or $newlineGiven -or $harnessGiven
 if (-not $hadArgs) {
     $answers = Invoke-Onboarding
     if ($answers) {
@@ -218,6 +226,7 @@ if (-not $hadArgs) {
             $harnesses = $answers["HARNESSES"] -split ","
         }
         if ($answers["OVERWRITE_AGENTSMD"] -eq "1") { $forceAgentsMd = $true }
+        if ($answers["OMC"] -eq "1") { $runOmc = $true }
         if ($answers["DRY_RUN"] -eq "1") { $dryRun = $true }
     }
 }
@@ -226,10 +235,11 @@ if (-not $hadArgs) {
 # -Hooks -Uninstall 이 키바인딩까지 지우면 "-Hooks 는 키바인딩을 건드리지 않는다"
 # (핵심 결정 4)를 제거 쪽에서만 어기는 것이 된다.
 if ($Uninstall) {
-    $hadScope = $Hooks -or $AgentsMd -or $Keybinds -or $Skills
+    $hadScope = $Hooks -or $AgentsMd -or $Keybinds -or $Skills -or $Omc
     $unKeybinds = if ($hadScope) { [bool]$Keybinds } else { $true }
     $unHooks = if ($hadScope) { [bool]$Hooks } else { $true }
     $unSkills = if ($hadScope) { [bool]$Skills } else { $true }
+    $unOmc = if ($hadScope) { [bool]$Omc } else { $true }
 
     # 키바인드를 '먼저' 지운다. 훅 uninstall 이 매니페스트를 손보는데, 키바인드 제거는
     # 그 영수증(tmux_added 등)이 있어야 '우리가 넣은 것' 과 사용자 것을 구분할 수 있다.
@@ -239,6 +249,12 @@ if ($Uninstall) {
     if ($unSkills) {
         & (Join-Path $PSScriptRoot "setup_skills.ps1") -Uninstall -DryRun:$dryRun
         $skillsExit = $LASTEXITCODE
+    }
+    $omcExit = 0
+    # 캐시 TTL HUD 영수증도 매니페스트에 있으므로 훅 uninstall 보다 먼저 되돌린다.
+    if ($unOmc) {
+        & (Join-Path $PSScriptRoot "setup_omc.ps1") -Uninstall -DryRun:$dryRun
+        $omcExit = $LASTEXITCODE
     }
     if ($unKeybinds) {
         & (Join-Path $PSScriptRoot "setup_keybinds.ps1") -Uninstall -DryRun:$dryRun
@@ -250,10 +266,12 @@ if ($Uninstall) {
     }
     if ($hooksExit -ne 0) { exit $hooksExit }
     if ($skillsExit -ne 0) { exit $skillsExit }
+    if ($omcExit -ne 0) { exit $omcExit }
     exit $kbExit
 }
 
-if (-not ($runHooks -or $runAgentsMd -or $runKeybinds -or $runSkills)) {
+# OMC 는 서드파티 플러그인이라 기본 전체 설치에 끼우지 않는다 — 명시적으로 고른 경우에만.
+if (-not ($runHooks -or $runAgentsMd -or $runKeybinds -or $runSkills -or $runOmc)) {
     $runHooks = $true
     $runAgentsMd = $true
     $runKeybinds = $true
@@ -280,6 +298,11 @@ if ($runKeybinds) {
     $kbParams = @{ DryRun = $dryRun }
     if ($newlineChord) { $kbParams["Newline"] = $newlineChord }
     & (Join-Path $PSScriptRoot "setup_keybinds.ps1") @kbParams
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
+if ($runOmc) {
+    & (Join-Path $PSScriptRoot "setup_omc.ps1") -DryRun:$dryRun
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 

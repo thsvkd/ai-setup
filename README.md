@@ -65,6 +65,7 @@ irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubuserco
 | `--skills` | `-Skills` | 번들 스킬만 설치 (`~/.claude/skills`) |
 | `--keybinds` | `-Keybinds` | 줄바꿈 키바인딩만 설치 |
 | `--newline <값>` | `-Newline <값>` | 줄바꿈 키: `shift-enter`(기본) 또는 `ctrl-enter` |
+| `--omc` | `-Omc` | oh-my-claudecode 플러그인 설치 + HUD에 프롬프트 캐시 TTL 표시. 전체 설치에는 포함되지 않는다 |
 | `--no-onboard` | `-NoOnboard` | 질문 없이 전체 설치 |
 | `--uninstall` | `-Uninstall` | 설치한 것만 골라 되돌리기 |
 | `--help` | `-Help` | 도움말 |
@@ -107,6 +108,7 @@ curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercon
 | `./AGENTS.md`, `./CLAUDE.md` | 프로젝트 작업 규칙. `CLAUDE.md`는 `@AGENTS.md` 한 줄짜리(하네스에 `claude`가 있을 때만). 이미 있으면 건너뜀 |
 | `~/.claude/skills/design-lab/SKILL.md` | 시안 갤러리·풀 앱 체험·모바일·라이트/다크·선택/의견·브라우저 검증 절차 |
 | 줄바꿈 키 | `~/.claude/keybindings.json`, `~/.codex/config.toml`, VS Code·Cursor `keybindings.json`(에디터가 없어도 만든다), `~/.tmux.conf`(POSIX만), Windows Terminal(`ctrl-enter`일 때만) |
+| OMC (`--omc`일 때만) | oh-my-claudecode 플러그인, `~/.claude/hud/omc-hud-ttl.mjs`, `settings.json`의 `statusLine` 래퍼와 `refreshInterval` |
 
 필요한 것 — 모든 OS에서 **Python 3.9+**(훅이 `python3`, Windows에서는 `python`으로 실행된다). 휴지통 도구는 macOS 14.4+ 기본 `/usr/bin/trash`, Linux `trash-cli`, Windows `send2trash`를 쓰며, 없으면 설치 중에 pip로 설치를 시도한다.
 
@@ -173,7 +175,7 @@ deny/ask 53건 중 진짜 위험한 명령은 **0건**이었다. 반대로 복�
 
 그래서 현재 설계는 셋뿐이다.
 
-1. **명령 문자열을 재작성하지 않는다.** 삭제를 휴지통으로 돌리는 일은 셰임(shim)이 하고, 훅은 셰임을 끼워 넣는 **선행 한 줄**만 앞에 붙인다. 인자 해석은 전적으로 셸/PowerShell 몫이다.
+1. **명령 문자열을 재작성하지 않는다.** 삭제를 휴지통으로 돌리는 일은 셰임(shim)이 한다. Bash 는 세션 시작 때 `PATH` 에 셰임을 한 번 끼워 두고 명령은 건드리지 않는다. PowerShell 만 모듈을 불러오는 **선행 한 줄**을 붙인다. 인자 해석은 전적으로 셸/PowerShell 몫이다.
 2. **git 백업도 명령을 건드리지 않는다.** 훅 프로세스가 직접 스냅샷 커밋을 만들고 원본 명령은 그대로 흘려보낸다.
 3. **deny 는 되돌릴 수단이 아예 없는 두 부류뿐이다.** 루트/홈 전체 삭제와 디스크 파괴. 파싱하지 않고 명령 문자열의 꼴만 본다.
 
@@ -181,8 +183,8 @@ deny/ask 53건 중 진짜 위험한 명령은 **0건**이었다. 반대로 복�
 
 | 툴 | 방식 |
 | --- | --- |
-| Bash (POSIX 셸·Git Bash) | `PATH` 맨 앞에 `~/.claude/hooks/shims` 를 끼워 넣는 한 줄을 붙인다. `shims/rm` 이 셸의 확장이 **끝난 뒤의 argv** 를 받는다 |
-| PowerShell | `shims/RmShim.psm1` 을 `Import-Module` 하는 한 줄을 붙인다. 명령 우선순위가 별칭 > 함수 > cmdlet 이라 같은 이름의 함수가 `Remove-Item` cmdlet 을 가리고, `rm`/`del`/`erase`/`ri`/`rd`/`rmdir` 별칭이 전부 그 함수로 해석된다 |
+| Bash (POSIX 셸·Git Bash) | `SessionStart` 훅이 `CLAUDE_ENV_FILE` 에 `PATH` 맨 앞으로 `~/.claude/hooks/shims` 를 넣는 줄을 적는다. Claude Code 가 매 Bash 명령 전에 이 파일을 source 하므로 명령 문자열도 권한 판정도 건드리지 않는다. `shims/rm` 이 셸의 확장이 **끝난 뒤의 argv** 를 받는다 |
+| PowerShell | `CLAUDE_ENV_FILE` 은 Bash 전용이라, `shims/RmShim.psm1` 을 `Import-Module` 하는 한 줄을 `updatedInput` 으로 붙인다(권한 판정 없이 — `allow` 를 붙이면 권한 프롬프트와 auto mode 분류기를 건너뛴다). 명령 우선순위가 별칭 > 함수 > cmdlet 이라 같은 이름의 함수가 `Remove-Item` cmdlet 을 가리고, `rm`/`del`/`erase`/`ri`/`rd`/`rmdir` 별칭이 전부 그 함수로 해석된다 |
 
 셸이 이미 확장을 끝낸 뒤에 받으므로 **원본 명령과 해석이 어긋날 수 없다.** 종전에 확인을 요구하거나 차단하던 것들이 그냥 동작한다.
 
@@ -204,9 +206,11 @@ deny/ask 53건 중 진짜 위험한 명령은 **0건**이었다. 반대로 복�
 - 휴지통 도구 부재 — 경고를 남기고 실제 삭제한다. `rm` 자체를 못 쓰게 만드는 쪽이 더 해롭다는 판단이다
 - `CLAUDE_NO_TRASH` 가 설정됨 — 명시적 탈출구
 
-루트/홈 전체 삭제는 셰임도 argv 수준에서 한 번 더 거부한다. `bash -c "rm -rf /"` 처럼 훅의 텍스트 규칙을 비껴가는 형태를 여기서 잡는다.
+루트/홈 전체 삭제는 셰임도 argv 수준에서 한 번 더 거부한다. `bash -c "rm -rf /"` 처럼 훅의 텍스트 규칙을 비껴가는 형태를 여기서 잡는다. 이때 홈은 환경 변수 `$HOME` 이 아니라 사용자 DB 의 홈이다 — 테스트가 `HOME` 을 임시 디렉터리로 바꿔 두고 `rm -rf "$HOME"` 으로 정리하는 것까지 막으면 안 된다.
 
-**한계**: `sudo rm` 은 sudo 의 `secure_path` 가 `PATH` 를 버려 셰임을 타지 않는다(실사용 10,329건 중 2건). `find … -delete` 처럼 `rm` 을 거치지 않는 삭제도 커버 밖이다.
+**Bash 에 선행 줄을 붙이지 않는 이유**: 명령 앞에 줄을 붙이면 Claude Code 는 **바뀐 명령**에 대해 권한 규칙을 평가한다. 그래서 `Bash(rm *)` 같은 사용자 허용 규칙이 더 이상 맞지 않고, 그렇다고 `allow` 를 붙이면 `rm` 이라는 낱말만 섞여도 어떤 명령이든 자동 승인된다(둘 다 CC 2.1.283 에서 실측).
+
+**한계**: 세션 도중에 설치하면 다음 세션부터 셰임이 적용된다(`SessionStart` 가 다시 불려야 한다). `sudo rm` 은 sudo 의 `secure_path` 가 `PATH` 를 버려 셰임을 타지 않는다(실사용 10,329건 중 2건). `find … -delete` 처럼 `rm` 을 거치지 않는 삭제도 커버 밖이다.
 
 ### git — 미커밋 변경만 스냅샷
 
@@ -238,8 +242,9 @@ Claude Code 의 체크포인팅(`/rewind`)은 [공식 문서상](https://code.cl
 | `Remove-Item`/`del`/`rd` + 드라이브 루트(`C:\`)·`$env:USERPROFILE`·`$HOME` | ⛔ **차단** |
 | `mkfs*`/`newfs_*`/`fdisk`/`gdisk`/`sgdisk`/`parted`/`wipefs`, `dd of=/dev/*`, `diskutil erase*`, `/dev/sd*` 리다이렉트 | ⛔ **차단** |
 | `format <드라이브>:`, `diskpart`, `Clear-Disk`/`Initialize-Disk`/`Remove-Partition`/`Clear-Volume` | ⛔ **차단** |
-| **원격의 기본·보호 브랜치**로 `git push` (`git symbolic-ref refs/remotes/origin/HEAD` 로 판정, 없으면 `main`/`master`), `--all`/`--mirror` | ❓ **확인** — 원격 히스토리는 로컬 백업이 닿지 않는다 |
+| **원격의 기본 브랜치**로 force push (`-f`/`--force`/`--force-with-lease`, `+refspec`, `HEAD`/`@`, 글로브 refspec; 기본 브랜치는 `git symbolic-ref refs/remotes/origin/HEAD` 로 판정, 없으면 `main`/`master`), `--mirror`, `--prune` | ❓ **확인** — 덮어쓴 원격 커밋은 로컬 백업이 닿지 않는다 |
 | 원격 브랜치 **삭제** (`--delete`/`-d`, `origin :branch`) | ❓ **확인** — 브랜치 이름과 무관하게 |
+| 기본 브랜치로의 일반(fast-forward) push, `--all` | ✅ 통과 — 원격 커밋을 지우지 않는다. 실사용 로그에서 이 확인은 23건 모두 정상 작업이었다 |
 | 곁다리 브랜치 push (force 포함) | ✅ 통과 |
 | 그 외 전부 | ✅ 통과 (판단 안 함) |
 
@@ -251,7 +256,7 @@ Claude Code 의 체크포인팅(`/rewind`)은 [공식 문서상](https://code.cl
 
 ### git 정책을 permissions가 아니라 훅이 담당하는 이유 (그리고 그 대가)
 
-Claude Code에서 `permissions`의 `deny`/`ask` 규칙은 PreToolUse 훅의 `allow` 판정보다 항상 우선한다. 따라서 `Bash(git push *)` 같은 규칙을 `settings.json`에 두면 위의 세밀한 판단(곁다리 브랜치 통과)이 전부 무력화된다. 그래서 git 정책은 전적으로 훅이 담당한다.
+Claude Code에서 `permissions`의 `deny`/`ask` 규칙은 훅이 무엇을 반환하든 항상 평가된다. 따라서 `Bash(git push *)` 같은 규칙을 `settings.json`에 두면 위의 세밀한 판단(fast-forward·곁다리 브랜치 통과)이 전부 무력화된다. 그래서 git 정책은 전적으로 훅이 담당한다.
 
 **업그레이드 시 자동 마이그레이션**: 예전 버전은 `Bash(git push *)`·`Bash(git reset --hard *)`(및 PowerShell 짝)을 `deny`로 배포했다. 병합 엔진은 원래 '추가만' 하므로 그 규칙들이 기존 설치본에 그대로 남고, deny가 훅보다 우선하니 **새로 설치한 사람에게는 동작하고 업그레이드한 사람에게는 조용히 죽는** 상태가 된다. 그래서 설치 중에 *우리가 배포했던 문자열과 정확히 일치하는* 그 규칙들만 제거하고, 무엇을 지웠는지 설치 리포트에 출력한다. 문자열이 조금이라도 다른(=사용자가 직접 넣은) 규칙은 건드리지 않으며, 제거 사실은 매니페스트에 기록돼 `--uninstall` 시 원래대로 복원된다.
 
@@ -264,7 +269,7 @@ Claude Code에서 `permissions`의 `deny`/`ask` 규칙은 PreToolUse 훅의 `all
 
 ### settings.json 병합
 
-`permissions.defaultMode: "auto"`, 핵심 툴 `allow`(`Bash`, `PowerShell`, `Read(*)`, `Edit(*)`, `Write(*)`, `Agent(*)`, `WebFetch(*)` 등), `ask`(위험 스킬만 — git 관련 규칙은 없음), `hooks.PreToolUse` 등록, 그리고 없을 때만 채우는 `model: "opus"` / `effortLevel: "xhigh"` / `language: "korean"` 과 `env.CLAUDE_CODE_SCROLL_SPEED: "3"`(마우스 휠 스크롤 속도, `/scroll-speed` 대응)이 병합된다. Windows에서는 `env.GRAFT_TEST_SYNC_RUN`도 없을 때만 채운다 — [graft](https://github.com/NanoNets/context-graph-engine)의 Stop 훅이 턴 종료 때 돌리는 `graft build`가 빈 콘솔 창을 띄우지 않도록, 원래 동기화 스크립트를 숨김 콘솔로 다시 실행하는 `~/.claude/hooks/graft_sync_hidden.cjs`를 가리킨다(graft가 없으면 쓰이지 않는다). git 관련 deny/ask를 `permissions`에 두지 않는 이유는 [위 절](#git-정책을-permissions가-아니라-훅이-담당하는-이유-그리고-그-대가)에 있다.
+`permissions.defaultMode: "auto"`, 핵심 툴 `allow`(`Bash`, `PowerShell`, `Read(*)`, `Edit(*)`, `Write(*)`, `Agent(*)`, `WebFetch(*)` 등), `ask`(위험 스킬만 — git 관련 규칙은 없음), `hooks.SessionStart`·`hooks.PreToolUse` 등록, 그리고 없을 때만 채우는 `model: "opus"` / `effortLevel: "xhigh"` / `language: "korean"` 과 `env.CLAUDE_CODE_SCROLL_SPEED: "3"`(마우스 휠 스크롤 속도, `/scroll-speed` 대응)이 병합된다. Windows에서는 `env.GRAFT_TEST_SYNC_RUN`도 없을 때만 채운다 — [graft](https://github.com/NanoNets/context-graph-engine)의 Stop 훅이 턴 종료 때 돌리는 `graft build`가 빈 콘솔 창을 띄우지 않도록, 원래 동기화 스크립트를 숨김 콘솔로 다시 실행하는 `~/.claude/hooks/graft_sync_hidden.cjs`를 가리킨다(graft가 없으면 쓰이지 않는다). git 관련 deny/ask를 `permissions`에 두지 않는 이유는 [위 절](#git-정책을-permissions가-아니라-훅이-담당하는-이유-그리고-그-대가)에 있다.
 
 사용자가 이미 고른 값과 그 외 최상위 키(`statusLine` 등), 그리고 사용자의 기존 `env` 키/값은 건드리지 않는다(우리가 관리하는 `env` 키만 없을 때 추가). 단일 소스는 [`res/settings.json`](res/settings.json)이며, 설치 시 python 실행 명령과 훅 경로만 치환된다.
 
@@ -310,6 +315,21 @@ VS Code / Cursor `keybindings.json` 경로는 OS별로 다르다 — Windows `%A
 - **gnome-terminal 등 Shift+Enter를 구분하지 못하는 터미널** — 로컬 세션에서는 맞출 수 없다. 설치는 실패하지 않고 경고만 남긴다. Linux는 로컬 gnome-terminal 대신 Windows Terminal/Cursor에서 `ssh`로 붙는 경로를 쓰면 그대로 동작한다.
 - **Grok의 `/multiline`(`/ml`, `Ctrl+M`) 모드** — 이 토글이 켜지면 Enter와 Shift+Enter의 의미가 **반대**가 된다(Enter=줄바꿈, Shift+Enter=전송). Grok은 키를 리맵할 수 없어 이 상태를 Claude/Codex와 한 키로 맞추는 것이 불가능하다. 설치기는 그 토글을 켜거나 끄지 않고 리포트에 한 줄 경고만 한다. 기준은 **Grok 기본 프롬프트(multiline 꺼짐)** 다.
 - **에이전트가 아예 없을 때** — 바이너리와 설정 디렉터리가 **둘 다** 없으면 그 에이전트는 건너뛰고 설치는 성공한다. 하나라도 있으면 키맵을 쓴다.
+
+</details>
+
+<details>
+<summary><b>OMC와 캐시 TTL HUD</b> — <code>--omc</code>가 하는 일</summary>
+
+## OMC와 캐시 TTL HUD
+
+`--omc`(또는 온보딩의 OMC 질문에 '예')를 고르면 [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode) 플러그인을 `claude plugin marketplace add` / `claude plugin install`로 설치하고, OMC HUD의 세션 경과 시간(`session:45m`) 자리에 **프롬프트 캐시 TTL 잔여 시간**(`cache:57m`)을 띄운다. 서드파티 플러그인이므로 범위를 지정하지 않은 기본 전체 설치에는 포함하지 않는다.
+
+- 값은 Claude Code가 statusLine stdin으로 넘기는 `prompt_cache.expires_at`에서 매 렌더마다 계산한다. 2분 이하면 노랑, 만료되면 `cache:cold`(빨강)이다. 캐시 정보가 없으면(구버전 Claude Code) `session:` 표시를 그대로 둔다. OMC HUD 프리셋에서 session 요소를 끈 경우에는 바꿀 자리가 없어 표시되지 않는다.
+- `~/.claude/hud/omc-hud-ttl.mjs`를 복사하고 기존 `statusLine.command` 앞에 래퍼 실행 명령을 끼운다. node는 OMC와 같은 방식으로 찾는다 — POSIX는 OMC의 `find-node.sh`, Windows는 `~/.claude/.omc-config.json`의 `nodeBinary`, 둘 다 없으면 PATH의 `node`. 입력이 없어도 카운트다운이 흐르도록 `statusLine.refreshInterval`이 없으면 `10`(초)을 넣는다.
+- `statusLine`이 없으면 플러그인의 정본 템플릿으로 OMC HUD를 먼저 설치한다. OMC가 아닌 다른 `statusLine`이 있으면 사용자 설정이므로 파일 하나 만들지 않는다. `settings.json`이나 매니페스트를 파싱할 수 없으면 쓰지 않고 멈춘다.
+- `--uninstall`은 이 설치가 만든 것만 되돌린다 — 래퍼, 우리가 넣은 값 그대로인 `refreshInterval`, 그리고 설치가 새로 만든 `statusLine`·`settings.json`. 설치가 복사한 HUD 파일은 그 `statusLine`도 함께 치울 때, 복사 당시 내용 그대로인 경우에만 지운다 — `omc-setup`이 다시 쓴 파일은 OMC 것이다. 원래 있던 OMC 플러그인과 OMC HUD는 남긴다.
+- CLAUDE.md 등 OMC의 나머지 설정은 Claude Code 안에서 `/oh-my-claudecode:omc-setup`으로 진행한다. 그 과정에서 `statusLine`이 다시 써지면 `--omc`를 한 번 더 실행하면 된다.
 
 </details>
 
@@ -384,6 +404,9 @@ res/
   vendor/                   # 온보딩 의존성 (questionary·prompt_toolkit·wcwidth, 벤더링)
   keybinds/
     apply.py                # 줄바꿈 키바인딩 외과적 병합 (VS Code·Cursor·Claude·Codex·WT·tmux)
+  omc/
+    apply.py                # OMC HUD statusLine 에 캐시 TTL 래퍼 연결 / uninstall
+    omc-hud-ttl.mjs         # OMC HUD 출력의 session:NNm 을 cache:NNm 으로 바꾸는 래퍼
   hooks/
     danger_guard.py         # 위험 명령 가드 (Bash + PowerShell, 전 플랫폼 공용)
     shims/rm                # 삭제 → 휴지통 (POSIX 셸·Git Bash)
@@ -397,6 +420,7 @@ scripts/
   setup_agentsmd.{ps1,sh}   # AGENTS.md 설치 워커
   setup_skills.{ps1,sh}     # 번들 스킬 설치 / uninstall 워커
   setup_keybinds.{ps1,sh}   # 줄바꿈 키바인딩 설치 / uninstall 워커
+  setup_omc.{ps1,sh}        # oh-my-claudecode 설치 + 캐시 TTL HUD 워커
   test.{ps1,sh}             # 테스트 러너 (pytest + bats + Pester 통합 실행)
   lib/                      # 공용 오케스트레이션 함수
 install.{ps1,sh}            # 원격 설치 부트스트랩 (curl | sh / irm | iex)

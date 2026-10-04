@@ -86,9 +86,17 @@ def run_in_pty(argv, keys, cwd=None, env=None, stdin_pipe=False, timeout=25):
 
     out = bytearray()
 
-    def drain(seconds):
+    def drain(seconds, quiet=None):
+        """seconds 동안 읽는다. quiet 가 있으면 출력이 한 번 나온 뒤 그만큼 멎는 순간 일찍 끝낸다.
+
+        실제 터미널처럼 커서 위치 요청(CPR)에 답한다. 답하지 않으면 prompt_toolkit 이
+        답마다 1초씩 아무것도 찍지 않고 기다려, 무출력 판정이 그 틈에 걸린다.
+        """
         end = time.time() + seconds
+        last = None
         while time.time() < end:
+            if quiet is not None and last is not None and time.time() - last >= quiet:
+                return
             ready, _, _ = select.select([master], [], [], 0.1)
             if not ready:
                 continue
@@ -99,15 +107,24 @@ def run_in_pty(argv, keys, cwd=None, env=None, stdin_pipe=False, timeout=25):
             if not chunk:
                 return
             out.extend(chunk)
+            last = time.time()
+            if b"\x1b[6n" in chunk:
+                try:
+                    os.write(master, b"\x1b[1;1R")
+                except OSError:
+                    return
 
+    # 고정 대기는 느린 기기에서 다음 프롬프트가 그려지기 전에 키를 보내 버린다(선행 입력).
+    # 그러면 선택지가 화면에 안 나오므로, 출력이 잠잠해질 때까지 기다렸다가 보낸다.
+    # 무출력은 '프롬프트가 다 그려졌다'의 근사일 뿐이다. 키마다 최대 15초까지 기다린다.
     try:
-        drain(2.0)              # 첫 프롬프트가 그려질 때까지
+        drain(15.0, quiet=1.0)  # 첫 프롬프트가 그려질 때까지
         for key in keys:
             try:
                 os.write(master, key)
             except OSError:
                 break
-            drain(0.6)          # 선택이 반영될 때까지
+            drain(15.0, quiet=1.0)  # 선택이 반영되고 다음 프롬프트가 그려질 때까지
 
         deadline = time.time() + timeout
         while proc.poll() is None and time.time() < deadline:
@@ -176,14 +193,15 @@ def test_기본값_그대로_선택하면_전체설치_auto_적용(tmp_path):
     """covers: Test-1
     SCOPE=all 기본값: 권한 모드 다음·적용 여부 전에 줄바꿈 키를 묻고,
     Enter(기본 강조)는 Shift+Enter → NEWLINE_CHORD=shift-enter.
-    질문 순서: 범위 → 권한 → 줄바꿈 키 → 하네스 → 적용.
+    질문 순서: 범위 → 권한 → 줄바꿈 키 → 하네스 → OMC → 적용.
     하네스 체크박스는 전부 체크된 상태로 뜨므로 Enter 만으로 전체가 선택된다.
+    OMC 는 confirm 이라 Enter 가 기본값(아니오)이다.
     """
     out = tmp_path / "answers"
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER, ENTER, ENTER, ENTER, ENTER],
+        keys=[ENTER, ENTER, ENTER, ENTER, ENTER, ENTER],
     )
     text = screen.decode(errors="replace")
     assert code == EXIT_OK, text
@@ -195,6 +213,7 @@ def test_기본값_그대로_선택하면_전체설치_auto_적용(tmp_path):
         "DRY_RUN": "0",
         "NEWLINE_CHORD": "shift-enter",
         "HARNESSES": "claude,codex,grok,opencode",
+        "OMC": "0",
     }
 
 
@@ -209,7 +228,7 @@ def test_curl_파이프_설치에서도_프롬프트가_동작한다(tmp_path):
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[DOWN, ENTER, DOWN, ENTER, DOWN, ENTER],
+        keys=[DOWN, ENTER, DOWN, ENTER, ENTER, DOWN, ENTER],
         stdin_pipe=True,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
@@ -223,11 +242,11 @@ def test_curl_파이프_설치에서도_프롬프트가_동작한다(tmp_path):
 @posix_only
 def test_bypass_선택시_경고를_보여준다(tmp_path):
     out = tmp_path / "answers"
-    # 범위=전체, 권한=bypass, 줄바꿈=기본(Shift+Enter), 하네스=기본(전체), 적용=기본
+    # 범위=전체, 권한=bypass, 줄바꿈=기본(Shift+Enter), 하네스=기본(전체), OMC=기본(아니오), 적용=기본
     _, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER, DOWN, ENTER, ENTER, ENTER, ENTER],
+        keys=[ENTER, DOWN, ENTER, ENTER, ENTER, ENTER, ENTER],
     )
     text = screen.decode(errors="replace")
     assert "권한 확인" in text and "생략" in text, text
@@ -252,11 +271,11 @@ def test_ctrl_c_취소는_비대화형_폴백과_구분된다(tmp_path):
 def test_기존_agentsmd가_있을때만_덮어쓰기를_묻는다(tmp_path):
     (tmp_path / "AGENTS.md").write_text("기존 프로젝트 규칙\n", encoding="utf-8")
     out = tmp_path / "answers"
-    # 질문이 하나 늘어난다: 범위 → 권한 → 줄바꿈 키 → 하네스 → 덮어쓰기 → 적용
+    # 질문이 하나 늘어난다: 범위 → 권한 → 줄바꿈 키 → 하네스 → 덮어쓰기 → OMC → 적용
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER, ENTER, ENTER, ENTER, ENTER, ENTER],
+        keys=[ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER],
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     assert "덮어쓸까요" in screen.decode(errors="replace")
@@ -274,7 +293,7 @@ def test_온보딩에서_CtrlEnter를_고르면_NEWLINE_CHORD는_ctrl_enter다(t
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER, ENTER, DOWN, ENTER, ENTER, ENTER],
+        keys=[ENTER, ENTER, DOWN, ENTER, ENTER, ENTER, ENTER],
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     answers = read_answers(out)
@@ -291,7 +310,7 @@ def test_SCOPE_hooks이면_NEWLINE_CHORD를_묻지_않는다(tmp_path):
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[DOWN, ENTER, ENTER, ENTER],
+        keys=[DOWN, ENTER, ENTER, ENTER, ENTER],
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     answers = read_answers(out)
@@ -343,12 +362,40 @@ def test_SCOPE_hooks이면_하네스를_묻지_않는다(tmp_path):
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[DOWN, ENTER, ENTER, ENTER],
+        keys=[DOWN, ENTER, ENTER, ENTER, ENTER],
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     answers = read_answers(out)
     assert answers["SCOPE"] == "hooks"
     assert "HARNESSES" not in answers
+
+
+@posix_only
+def test_OMC_설치를_고르면_OMC가_1로_기록된다(tmp_path):
+    """범위=훅 → 권한=기본 → OMC 에서 y → 적용. y 는 confirm 을 곧바로 확정한다."""
+    out = tmp_path / "answers"
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        keys=[DOWN, ENTER, ENTER, b"y", ENTER],
+    )
+    assert code == EXIT_OK, screen.decode(errors="replace")
+    answers = read_answers(out)
+    assert answers["SCOPE"] == "hooks"
+    assert answers["OMC"] == "1"
+
+
+@posix_only
+def test_SCOPE_agentsmd이면_OMC를_묻지_않는다(tmp_path):
+    """OMC 는 전역 설치다. 현재 폴더만 고른 사용자에게 전역 변경을 묻지 않는다."""
+    out = tmp_path / "answers"
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        keys=[DOWN, DOWN, ENTER, ENTER, ENTER],
+    )
+    assert code == EXIT_OK, screen.decode(errors="replace")
+    assert "OMC" not in read_answers(out)
 
 
 # ── 벤더링 회귀 방지 ─────────────────────────────────────────────────
@@ -478,11 +525,11 @@ def test_setup_sh가_온보딩_선택대로_dry_run을_수행한다(tmp_path):
     trash.chmod(0o755)
 
     env = clean_env(HOME=str(home), PATH=f"{stub_bin}{os.pathsep}{os.environ['PATH']}")
-    # 범위=훅만(↓), 권한=auto(기본), 적용=dry-run 먼저(↓).
+    # 범위=훅만(↓), 권한=auto(기본), OMC=아니오(기본), 적용=dry-run 먼저(↓).
     # SCOPE=hooks 이므로 줄바꿈 키 질문은 끼지 않는다 (covers: Test-2).
     code, screen = run_in_pty(
         ["bash", str(ROOT / "scripts" / "setup.sh")],
-        keys=[DOWN, ENTER, ENTER, DOWN, ENTER],
+        keys=[DOWN, ENTER, ENTER, ENTER, DOWN, ENTER],
         cwd=project, env=env, timeout=90,
     )
     text = screen.decode(errors="replace")
@@ -507,10 +554,10 @@ def test_파이프로_실행된_setup_sh에서도_온보딩이_동작한다(tmp_
     project.mkdir()
 
     env = clean_env(HOME=str(home))
-    # 범위=AGENTS.md만(↓↓), 적용=dry-run 먼저(↓) — 권한 모드는 묻지 않는 범위다.
+    # 범위=AGENTS.md만(↓↓), 하네스=전부(Enter), 적용=dry-run 먼저(↓) — 권한 모드는 묻지 않는 범위다.
     code, screen = run_in_pty(
         ["bash", str(ROOT / "scripts" / "setup.sh")],
-        keys=[DOWN, DOWN, ENTER, DOWN, ENTER],
+        keys=[DOWN, DOWN, ENTER, ENTER, DOWN, ENTER],
         cwd=project, env=env, stdin_pipe=True, timeout=90,
     )
     text = screen.decode(errors="replace")

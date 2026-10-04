@@ -203,7 +203,13 @@ function Invoke-HookSelfTest {
         }
 
         $decision = $null
-        try { $decision = ($r.Stdout | ConvertFrom-Json).hookSpecificOutput.permissionDecision } catch { }
+        try {
+            $props = ($r.Stdout | ConvertFrom-Json).hookSpecificOutput.PSObject.Properties
+            # 셰임 선행 줄은 판정 없이 updatedInput 만 낸다 — allow 를 붙이면 권한 프롬프트를
+            # 건너뛴다. StrictMode 에서 없는 속성을 읽으면 예외이므로 존재 여부로 고른다.
+            if ($props['permissionDecision']) { $decision = $props['permissionDecision'].Value }
+            elseif ($props['updatedInput']) { $decision = 'updatedInput' }
+        } catch { }
         if (-not $decision) {
             $failures++
             Write-Host "     ❌ 판정을 파싱할 수 없습니다: $($r.Stdout)" -ForegroundColor Red
@@ -282,7 +288,7 @@ function Uninstall-Hooks {
     }
     if (-not $files -or $files.Count -eq 0) {
         $files = @("danger_guard.py", "secrets_guard.py", "send_to_trash.py",
-                   "shims/rm", "shims/RmShim.psm1")
+                   "shims/rm", "shims/RmShim.psm1", "graft_sync_hidden.cjs")
     }
 
     Write-Host "[1/2] settings.json 정밀 복원 (설치가 건드린 것만)..."
@@ -313,23 +319,26 @@ function Uninstall-Hooks {
         Remove-Item -Force $shimsDir -ErrorAction SilentlyContinue
     }
 
-    # 매니페스트: keybinds 영수증이 남아 있으면 그 섹션만 남기고 훅 흔적만 지운다.
-    # 통째로 지우면 키바인드 uninstall 이 '우리가 넣은 tmux 줄' 을 식별할 근거를 잃는다.
+    # 매니페스트: 다른 워커의 영수증(keybinds, omc_hud)이 남아 있으면 그 섹션만 남기고 훅 흔적만 지운다.
+    # 통째로 지우면 키바인드 uninstall 이 '우리가 넣은 tmux 줄' 을, OMC uninstall 이 '우리가 넣은
+    # refreshInterval' 을 식별할 근거를 잃는다.
     if (Test-Path $manifestPath) {
         if ($DryRun) {
             Write-Host "  🧪 (dry-run) 제거 예정: $manifestPath"
         } else {
-            $keptKeybinds = $null
+            $payload = [ordered]@{}
             try {
                 $m = Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-                if ($m -and $m.PSObject.Properties.Name -contains "keybinds" -and $m.keybinds) {
-                    $keptKeybinds = $m.keybinds
+                foreach ($key in @("keybinds", "omc_hud")) {
+                    if ($m -and $m.PSObject.Properties.Name -contains $key -and $m.$key) {
+                        $payload[$key] = $m.$key
+                    }
                 }
-            } catch { $keptKeybinds = $null }
-            if ($null -ne $keptKeybinds) {
-                $payload = [ordered]@{ keybinds = $keptKeybinds }
-                Set-Content -Path $manifestPath -Value ($payload | ConvertTo-Json -Depth 20) -Encoding UTF8
-                Write-Host "  🧾 유지: $manifestPath (키바인드 영수증만 남김)"
+            } catch { $payload = [ordered]@{} }
+            if ($payload.Count -gt 0) {
+                # BOM 없이 쓴다. Windows PowerShell 5.1 의 Set-Content -Encoding UTF8 은 BOM 을 붙인다.
+                [IO.File]::WriteAllText($manifestPath, ($payload | ConvertTo-Json -Depth 20), (New-Object Text.UTF8Encoding $false))
+                Write-Host "  🧾 유지: $manifestPath (다른 워커의 영수증만 남김)"
             } else {
                 Remove-Item -Force $manifestPath -ErrorAction SilentlyContinue
                 Write-Host "  🗑️  제거: $manifestPath"

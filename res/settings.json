@@ -45,6 +45,13 @@
     ]
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "{{PY}} -X utf8 \"{{HOOKS_DIR}}/danger_guard.py\"" }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash|PowerShell",

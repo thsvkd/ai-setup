@@ -517,6 +517,9 @@ def sandbox_env(sb, extra=None, include_wt=True):
     env["TERM"] = "xterm-256color"
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
+    # 끄지 않으면 pwsh 가 샌드박스 HOME 에 .cache/powershell/telemetry.uuid 를 남겨
+    # '아무것도 안 쓴다' 단언이 설치기와 무관하게 깨진다.
+    env["POWERSHELL_TELEMETRY_OPTOUT"] = "1"
     if extra:
         env.update(extra)
     return env
@@ -916,6 +919,7 @@ def test_온보딩_hooks_범위는_키바인드를_설치하지_않는다(kb_san
         ["bash", str(SETUP_SH)],
         keys=[onboard_tests.DOWN, onboard_tests.ENTER,  # hooks
               onboard_tests.ENTER,                      # auto
+              onboard_tests.ENTER,                      # OMC: 아니오
               onboard_tests.ENTER],                     # apply
         cwd=kb_sandbox.project, env=env, timeout=90,
     )
@@ -942,6 +946,7 @@ def test_온보딩_agentsmd_범위는_키바인드를_설치하지_않는다(kb_
     code, screen = onboard_tests.run_in_pty(
         ["bash", str(SETUP_SH)],
         keys=[onboard_tests.DOWN, onboard_tests.DOWN, onboard_tests.ENTER,  # agentsmd
+              onboard_tests.ENTER,                                           # 하네스: 전부
               onboard_tests.ENTER],                                          # apply
         cwd=kb_sandbox.project, env=env, timeout=90,
     )
@@ -966,6 +971,8 @@ def test_온보딩에서_ctrl_enter를_고르면_설치결과_ctrl_enter(kb_sand
         keys=[onboard_tests.ENTER,                 # all
               onboard_tests.ENTER,                 # auto
               onboard_tests.DOWN, onboard_tests.ENTER,  # Ctrl+Enter
+              onboard_tests.ENTER,                 # 하네스: 전부
+              onboard_tests.ENTER,                 # OMC: 아니오
               onboard_tests.ENTER],                # apply
         cwd=kb_sandbox.project, env=env, timeout=90,
     )

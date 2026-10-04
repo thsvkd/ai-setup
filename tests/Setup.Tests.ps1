@@ -132,14 +132,16 @@ Describe "install.ps1 bootstrap" {
     # 으로 거절하던 회귀. 존재하지 않는 레포를 가리켜 다운로드 단계에서 멈추게 하므로 설치는
     # 일어나지 않고, 오프라인이어도 결론은 같다.
     It "인자 없이 실행해도 옵션 검사를 통과한다" {
-        $oldRepo, $oldTok, $oldUP = $env:CLAUDE_SETUP_REPO, $env:GITHUB_TOKEN, $env:USERPROFILE
+        $oldRepo, $oldTok, $oldUP, $oldTemp = $env:CLAUDE_SETUP_REPO, $env:GITHUB_TOKEN, $env:USERPROFILE, $env:TEMP
         $env:CLAUDE_SETUP_REPO = "thsvkd/does-not-exist-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
         $env:GITHUB_TOKEN = "invalid"
         $env:USERPROFILE = [System.IO.Path]::GetTempPath()
+        # install.ps1 은 Windows 부트스트랩이라 $env:TEMP 를 쓴다. Linux/macOS 의 pwsh 에는 없다.
+        $env:TEMP = [System.IO.Path]::GetTempPath()
         try {
             $r = Invoke-ScriptInline (Join-Path $script:RepoRoot "install.ps1") ""
         } finally {
-            $env:CLAUDE_SETUP_REPO, $env:GITHUB_TOKEN, $env:USERPROFILE = $oldRepo, $oldTok, $oldUP
+            $env:CLAUDE_SETUP_REPO, $env:GITHUB_TOKEN, $env:USERPROFILE, $env:TEMP = $oldRepo, $oldTok, $oldUP, $oldTemp
         }
         $r.Output | Should -Not -Match "알 수 없는 옵션"
         $r.Output | Should -Match "다운로드 실패"
@@ -195,6 +197,7 @@ Describe "실제 설치 경로 (S2)" {
         Test-Path (Join-Path $hooksDir "graft_sync_hidden.cjs") | Should -Be $true
         $settings = Get-Content (Join-Path $env:USERPROFILE ".claude\settings.json") -Raw | ConvertFrom-Json
         $settings.hooks.PreToolUse.Count | Should -Be 1
+        $settings.hooks.SessionStart.Count | Should -Be 1
         $settings.env.GRAFT_TEST_SYNC_RUN | Should -Match '/hooks/graft_sync_hidden\.cjs$'
     }
 
@@ -204,6 +207,7 @@ Describe "실제 설치 경로 (S2)" {
         $r2.ExitCode | Should -Be 0
         $settings = Get-Content (Join-Path $env:USERPROFILE ".claude\settings.json") -Raw | ConvertFrom-Json
         $settings.hooks.PreToolUse.Count | Should -Be 1
+        $settings.hooks.SessionStart.Count | Should -Be 1
         $manifest = Get-Content (Join-Path $env:USERPROFILE ".claude\.claude-code-setup.json") -Raw | ConvertFrom-Json
         $manifest.added_allow.Count | Should -BeGreaterThan 0
         $manifest.default_mode_changed | Should -Be $true
@@ -227,6 +231,43 @@ Describe "실제 설치 경로 (S2)" {
         $after.env.MY_VAR | Should -Be "keep-me"
         $after.model | Should -Be "sonnet"
         $after.permissions.defaultMode | Should -Be "auto"
+    }
+
+    # OMC 설치는 실제 claude CLI 를 부르므로, 설치 결과(settings + 영수증)를 심어 두고 제거 경로만 검증한다.
+    It "-Uninstall -Hooks 는 omc_hud 영수증을 남기고, 이어서 -Uninstall -Omc 가 캐시 TTL 설정을 되돌린다" {
+        Invoke-Script $script:Setup @("-Hooks") | Out-Null
+        $claudeDir = Join-Path $env:USERPROFILE ".claude"
+        $settingsPath = Join-Path $claudeDir "settings.json"
+        $manifestPath = Join-Path $claudeDir ".claude-code-setup.json"
+        $omcCmd = 'sh "$HOME/.claude/hud/omc-hud-cache.sh" "$HOME/.claude/hud/omc-hud.mjs"'
+        $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
+        $settings | Add-Member -NotePropertyName statusLine -NotePropertyValue ([pscustomobject]@{
+            type = "command"; command = 'node "$HOME/.claude/hud/omc-hud-ttl.mjs" ' + $omcCmd; refreshInterval = 10 })
+        Set-Content -Path $settingsPath -Value ($settings | ConvertTo-Json -Depth 20) -Encoding utf8
+        $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+        $manifest | Add-Member -NotePropertyName omc_hud -NotePropertyValue ([pscustomobject]@{ refresh_interval_added = $true })
+        Set-Content -Path $manifestPath -Value ($manifest | ConvertTo-Json -Depth 20) -Encoding utf8
+
+        (Invoke-Script $script:Setup @("-Uninstall", "-Hooks")).ExitCode | Should -Be 0
+        (Get-Content $manifestPath -Raw | ConvertFrom-Json).omc_hud.refresh_interval_added | Should -Be $true
+
+        $r = Invoke-Script $script:Setup @("-Uninstall", "-Omc")
+        $r.ExitCode | Should -Be 0
+        $after = (Get-Content $settingsPath -Raw | ConvertFrom-Json).statusLine
+        $after.command | Should -Be $omcCmd
+        $after.PSObject.Properties.Name | Should -Not -Contain "refreshInterval"
+        Test-Path $manifestPath | Should -Be $false
+    }
+
+    It "-Omc -Uninstall -DryRun 은 아무것도 바꾸지 않는다" {
+        New-Item -ItemType Directory -Force -Path (Join-Path $env:USERPROFILE ".claude") | Out-Null
+        $settingsPath = Join-Path $env:USERPROFILE ".claude\settings.json"
+        $seed = '{"statusLine": {"type": "command", "command": "node \"$HOME/.claude/hud/omc-hud-ttl.mjs\" node x/omc-hud.mjs", "refreshInterval": 10}}'
+        Set-Content -Path $settingsPath -Value $seed -Encoding utf8
+        $r = Invoke-Script $script:Setup @("-Omc", "-Uninstall", "-DryRun")
+        $r.ExitCode | Should -Be 0
+        $r.Output | Should -Match "DRY RUN"
+        (Get-Content $settingsPath -Raw).Trim() | Should -Be $seed
     }
 }
 

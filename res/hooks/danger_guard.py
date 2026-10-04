@@ -18,11 +18,15 @@ Bash 툴(POSIX 셸·Git Bash)과 PowerShell 툴 양쪽을 대상으로 한다. �
 
 정책:
   1) 삭제 → 휴지통. 인자를 건드리지 않는다.
-     Bash      : PATH 맨 앞에 shims/ 를 끼워 넣는 한 줄만 붙인다. shims/rm 은 셸이 확장을
-                 끝낸 뒤의 argv 를 받으므로 해석이 원본 rm 과 어긋날 수 없다. 덤으로
-                 `find -exec rm`·`xargs rm`·스크립트 내부 rm 도 PATH 로 해석되므로 같은
-                 경로를 탄다 — 종전에 ask 로 막던 것들이다.
-     PowerShell: shims/RmShim.psm1 을 Import-Module 하는 한 줄만 붙인다. 명령 우선순위가
+     Bash      : SessionStart 에서 CLAUDE_ENV_FILE 에 'PATH 맨 앞에 shims/' 를 적는다. Claude
+                 Code 가 이 파일을 매 Bash 명령 전에 source 하므로 명령 문자열을 바꿀 필요가
+                 없다. 종전처럼 명령 앞에 줄을 붙이면 권한 규칙이 바뀐 명령에 대해 평가돼
+                 `Bash(rm *)` 같은 사용자 허용 규칙이 맞지 않게 되고, allow 를 붙이면 권한
+                 체계를 통째로 우회한다(둘 다 실측, CC 2.1.283). shims/rm 은 셸이 확장을
+                 끝낸 뒤의 argv 를 받으므로 해석이 원본 rm 과 어긋날 수 없고, `find -exec rm`·
+                 `xargs rm`·스크립트 내부 rm 도 PATH 로 해석되므로 같은 경로를 탄다.
+     PowerShell: CLAUDE_ENV_FILE 은 Bash 전용이라, shims/RmShim.psm1 을 Import-Module 하는
+                 한 줄을 updatedInput 으로 붙인다(판정 없이 — allow 를 붙이면 권한 우회). 명령 우선순위가
                  별칭 > 함수 > cmdlet 이라 같은 이름의 함수가 Remove-Item cmdlet 을 가리고,
                  rm/del/erase/ri/rd/rmdir 별칭이 전부 그 함수로 해석된다.
      한계: `sudo rm` 은 sudo 의 secure_path 가 PATH 를 버려 셰임을 타지 않는다
@@ -40,9 +44,10 @@ Bash 툴(POSIX 셸·Git Bash)과 PowerShell 툴 양쪽을 대상으로 한다. �
        - 디스크 파괴 (mkfs*/fdisk/parted/wipefs, dd of=/dev/*, diskutil erase*, > /dev/sdX,
          format <드라이브>:, diskpart, Clear-Disk/Initialize-Disk/Remove-Partition)
      되돌릴 수단이 아예 없는 두 부류라 오탐 비용을 감수한다. 로그상 발동 0회.
-  4) ask 는 원격 히스토리를 건드릴 때뿐이다 — 원격의 기본/보호 브랜치로 push, 그리고 원격
-     브랜치 삭제. 로컬 백업이 닿지 않는 유일한 영역이다. 곁다리 브랜치 push 는 force 여부와
-     무관하게 확인하지 않는다.
+  4) ask 는 원격 커밋을 지울 수 있을 때뿐이다 — 원격 기본 브랜치로의 force push(`+refspec`,
+     --force-with-lease, HEAD/@, 글로브 refspec 포함), --mirror/--prune, 원격 브랜치 삭제. 로컬 백업이 닿지 않는 유일한
+     영역이다. fast-forward push 는 기본 브랜치여도 확인하지 않는다(로그상 23건 전부 정상
+     작업이었다). 곁다리 브랜치 push 는 force 여부와 무관하게 확인하지 않는다.
 
   종전에 있었으나 실측 근거로 제거한 것: 포크밤 패턴, curl|sh 패턴, find/xargs 대량 삭제
   ask, 체이닝 삭제 ask, 글로브 미일치 deny, `.`/`..` deny, 대상 100개 초과 ask,
@@ -117,8 +122,6 @@ DISK_DESTROY_RE = re.compile(
 
 # --- 셰임 선행 ------------------------------------------------------------------
 
-BASH_DELETE_RE = re.compile(r"\brm\b")
-
 # --- git 스냅샷 -----------------------------------------------------------------
 
 BACKUP_PREFIX = "refs/claude-backups/"
@@ -145,15 +148,22 @@ GIT_WIPE_RE = re.compile(r"""\bgit\b[^\n]*?\b(?:
 CLEAN_IGNORED_RE = re.compile(r"\bclean\b[^\n]*?\s-[a-zA-Z]*[xX]")
 # `git worktree remove <path>` 의 대상은 cwd 가 아니라 인자다.
 WORKTREE_RE = re.compile(r"\bworktree\s+remove\s+(?:(?:--force|-f)\s+)*(\S+)")
-# 명령이 `cd <경로>` 로 시작하면 백업도 거기서 돌아야 한다. 변수가 섞이면 특정 불가 → 포기.
-LEADING_CD_RE = re.compile(r"^\s*cd\s+(?!.*[$`])['\"]?([^\s'\";&|]+)")
+# 명령이 `cd <경로>` 로 시작하면 백업도 거기서 돌아야 한다. 경로에 변수가 섞이면 특정 불가 →
+# 포기한다. 변수 검사는 경로 토큰에만 한다 — 줄 전체를 보면 뒤따르는 `echo "$X"` 때문에 cd 를
+# 놓치고 세션 cwd(엉뚱한 저장소)를 백업한다.
+LEADING_CD_RE = re.compile(r"^\s*cd\s+['\"]?([^\s'\";&|]+)")
 
 # --- git push -------------------------------------------------------------------
 
-PUSH_RE = re.compile(r"\bgit\b(?:\s+-\S+|\s+--\S+=\S+)*\s+push\b([^\n;&|]*)")
+# git 전역 옵션 중 값을 따로 받는 것들(`git -C "my repo" push`). 정규식으로는 따옴표로 묶인
+# 값을 넘길 수 없어 구간을 shlex 로 나눠 본다.
+GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env",
+                  "--super-prefix"}
 PUSH_VALUE_OPTS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
-PUSH_BROAD_FLAGS = {"--all", "--mirror"}
+PUSH_ALL_FLAGS = {"--all", "--branches"}
 PUSH_DELETE_FLAGS = {"--delete", "-d"}
+# `-f` 는 `-uf` 처럼 다른 짧은 옵션과 묶여 올 수 있다.
+PUSH_FORCE_RE = re.compile(r"^(?:--force|--force-with-lease(?:=.*)?|-[a-zA-Z]*f[a-zA-Z]*)$")
 
 
 def log(entry):
@@ -179,13 +189,13 @@ def emit(decision, reason, updated_input=None, context=None):
     않아야 하는' 정보에 쓴다.
     """
     out = {"hookEventName": "PreToolUse"}
-    if updated_input is not None:
-        out["permissionDecision"] = "allow"
-        out["permissionDecisionReason"] = reason
-        out["updatedInput"] = updated_input
-    elif decision is not None:
+    if decision is not None:
         out["permissionDecision"] = decision
         out["permissionDecisionReason"] = reason
+    # updatedInput 은 판정 없이도 적용된다. 여기에 allow 를 붙이면 권한 프롬프트와 auto mode
+    # 분류기를 건너뛰므로, 셰임 선행 줄은 반드시 판정 없이 내보낸다(실측, CC 2.1.283).
+    if updated_input is not None:
+        out["updatedInput"] = updated_input
     if context:
         out["additionalContext"] = context
     print(json.dumps({"hookSpecificOutput": out}, ensure_ascii=False))
@@ -219,6 +229,8 @@ def _target_dirs(command, cwd):
     base = cwd
     m = LEADING_CD_RE.match(command)
     if m:
+        if "$" in m.group(1) or "`" in m.group(1):
+            return []
         cand = os.path.expanduser(m.group(1))
         cand = cand if os.path.isabs(cand) else os.path.join(cwd, cand)
         if os.path.isdir(cand):
@@ -335,24 +347,53 @@ def _default_branches(cwd):
     return {"main", "master"}
 
 
+def _find_push(command):
+    """명령에서 `git … push` 를 찾는다. 반환: (push 뒤 인자들, -C 디렉터리들) 또는 None."""
+    for segment in SEGMENT_SPLIT_RE.split(command):
+        if "push" not in segment:
+            continue
+        try:
+            toks = shlex.split(segment)
+        except ValueError:
+            continue
+        for i, tok in enumerate(toks):
+            if os.path.basename(tok) != "git":
+                continue
+            j, dirs = i + 1, []
+            while j < len(toks) and toks[j].startswith("-"):
+                if toks[j] in GIT_VALUE_OPTS and j + 1 < len(toks):
+                    if toks[j] == "-C":
+                        dirs.append(toks[j + 1])
+                    j += 2
+                else:
+                    j += 1
+            if j < len(toks) and toks[j] == "push":
+                return toks[j + 1:], dirs
+    return None
+
+
 def push_ask_reason(command, cwd):
-    """원격의 기본 브랜치를 건드리는 push 만 확인한다. 곁다리 브랜치는 통과."""
-    m = PUSH_RE.search(command)
-    if not m:
+    """원격 커밋을 지울 수 있는 push 만 확인한다.
+
+    기본 브랜치로의 force push, --mirror, 원격 브랜치 삭제. fast-forward push 는 원격
+    히스토리를 지우지 않으므로(되돌리려면 revert) 통과시킨다 — 실사용 로그에서 이 확인은
+    23건 모두 평범한 작업 흐름을 멈춰 세우기만 했다.
+    """
+    found = _find_push(command)
+    if not found:
         return None
-    if _git(["rev-parse", "--git-dir"], cwd).returncode != 0:
-        return None
-    try:
-        args = shlex.split(m.group(1))
-    except ValueError:
+    args, dirs = found
+    for d in dirs:                          # 판정은 push 가 실제로 도는 저장소에서 한다
+        cwd = os.path.join(cwd, os.path.expanduser(d))
+    if not os.path.isdir(cwd) or _git(["rev-parse", "--git-dir"], cwd).returncode != 0:
         return None
 
     protected = _default_branches(cwd)
-    broad = next((a for a in args if a in PUSH_BROAD_FLAGS), None)
-    if broad:
-        return ("git push %s 는 기본 브랜치(%s)를 포함해 여러 브랜치를 한 번에 원격에 "
-                "반영합니다. 원격 히스토리는 로컬 백업으로 되돌릴 수 없습니다. 계속할까요?"
-                % (broad, ", ".join(sorted(protected))))
+    wipe = next((a for a in args if a in ("--mirror", "--prune")), None)
+    if wipe:
+        return ("git push %s 는 로컬에 없는 원격 ref 를 지웁니다. 원격 히스토리는 로컬 백업으로 "
+                "되돌릴 수 없습니다. 계속할까요?" % wipe)
+    force = any(PUSH_FORCE_RE.match(a) for a in args)
 
     positionals = []
     skip = False
@@ -377,38 +418,63 @@ def push_ask_reason(command, cwd):
                 "없습니다. 계속할까요?" % ", ".join(names) if names else
                 "원격 브랜치를 삭제하려고 합니다. 계속할까요?")
 
+    def current_branch():
+        b = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd).stdout.strip()
+        return b if b and b != "HEAD" else None
+
     refspecs = positionals[1:]              # 첫 위치 인자는 원격 이름
-    if not refspecs:
-        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd).stdout.strip()
-        targets = [branch] if branch and branch != "HEAD" else []
+    if any(a in PUSH_ALL_FLAGS for a in args):
+        targets = sorted(protected) if force else []
+    elif not refspecs:
+        # `--tags` 만 있으면 브랜치는 보내지 않는다.
+        targets = [current_branch()] if force and "--tags" not in args else []
     else:
         targets = []
         for spec in refspecs:
+            if not (force or spec.startswith("+")):   # `+` 는 그 refspec 만 force 한다
+                continue
             dst = spec.split(":")[-1].lstrip("+")
-            targets.append(dst.rsplit("/", 1)[-1] if dst.startswith("refs/") else dst)
+            if "*" in dst or not dst:                 # 글로브·`:`(일치 브랜치 전부)는 기본 브랜치도 덮는다
+                targets.extend(protected)
+            elif dst in ("HEAD", "@"):
+                targets.append(current_branch())
+            else:
+                targets.append(dst[len("refs/heads/"):] if dst.startswith("refs/heads/") else dst)
 
     hit = [t for t in targets if t in protected]
     if hit:
-        return ("원격의 기본 브랜치(%s)로 push 하려고 합니다. 원격 히스토리는 로컬 백업으로 "
-                "되돌릴 수 없습니다. 계속할까요?" % ", ".join(hit))
+        return ("원격의 기본 브랜치(%s)를 force push 로 덮어쓰려고 합니다. 덮어쓴 원격 커밋은 "
+                "로컬 백업으로 되돌릴 수 없습니다. 계속할까요?" % ", ".join(hit))
     return None
 
 
 # --- 셰임 선행 줄 ----------------------------------------------------------------
 
 
-def shim_prefix(tool_name, command):
-    """명령 앞에 붙일 한 줄. 붙일 이유가 없으면 None.
+def write_shim_path(env_file):
+    """SessionStart: 이후 모든 Bash 명령의 PATH 맨 앞에 shims/ 를 둔다.
 
-    원본 명령은 한 글자도 바꾸지 않는다 — 인자 해석은 전적으로 셸/PowerShell 몫이다.
+    stdout 에는 아무것도 쓰지 않는다 — SessionStart 의 stdout 은 모델 컨텍스트에 들어간다.
     """
-    if tool_name == "Bash":
-        if not BASH_DELETE_RE.search(command) or not os.path.isdir(SHIM_DIR):
-            return None
-        q = shlex.quote(SHIM_DIR)
-        # 툴 셸이 상태를 유지하는 경우 PATH 가 무한히 길어지지 않게 이미 있으면 건너뛴다.
-        return 'case ":$PATH:" in *:%s:*) ;; *) PATH=%s:$PATH ;; esac\n' % (q, q)
+    if not env_file or not os.path.isdir(SHIM_DIR):
+        return
+    d = SHIM_DIR
+    if os.name == "nt":
+        # Git Bash 의 PATH 는 ':' 구분이라 `C:\...` 를 그대로 넣으면 쪼개진다 → /c/... 로.
+        drive, rest = os.path.splitdrive(d)
+        d = "/" + drive.rstrip(":").lower() + rest.replace("\\", "/")
+    q = shlex.quote(d)
+    # startup/resume/clear/compact 마다 다시 불려 줄이 쌓여도 PATH 가 길어지지 않게 한다.
+    # newline 고정: Windows 텍스트 모드는 \r\n 을 쓰고, bash 는 그 줄을 문법 오류로 버린다.
+    with open(env_file, "a", encoding="utf-8", newline="\n") as f:
+        f.write('case ":$PATH:" in *:%s:*) ;; *) PATH=%s:$PATH; export PATH ;; esac\n' % (q, q))
 
+
+def shim_prefix(tool_name, command):
+    """PowerShell 명령 앞에 붙일 한 줄. 붙일 이유가 없으면 None.
+
+    원본 명령은 한 글자도 바꾸지 않는다 — 인자 해석은 전적으로 PowerShell 몫이다.
+    """
     if tool_name == "PowerShell":
         if not PS_DELETE_RE.search(command) or not os.path.isfile(PS_SHIM):
             return None
@@ -441,6 +507,10 @@ def main():
     except (json.JSONDecodeError, ValueError):
         sys.exit(0)
 
+    if data.get("hook_event_name") == "SessionStart":
+        write_shim_path(os.environ.get("CLAUDE_ENV_FILE"))
+        sys.exit(0)
+
     tool_name = data.get("tool_name", "")
     if tool_name not in ("Bash", "PowerShell"):
         sys.exit(0)
@@ -470,8 +540,7 @@ def main():
     prefix = shim_prefix(tool_name, command)
     if prefix:
         log({"tool": tool_name, "command": command, "decision": "prepend-shim"})
-        emit("allow", "삭제 → 휴지통 셰임 경유 (선행 한 줄, 명령 원문 그대로)",
-             updated_input={"command": prefix + command},
+        emit(None, "", updated_input=dict(data.get("tool_input", {}), command=prefix + command),
              context="\n".join(notes) if notes else None)
 
     if notes:
