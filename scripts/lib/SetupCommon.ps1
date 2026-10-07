@@ -39,6 +39,25 @@ function Resolve-PythonCommand {
     return $null
 }
 
+# Resolve-PythonCommand 가 실패했을 때 이 환경에서 Python 3 을 설치하는 명령을 안내한다.
+# 설치는 하지 않는다 — 런타임 설치는 되돌리기 어렵고 uninstall 대칭 밖이라 사용자가 직접 한다.
+function Write-PythonInstallHint {
+    $onMac = (Test-Path variable:IsMacOS) -and $IsMacOS
+    $onLinux = (Test-Path variable:IsLinux) -and $IsLinux
+    Write-Host "   Python 3 설치 방법:" -ForegroundColor Yellow
+    if ($onMac) {
+        Write-Host "     brew install python"
+    } elseif ($onLinux) {
+        Write-Host "     sudo apt-get install -y python3   # Debian/Ubuntu"
+        Write-Host "     sudo dnf install -y python3       # Fedora/RHEL"
+    } else {
+        Write-Host "     winget install -e --id Python.Python.3.14"
+        Write-Host "   winget 이 없으면 https://www.python.org/downloads/windows/ 에서 설치하세요."
+        Write-Host "   설치 후 새 터미널에서 다시 실행하세요. 그래도 Microsoft Store 가 열리면"
+        Write-Host "   설정 > 앱 > 고급 앱 설정 > 앱 실행 별칭에서 python.exe / python3.exe 를 끄세요."
+    }
+}
+
 function Resolve-InstallHome {
     param(
         [switch]$DryRun,

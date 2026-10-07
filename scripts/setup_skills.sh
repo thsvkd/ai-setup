@@ -7,6 +7,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/setup_common.sh"
 if ! PY="$(resolve_python_command)"; then
     echo "Python 3 is required." >&2
+    print_python_install_hint
     exit 1
 fi
 "$PY" -X utf8 "$REPO_ROOT/res/skills/apply.py" --home "$HOME" "$@"

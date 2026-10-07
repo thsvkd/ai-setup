@@ -76,6 +76,7 @@ if [[ "$UNINSTALL" -eq 1 ]]; then
     [[ "$DRY_RUN" -eq 1 ]] && echo "  🧪 DRY RUN 모드 — 실제 파일은 전혀 제거되지 않습니다."
     if ! PY="$(resolve_python_command)"; then
         echo "❌ Python 3을 찾을 수 없습니다." >&2
+        print_python_install_hint
         exit 1
     fi
     echo ""
@@ -106,7 +107,8 @@ SETTINGS_PATH="$WORK_HOME/.claude/settings.json"
 
 # --- 1. python3 탐지 ---
 if ! PY="$(resolve_python_command)"; then
-    echo "❌ Python 3을 찾을 수 없습니다. 설치 후 다시 실행하세요." >&2
+    echo "❌ Python 3을 찾을 수 없습니다." >&2
+    print_python_install_hint
     exit 1
 fi
 echo "  🐍 Python 실행 명령: $PY"

@@ -31,6 +31,7 @@ done
 
 if ! PY="$(resolve_python_command)"; then
     echo "❌ Python 3을 찾을 수 없습니다." >&2
+    print_python_install_hint
     exit 1
 fi
 

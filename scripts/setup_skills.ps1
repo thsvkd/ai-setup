@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $false
 . (Join-Path $PSScriptRoot "lib\SetupCommon.ps1")
 $py = Resolve-PythonCommand
-if (-not $py) { Write-Error "Python 3 is required."; exit 1 }
+if (-not $py) { Write-Host "Python 3 is required." -ForegroundColor Red; Write-PythonInstallHint; exit 1 }
 $homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
 $worker = Join-Path (Split-Path -Parent $PSScriptRoot) "res\skills\apply.py"
 $pyArgs = @("-X", "utf8", $worker, "--home", $homeDir)

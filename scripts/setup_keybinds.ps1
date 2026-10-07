@@ -39,6 +39,7 @@ if (-not (Test-Path $apply)) {
 $py = Resolve-PythonCommand
 if (-not $py) {
     Write-Host "❌ Python을 찾을 수 없습니다." -ForegroundColor Red
+    Write-PythonInstallHint
     exit 1
 }
 

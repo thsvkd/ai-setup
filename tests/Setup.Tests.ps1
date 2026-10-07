@@ -702,3 +702,24 @@ Describe "키바인드 디스패처" {
         Test-Path (Join-Path $env:USERPROFILE ".claude\.claude-code-setup.json") | Should -Be $true
     }
 }
+
+Describe "Python 미설치 안내" {
+    It "Python 이 없으면 setup_hooks.ps1 이 실패하며 winget 설치 명령을 안내한다" -Skip:(-not $IsWindows) {
+        $oldPath = $env:PATH; $oldUP = $env:USERPROFILE
+        $sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        New-Item -ItemType Directory -Force -Path $sandbox | Out-Null
+        try {
+            $env:USERPROFILE = $sandbox
+            # python/python3/py 가 하나도 보이지 않는 PATH (Store 별칭이 있는 WindowsApps 도 뺀다).
+            $env:PATH = "$PSHOME;$env:SystemRoot\System32"
+            $pwshExe = (Get-Process -Id $PID).Path
+            $out = & $pwshExe -NoProfile -File $script:SetupHooks -DryRun 2>&1 | Out-String
+            $LASTEXITCODE | Should -Be 1
+            $out | Should -Match "Python을 찾을 수 없습니다"
+            $out | Should -Match "winget install -e --id Python\.Python\.3"
+        } finally {
+            $env:PATH = $oldPath; $env:USERPROFILE = $oldUP
+            Remove-Item -Recurse -Force $sandbox -ErrorAction SilentlyContinue
+        }
+    }
+}

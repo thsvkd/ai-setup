@@ -57,7 +57,7 @@ if ($Uninstall) {
     Write-Host "🧹 Claude Code 가드 훅 제거..." -ForegroundColor Cyan
     if ($DryRun) { Write-Host "  🧪 DRY RUN 모드 — 실제 파일은 전혀 제거되지 않습니다." -ForegroundColor Magenta }
     $py = Resolve-PythonCommand
-    if (-not $py) { Write-Host "❌ Python을 찾을 수 없습니다." -ForegroundColor Red; exit 1 }
+    if (-not $py) { Write-Host "❌ Python을 찾을 수 없습니다." -ForegroundColor Red; Write-PythonInstallHint; exit 1 }
     Write-Host ""
     Uninstall-Hooks -ClaudeDir $RealClaudeDir -HooksDir $RealHooksDir -SettingsPath $RealSettingsPath `
         -DryRun:$DryRun -MergeScriptPath (Join-Path $ResDir "hooks\merge_and_diff.py") -PyExe $py.Exe -PyArgs $py.Args
@@ -79,13 +79,15 @@ $installHome = Resolve-InstallHome -DryRun:$DryRun -RealHome $RealUserHome -Seed
 $WorkHome = $installHome.WorkHome
 $hooksDir = Join-Path $WorkHome ".claude\hooks"
 $settingsPath = Join-Path $WorkHome ".claude\settings.json"
+$pythonMissing = $false
 
 try {
 
 # --- 1. Python 실행 파일 탐지 ---
 $py = Resolve-PythonCommand
 if (-not $py) {
-    throw "Python을 찾을 수 없습니다. Python 3을 설치한 뒤 다시 실행하세요."
+    $pythonMissing = $true
+    throw "Python을 찾을 수 없습니다."
 }
 $pyInvoke = (@($py.Exe) + $py.Args) -join " "
 Write-Host "  🐍 Python 실행 명령: $pyInvoke" -ForegroundColor DarkGray
@@ -196,6 +198,7 @@ $script:ExitCode = 0
 
 } catch {
     Write-Host "❌ $($_.Exception.Message)" -ForegroundColor Red
+    if ($pythonMissing) { Write-PythonInstallHint }
     $script:ExitCode = 1
 } finally {
     if ($installHome.CleanupDir -and (Test-Path $installHome.CleanupDir)) {

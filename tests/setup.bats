@@ -235,3 +235,40 @@ _keybind_sandbox() {
     [ ! -f "$SANDBOX/CLAUDE.md" ]
     [ ! -f "$HOME/.claude/hooks/danger_guard.py" ]
 }
+
+# Python 이 없을 때는 설치하지 않고, 이 환경에서 Python 3 을 설치하는 명령만 안내한다.
+# PATH 를 스텁 디렉터리 하나로 좁혀 어떤 패키지 관리자가 보이는지를 고정한다.
+python_hint_with() {
+    local stub="$SANDBOX/hintbin"
+    mkdir -p "$stub"
+    printf '#!/bin/sh\necho %s\n' "$1" > "$stub/uname"
+    chmod +x "$stub/uname"
+    shift
+    local pm
+    for pm in "$@"; do
+        printf '#!/bin/sh\nexit 0\n' > "$stub/$pm"
+        chmod +x "$stub/$pm"
+    done
+    source "$REPO_ROOT/scripts/lib/setup_common.sh"
+    PATH="$stub" print_python_install_hint 2>&1
+}
+
+@test "python install hint suggests brew on macOS" {
+    run python_hint_with Darwin
+    [[ "$output" == *"brew install python"* ]]
+}
+
+@test "python install hint suggests apt-get on Debian-family Linux" {
+    run python_hint_with Linux apt-get
+    [[ "$output" == *"sudo apt-get install -y python3"* ]]
+}
+
+@test "python install hint suggests dnf on Fedora-family Linux" {
+    run python_hint_with Linux dnf
+    [[ "$output" == *"sudo dnf install -y python3"* ]]
+}
+
+@test "python install hint falls back to a generic message without a known package manager" {
+    run python_hint_with Linux
+    [[ "$output" == *"python.org"* ]]
+}

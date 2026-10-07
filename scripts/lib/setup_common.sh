@@ -18,6 +18,36 @@ resolve_python_command() {
     fi
 }
 
+# resolve_python_command 가 실패했을 때 이 환경에서 Python 3 을 설치하는 명령을 stderr 로 안내한다.
+# 설치는 하지 않는다 — 런타임 설치는 되돌리기 어렵고 uninstall 대칭 밖이라 사용자가 직접 한다.
+print_python_install_hint() {
+    local cmd=""
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        cmd="brew install python"
+    elif command -v apt-get &>/dev/null; then
+        cmd="sudo apt-get update && sudo apt-get install -y python3"
+    elif command -v dnf &>/dev/null; then
+        cmd="sudo dnf install -y python3"
+    elif command -v yum &>/dev/null; then
+        cmd="sudo yum install -y python3"
+    elif command -v pacman &>/dev/null; then
+        cmd="sudo pacman -S --needed python"
+    elif command -v zypper &>/dev/null; then
+        cmd="sudo zypper install -y python3"
+    elif command -v apk &>/dev/null; then
+        cmd="sudo apk add python3"
+    fi
+    {
+        echo "   Python 3 설치 방법:"
+        if [[ -n "$cmd" ]]; then
+            echo "     $cmd"
+        else
+            echo "     배포판의 패키지 관리자로 python3 를 설치하세요 (https://www.python.org/downloads/)."
+        fi
+        echo "   설치 후 다시 실행하세요."
+    } >&2
+}
+
 resolve_install_home() {
     # args: dry_run(0/1) real_home  [seed_file...]
     local dry_run="$1" real_home="$2"
