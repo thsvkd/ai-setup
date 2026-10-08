@@ -269,6 +269,108 @@ Describe "실제 설치 경로 (S2)" {
         $r.Output | Should -Match "DRY RUN"
         (Get-Content $settingsPath -Raw).Trim() | Should -Be $seed
     }
+
+    It "-Uninstall -Hooks 는 output_style 영수증을 남기고, 이어서 -Uninstall -OutputStyle 이 outputStyle 을 되돌린다" {
+        Invoke-Script $script:Setup @("-Hooks") | Out-Null
+        $claudeDir = Join-Path $env:USERPROFILE ".claude"
+        $settingsPath = Join-Path $claudeDir "settings.json"
+        $manifestPath = Join-Path $claudeDir ".claude-code-setup.json"
+        $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
+        $settings | Add-Member -NotePropertyName outputStyle -NotePropertyValue "fluent-korean:fluent-korean"
+        Set-Content -Path $settingsPath -Value ($settings | ConvertTo-Json -Depth 20) -Encoding utf8
+        $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+        $manifest | Add-Member -NotePropertyName output_style -NotePropertyValue ([pscustomobject]@{ previous = "Concise"; settings_created = $false })
+        Set-Content -Path $manifestPath -Value ($manifest | ConvertTo-Json -Depth 20) -Encoding utf8
+
+        (Invoke-Script $script:Setup @("-Uninstall", "-Hooks")).ExitCode | Should -Be 0
+        (Get-Content $manifestPath -Raw | ConvertFrom-Json).output_style.previous | Should -Be "Concise"
+
+        $r = Invoke-Script $script:Setup @("-Uninstall", "-OutputStyle")
+        $r.ExitCode | Should -Be 0
+        (Get-Content $settingsPath -Raw | ConvertFrom-Json).outputStyle | Should -Be "Concise"
+        Test-Path $manifestPath | Should -Be $false
+    }
+
+    It "-NoOnboard 기본 전체 설치는 mod 를 깔지 않는다" {
+        $r = Invoke-Script $script:Setup @("-NoOnboard")
+        $r.ExitCode | Should -Be 0
+        $claudeDir = Join-Path $env:USERPROFILE ".claude"
+        Test-Path (Join-Path $claudeDir "mods") | Should -Be $false
+        (Get-Content (Join-Path $claudeDir "settings.json") -Raw) | Should -Not -Match "CLAUDE_CODE_PLUGIN_DIRS"
+    }
+
+    It "--mods 긴 표기로 설치하고 -Uninstall -Mods 로 mod 만 되돌린다" {
+        $claudeDir = Join-Path $env:USERPROFILE ".claude"
+        New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
+        Set-Content -Path (Join-Path $claudeDir "settings.json") -Value '{"model": "opus"}' -Encoding utf8
+        (Invoke-ScriptInline $script:Setup "--mods").ExitCode | Should -Be 0
+        Test-Path (Join-Path $claudeDir "mods\cache-ttl-status\hooks\register.ts") | Should -Be $true
+        (Invoke-Script $script:Setup @("-Uninstall", "-Mods")).ExitCode | Should -Be 0
+        Test-Path (Join-Path $claudeDir "mods") | Should -Be $false
+        $after = Get-Content (Join-Path $claudeDir "settings.json") -Raw | ConvertFrom-Json
+        $after.model | Should -Be "opus"
+        $after.PSObject.Properties.Name | Should -Not -Contain "env"
+    }
+
+    Context "claude CLI 스텁" {
+        BeforeEach {
+            # 실제 claude 를 부르지 않도록 PATH 앞에 기록만 하는 claude.cmd 를 둔다.
+            $script:stubBin = Join-Path $script:sandbox "stubbin"
+            New-Item -ItemType Directory -Force -Path $script:stubBin | Out-Null
+            $script:claudeLog = Join-Path $script:sandbox "claude.log"
+            Set-Content -Path (Join-Path $script:stubBin "claude.cmd") -Encoding ascii -Value @(
+                "@echo %* >> `"$script:claudeLog`"",
+                "@if `"%1 %2`"==`"plugin list`" echo   other@x"
+            )
+            $script:oldPath = $env:PATH
+            $env:PATH = "$script:stubBin;$env:PATH"
+        }
+        AfterEach { $env:PATH = $script:oldPath }
+
+        It "-OutputStyle 은 fluent-korean 플러그인을 설치하고 outputStyle 만 지정한다" {
+            $r = Invoke-Script $script:Setup @("-OutputStyle")
+            $r.ExitCode | Should -Be 0
+            $calls = Get-Content $script:claudeLog -Raw
+            $calls | Should -Match "plugin marketplace add snflkd/fluent-korean"
+            $calls | Should -Match "plugin install fluent-korean@fluent-korean"
+            $after = Get-Content (Join-Path $env:USERPROFILE ".claude\settings.json") -Raw | ConvertFrom-Json
+            $after.outputStyle | Should -Be "fluent-korean:fluent-korean"
+            # -OutputStyle 만 줬으므로 훅은 설치되지 않는다
+            $after.PSObject.Properties.Name | Should -Not -Contain "hooks"
+        }
+
+        It "빈 홈에서 -Omc -Mods 설치 뒤 -Uninstall 은 settings.json 과 mod 를 남기지 않는다" {
+            Set-Content -Path (Join-Path $script:stubBin "claude.cmd") -Encoding ascii -Value @(
+                "@if `"%1 %2`"==`"plugin list`" echo   oh-my-claudecode@omc"
+            )
+            # HUD 래퍼 템플릿을 복사할 플러그인 캐시를 흉내 낸다
+            $lib = Join-Path $env:USERPROFILE ".claude\plugins\cache\omc\oh-my-claudecode\5.4.0\scripts\lib"
+            New-Item -ItemType Directory -Force -Path $lib | Out-Null
+            Set-Content -Path (Join-Path $lib "hud-wrapper-template.txt") -Value "// template" -Encoding ascii
+            Set-Content -Path (Join-Path $lib "config-dir.mjs") -Value "// config" -Encoding ascii
+            $claudeDir = Join-Path $env:USERPROFILE ".claude"
+
+            (Invoke-Script $script:Setup @("-Omc", "-Mods")).ExitCode | Should -Be 0
+            $after = Get-Content (Join-Path $claudeDir "settings.json") -Raw | ConvertFrom-Json
+            $after.statusLine.command | Should -Match "omc-hud-ttl.mjs"
+            $after.env.CLAUDE_CODE_PLUGIN_DIRS | Should -Be ((Join-Path $claudeDir "mods\bash-diff-filter") + ";" + (Join-Path $claudeDir "mods\cache-ttl-status"))
+            Test-Path (Join-Path $claudeDir "mods\bash-diff-filter\hooks\register.ts") | Should -Be $true
+            Test-Path (Join-Path $claudeDir "mods\cache-ttl-status\hooks\register.ts") | Should -Be $true
+
+            (Invoke-Script $script:Setup @("-Uninstall")).ExitCode | Should -Be 0
+            Test-Path (Join-Path $claudeDir "settings.json") | Should -Be $false
+            Test-Path (Join-Path $claudeDir "mods") | Should -Be $false
+            Test-Path (Join-Path $claudeDir ".claude-code-setup.json") | Should -Be $false
+        }
+
+        It "--output-style --dry-run 은 claude 설치도 settings 쓰기도 하지 않는다" {
+            $r = Invoke-ScriptInline $script:Setup "--output-style --dry-run"
+            $r.ExitCode | Should -Be 0
+            $r.Output | Should -Match "\(dry-run\) claude plugin install fluent-korean@fluent-korean"
+            (Get-Content $script:claudeLog -Raw) | Should -Not -Match "install"
+            Test-Path (Join-Path $env:USERPROFILE ".claude\settings.json") | Should -Be $false
+        }
+    }
 }
 
 # Windows PowerShell 5.1 은 BOM 없는 UTF-8 .ps1 을 OS ANSI 코드페이지([System.Text.Encoding]::Default)
@@ -278,7 +380,7 @@ Describe "Windows .ps1 인코딩 회귀 (BOM)" {
     It "배포되는 .ps1 파일은 전부 UTF-8 BOM 으로 시작해야 한다" {
         $files = @(
             "scripts\setup.ps1", "scripts\setup_hooks.ps1", "scripts\setup_agentsmd.ps1",
-            "scripts\lib\SetupCommon.ps1", "tests\Setup.Tests.ps1"
+            "scripts\lib\SetupCommon.ps1", "scripts\setup_output_style.ps1", "scripts\setup_mods.ps1", "tests\Setup.Tests.ps1"
         )
         foreach ($f in $files) {
             $path = Join-Path $script:RepoRoot $f

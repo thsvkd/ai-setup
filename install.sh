@@ -40,6 +40,8 @@ claude-code-setup 원격 설치 부트스트랩
   curl -fsSL .../install.sh | sh -s -- --skills   # 번들 스킬만
   curl -fsSL .../install.sh | sh -s -- --keybinds # 줄바꿈 키바인딩만
   curl -fsSL .../install.sh | sh -s -- --omc      # oh-my-claudecode + 캐시 TTL HUD
+  curl -fsSL .../install.sh | sh -s -- --output-style # fluent-korean 출력 스타일
+  curl -fsSL .../install.sh | sh -s -- --mods     # Claude Code mod (Bash diff 필터, 캐시 TTL 상태 줄)
   curl -fsSL .../install.sh | sh -s -- --newline ctrl-enter
   curl -fsSL .../install.sh | sh -s -- --help     # 이 도움말
 

@@ -15,6 +15,9 @@ scripts/setup.sh (와 setup.ps1) 가 **인자 없이** 호출됐을 때만 실�
   OVERWRITE_AGENTSMD=0|1       기존 지침 파일을 덮어쓸지
   OMC=0|1                      oh-my-claudecode 플러그인 + 캐시 TTL HUD 도 설치할지
                                (SCOPE=all|hooks 일 때만 기록)
+  OUTPUT_STYLE=0|1             fluent-korean 플러그인 설치 + outputStyle 지정 여부
+                               (SCOPE=all|hooks 일 때만 기록)
+  MODS=0|1                     Claude Code mod 설치 여부 (SCOPE=all|hooks 일 때만 기록)
   DRY_RUN=0|1                  실제 적용 전에 변경 계획만 볼지
 
 종료 코드로 세 상황을 구분한다:
@@ -264,6 +267,24 @@ def ask_all(questionary, project_dir):
         if omc is None:
             return None
         answers["OMC"] = "1" if omc else "0"
+
+        fluent = questionary.confirm(
+            "출력 스타일을 fluent-korean 으로 지정할까요? (플러그인 설치 포함)",
+            default=False,
+            style=style,
+        ).ask()
+        if fluent is None:
+            return None
+        answers["OUTPUT_STYLE"] = "1" if fluent else "0"
+
+        mods = questionary.confirm(
+            "Claude Code mod 도 설치할까요? (Bash 변경 표시에서 HUD 캐시 제외, 캐시 TTL 상태 줄 — v2.1.290 이상)",
+            default=False,
+            style=style,
+        ).ask()
+        if mods is None:
+            return None
+        answers["MODS"] = "1" if mods else "0"
 
     plan = questionary.select(
         "지금 바로 적용할까요?",
