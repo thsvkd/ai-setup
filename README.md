@@ -66,6 +66,8 @@ irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubuserco
 | `--keybinds` | `-Keybinds` | 줄바꿈 키바인딩만 설치 |
 | `--newline <값>` | `-Newline <값>` | 줄바꿈 키: `shift-enter`(기본) 또는 `ctrl-enter` |
 | `--omc` | `-Omc` | oh-my-claudecode 플러그인 설치 + HUD에 프롬프트 캐시 TTL 표시. 전체 설치에는 포함되지 않는다 |
+| `--mods` | `-Mods` | Claude Code mod 설치(`bash-diff-filter`, `cache-ttl-status`). Claude Code v2.1.290 이상. 전체 설치에는 포함되지 않는다 |
+| `--output-style` | `-OutputStyle` | [fluent-korean](https://github.com/snflkd/fluent-korean) 플러그인 설치 + 출력 스타일을 `fluent-korean`으로 지정. 전체 설치에는 포함되지 않는다 |
 | `--no-onboard` | `-NoOnboard` | 질문 없이 전체 설치 |
 | `--uninstall` | `-Uninstall` | 설치한 것만 골라 되돌리기 |
 | `--help` | `-Help` | 도움말 |
@@ -109,6 +111,8 @@ curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercon
 | `~/.claude/skills/design-lab/SKILL.md` | 시안 갤러리·풀 앱 체험·모바일·라이트/다크·선택/의견·브라우저 검증 절차 |
 | 줄바꿈 키 | `~/.claude/keybindings.json`, `~/.codex/config.toml`, VS Code·Cursor `keybindings.json`(에디터가 없어도 만든다), `~/.tmux.conf`(POSIX만), Windows Terminal(`ctrl-enter`일 때만) |
 | OMC (`--omc`일 때만) | oh-my-claudecode 플러그인, `~/.claude/hud/omc-hud-ttl.mjs`, `settings.json`의 `statusLine` 래퍼와 `refreshInterval` |
+| mod (`--mods`일 때만) | `~/.claude/mods/bash-diff-filter/`, `~/.claude/mods/cache-ttl-status/`, `settings.json`의 `env.CLAUDE_CODE_PLUGIN_DIRS` |
+| 출력 스타일 (`--output-style`일 때만) | fluent-korean 플러그인, `~/.claude/settings.json`의 `outputStyle` = `fluent-korean:fluent-korean`. 원래 값은 영수증에 남기고 `--uninstall`이 우리가 넣은 값 그대로일 때만 되돌린다(플러그인은 유지). 새 세션부터 적용된다 |
 
 필요한 것 — 모든 OS에서 **Python 3.9+**(훅이 `python3`, Windows에서는 `python`으로 실행된다). 휴지통 도구는 macOS 14.4+ 기본 `/usr/bin/trash`, Linux `trash-cli`, Windows `send2trash`를 쓰며, 없으면 설치 중에 pip로 설치를 시도한다.
 
@@ -329,7 +333,28 @@ VS Code / Cursor `keybindings.json` 경로는 OS별로 다르다 — Windows `%A
 - `~/.claude/hud/omc-hud-ttl.mjs`를 복사하고 기존 `statusLine.command` 앞에 래퍼 실행 명령을 끼운다. node는 OMC와 같은 방식으로 찾는다 — POSIX는 OMC의 `find-node.sh`, Windows는 `~/.claude/.omc-config.json`의 `nodeBinary`, 둘 다 없으면 PATH의 `node`. 입력이 없어도 카운트다운이 흐르도록 `statusLine.refreshInterval`이 없으면 `10`(초)을 넣는다.
 - `statusLine`이 없으면 플러그인의 정본 템플릿으로 OMC HUD를 먼저 설치한다. OMC가 아닌 다른 `statusLine`이 있으면 사용자 설정이므로 파일 하나 만들지 않는다. `settings.json`이나 매니페스트를 파싱할 수 없으면 쓰지 않고 멈춘다.
 - `--uninstall`은 이 설치가 만든 것만 되돌린다 — 래퍼, 우리가 넣은 값 그대로인 `refreshInterval`, 그리고 설치가 새로 만든 `statusLine`·`settings.json`. 설치가 복사한 HUD 파일은 그 `statusLine`도 함께 치울 때, 복사 당시 내용 그대로인 경우에만 지운다 — `omc-setup`이 다시 쓴 파일은 OMC 것이다. 원래 있던 OMC 플러그인과 OMC HUD는 남긴다.
+- OMC HUD는 렌더할 때마다(위 `refreshInterval`이면 10초마다) 프로젝트의 `.omc/state/hud-stdin-cache.json`을 다시 쓴다. 그래서 Claude Code가 Bash 실행 뒤 보여 주는 '바뀐 파일' diff에 이 파일이 거의 매번 끼어든다. 이 항목을 빼려면 `--mods`의 `bash-diff-filter`를 함께 설치한다.
 - CLAUDE.md 등 OMC의 나머지 설정은 Claude Code 안에서 `/oh-my-claudecode:omc-setup`으로 진행한다. 그 과정에서 `statusLine`이 다시 써지면 `--omc`를 한 번 더 실행하면 된다.
+
+</details>
+
+<details>
+<summary><b>Claude Code mod</b> — <code>--mods</code>가 하는 일</summary>
+
+## Claude Code mod
+
+`--mods`(또는 온보딩의 mod 질문에 '예')를 고르면 `res/mods/` 의 번들 [mod](https://code.claude.com/docs/en/plugins/mods/overview)를 `~/.claude/mods/<이름>/`에 복사하고, `~/.claude/settings.json`의 `env.CLAUDE_CODE_PLUGIN_DIRS`에 그 경로를 넣어 매 세션 로드되게 한다. mod는 Claude Code v2.1.290 이상에서만 동작하므로 기본 전체 설치에는 포함하지 않는다.
+
+| mod | 하는 일 |
+| --- | --- |
+| `bash-diff-filter` | Bash 실행 뒤 보여 주는 '바뀐 파일' diff에서 OMC HUD가 렌더마다 다시 쓰는 `.omc/state/hud-stdin-cache.json`(세션별 경로 포함)을 뺀다. 걸러내는 대상은 Bash 결과의 `bashEditDiff` 필드이며, 이 필드는 원래 모델에 전달되지 않으므로 화면 표시만 바뀐다. `OMC_STATE_DIR`로 OMC 상태를 프로젝트 밖에 두면 이 파일은 애초에 표시되지 않으므로 거르지 않는다. |
+| `cache-ttl-status` | 프롬프트 캐시 잔여 시간(`cache:57m`, 1분 미만은 초, 만료되면 `cache:cold`)을 **프롬프트 아래 상태 줄**에 띄운다. mod API는 statusLine의 `prompt_cache.expires_at`을 주지 않으므로, 메인 대화의 요청이 캐시를 읽거나 쓴 시각에 TTL을 더해 계산한다(서브에이전트 요청은 제외). TTL은 mod 설정 `ttl`(`1h` 기본, `5m`)로 시작하고, 모델을 바꾸면 엔진이 알려 주는 실제 값으로 갱신한다. 계산값이므로 실제 만료 시각과 몇 초 어긋날 수 있다. |
+
+- `--omc`의 HUD 래퍼(`session:` 자리에 `cache:`)와는 별개다. 둘 다 설치하면 TTL이 HUD 안과 프롬프트 아래 두 곳에 보인다.
+- 테스트(`*.test.ts`)와 엔진이 로드 때 만드는 타입(`.claude-plugin/types/`)은 복사하지 않는다. 같은 이름의 폴더에 내용이 다른 파일이 있으면 덮어쓰지 않고 멈춘다.
+- `--uninstall`은 우리가 넣은 경로와 복사 당시 그대로인 파일, 그리고 엔진이 만든 타입 폴더만 치운다. 사용자가 고친 mod 파일은 남긴다(env에서 빠지므로 더는 로드되지 않는다).
+- 셸에서 `CLAUDE_CODE_PLUGIN_DIRS`를 따로 export하고 있다면 그 값이 `settings.json`의 값보다 우선할 수 있으니, 그 경우에는 경로를 직접 합쳐 준다.
+- mod 하나를 고치려면 `res/mods/<이름>/`에서 `claude plugin validate .`와 `claude plugin test .`로 확인한다.
 
 </details>
 
@@ -407,6 +432,12 @@ res/
   omc/
     apply.py                # OMC HUD statusLine 에 캐시 TTL 래퍼 연결 / uninstall
     omc-hud-ttl.mjs         # OMC HUD 출력의 session:NNm 을 cache:NNm 으로 바꾸는 래퍼
+  output_style/
+    apply.py                # settings.json 의 outputStyle 지정 / uninstall
+  mods/
+    apply.py                # 번들 mod 를 ~/.claude/mods 에 복사 + CLAUDE_CODE_PLUGIN_DIRS 등록 / uninstall
+    bash-diff-filter/       # Bash 변경 파일 표시에서 OMC HUD 캐시를 빼는 mod (claude plugin test 로 검증)
+    cache-ttl-status/       # 프롬프트 캐시 잔여 시간을 프롬프트 아래 상태 줄에 띄우는 mod
   hooks/
     danger_guard.py         # 위험 명령 가드 (Bash + PowerShell, 전 플랫폼 공용)
     shims/rm                # 삭제 → 휴지통 (POSIX 셸·Git Bash)
@@ -421,6 +452,8 @@ scripts/
   setup_skills.{ps1,sh}     # 번들 스킬 설치 / uninstall 워커
   setup_keybinds.{ps1,sh}   # 줄바꿈 키바인딩 설치 / uninstall 워커
   setup_omc.{ps1,sh}        # oh-my-claudecode 설치 + 캐시 TTL HUD 워커
+  setup_output_style.{ps1,sh} # fluent-korean 플러그인 설치 + outputStyle 지정 워커
+  setup_mods.{ps1,sh}       # 번들 Claude Code mod 설치 / uninstall 워커
   test.{ps1,sh}             # 테스트 러너 (pytest + bats + Pester 통합 실행)
   lib/                      # 공용 오케스트레이션 함수
 install.{ps1,sh}            # 원격 설치 부트스트랩 (curl | sh / irm | iex)

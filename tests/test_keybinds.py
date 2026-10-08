@@ -920,6 +920,8 @@ def test_온보딩_hooks_범위는_키바인드를_설치하지_않는다(kb_san
         keys=[onboard_tests.DOWN, onboard_tests.ENTER,  # hooks
               onboard_tests.ENTER,                      # auto
               onboard_tests.ENTER,                      # OMC: 아니오
+              onboard_tests.ENTER,                      # 출력 스타일: 아니오
+              onboard_tests.ENTER,                      # mod: 아니오
               onboard_tests.ENTER],                     # apply
         cwd=kb_sandbox.project, env=env, timeout=90,
     )
@@ -973,6 +975,8 @@ def test_온보딩에서_ctrl_enter를_고르면_설치결과_ctrl_enter(kb_sand
               onboard_tests.DOWN, onboard_tests.ENTER,  # Ctrl+Enter
               onboard_tests.ENTER,                 # 하네스: 전부
               onboard_tests.ENTER,                 # OMC: 아니오
+              onboard_tests.ENTER,                 # 출력 스타일: 아니오
+              onboard_tests.ENTER,                 # mod: 아니오
               onboard_tests.ENTER],                # apply
         cwd=kb_sandbox.project, env=env, timeout=90,
     )

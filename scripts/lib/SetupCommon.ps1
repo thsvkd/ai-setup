@@ -338,7 +338,7 @@ function Uninstall-Hooks {
         Remove-Item -Force $shimsDir -ErrorAction SilentlyContinue
     }
 
-    # 매니페스트: 다른 워커의 영수증(keybinds, omc_hud)이 남아 있으면 그 섹션만 남기고 훅 흔적만 지운다.
+    # 매니페스트: 다른 워커의 영수증(keybinds, omc_hud, output_style, mods)이 남아 있으면 그 섹션만 남기고 훅 흔적만 지운다.
     # 통째로 지우면 키바인드 uninstall 이 '우리가 넣은 tmux 줄' 을, OMC uninstall 이 '우리가 넣은
     # refreshInterval' 을 식별할 근거를 잃는다.
     if (Test-Path $manifestPath) {
@@ -348,7 +348,7 @@ function Uninstall-Hooks {
             $payload = [ordered]@{}
             try {
                 $m = Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-                foreach ($key in @("keybinds", "omc_hud")) {
+                foreach ($key in @("keybinds", "omc_hud", "output_style", "mods")) {
                     if ($m -and $m.PSObject.Properties.Name -contains $key -and $m.$key) {
                         $payload[$key] = $m.$key
                     }

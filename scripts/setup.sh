@@ -13,6 +13,8 @@
 #   bash setup.sh --agentsmd             # AGENTS.md만 (온보딩 없음)
 #   bash setup.sh --keybinds             # 줄바꿈 키바인딩만 (온보딩 없음)
 #   bash setup.sh --omc                  # oh-my-claudecode + 캐시 TTL HUD 만 (온보딩 없음)
+#   bash setup.sh --output-style         # fluent-korean 출력 스타일만 (온보딩 없음)
+#   bash setup.sh --mods                 # Claude Code mod 만 (온보딩 없음)
 #   bash setup.sh --newline ctrl-enter   # 줄바꿈 키를 Ctrl+Enter 로
 #   bash setup.sh --dry-run              # 미리보기 (전체, 온보딩 없음)
 #   bash setup.sh --no-onboard           # 온보딩을 끄고 예전 기본 동작
@@ -37,8 +39,15 @@ claude-code-setup — Claude Code 사용자 레벨 설정
   --newline VAL 줄바꿈 키 (shift-enter | ctrl-enter). 기본 shift-enter
   --omc         oh-my-claudecode 플러그인 설치 + HUD 에 캐시 TTL 표시
                 (범위 지정이 없는 기본 설치에는 포함되지 않는다)
-  --uninstall   가드 훅 + 관리 키바인딩·스킬 + 캐시 TTL HUD 설정 제거
-                (권한·사용자 항목·OMC 플러그인은 보존)
+  --output-style
+                fluent-korean 플러그인 설치 + outputStyle 을 fluent-korean 으로 지정
+                (범위 지정이 없는 기본 설치에는 포함되지 않는다)
+  --mods        Claude Code mod 설치 (~/.claude/mods, v2.1.290 이상)
+                · bash-diff-filter: Bash 변경 파일 표시에서 OMC HUD 캐시 파일을 뺀다
+                · cache-ttl-status: 프롬프트 캐시 잔여 시간을 프롬프트 아래 상태 줄에 띄운다
+                (범위 지정이 없는 기본 설치에는 포함되지 않는다)
+  --uninstall   가드 훅 + 관리 키바인딩·스킬 + 캐시 TTL HUD + outputStyle + mod 설정 제거
+                (권한·사용자 항목·OMC/fluent-korean 플러그인은 보존)
   --dry-run     아무것도 바꾸지 않고 변경 계획만 출력
   --no-onboard  대화형 온보딩을 띄우지 않고 기본값으로 실행
   --help, -h    이 도움말
@@ -48,6 +57,8 @@ claude-code-setup — Claude Code 사용자 레벨 설정
   · 권한 모드 (auto / bypassPermissions)
   · 줄바꿈 키 (Shift+Enter / Ctrl+Enter) — 범위=전체일 때만
   · oh-my-claudecode 설치 여부 — 범위=전체/훅일 때만
+  · fluent-korean 출력 스타일 설치 여부 — 범위=전체/훅일 때만
+  · Claude Code mod 설치 여부 — 범위=전체/훅일 때만
   · 기존 AGENTS.md 덮어쓰기 여부 (파일이 이미 있을 때만 물음)
   · 지금 적용할지, 변경 계획(--dry-run)만 먼저 볼지
 EOF
@@ -58,6 +69,8 @@ RUN_AGENTSMD=0
 RUN_KEYBINDS=0
 RUN_SKILLS=0
 RUN_OMC=0
+RUN_OUTPUT_STYLE=0
+RUN_MODS=0
 DRY_RUN=0
 UNINSTALL=0
 NO_ONBOARD=0
@@ -76,6 +89,8 @@ while [[ $# -gt 0 ]]; do
         --skills) RUN_SKILLS=1; HAD_ARGS=1; shift ;;
         --keybinds) RUN_KEYBINDS=1; HAD_ARGS=1; shift ;;
         --omc) RUN_OMC=1; HAD_ARGS=1; shift ;;
+        --output-style) RUN_OUTPUT_STYLE=1; HAD_ARGS=1; shift ;;
+        --mods) RUN_MODS=1; HAD_ARGS=1; shift ;;
         --harness)
             if [[ -z "${2:-}" ]]; then
                 echo "--harness 값이 필요합니다 (claude|codex|grok|opencode|all)" >&2
@@ -184,6 +199,8 @@ run_onboarding() {
                 esac ;;
             OVERWRITE_AGENTSMD) [[ "$value" == "1" ]] && FORCE_AGENTSMD=1 ;;
             OMC) [[ "$value" == "1" ]] && RUN_OMC=1 ;;
+            OUTPUT_STYLE) [[ "$value" == "1" ]] && RUN_OUTPUT_STYLE=1 ;;
+            MODS) [[ "$value" == "1" ]] && RUN_MODS=1 ;;
             DRY_RUN) [[ "$value" == "1" ]] && DRY_RUN=1 ;;
         esac
     done < "$answers"
@@ -221,11 +238,15 @@ if [[ "$UNINSTALL" -eq 1 ]]; then
     UN_HOOKS="$RUN_HOOKS"
     UN_SKILLS="$RUN_SKILLS"
     UN_OMC="$RUN_OMC"
-    if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 && "$RUN_KEYBINDS" -eq 0 && "$RUN_SKILLS" -eq 0 && "$RUN_OMC" -eq 0 ]]; then
+    UN_OUTPUT_STYLE="$RUN_OUTPUT_STYLE"
+    UN_MODS="$RUN_MODS"
+    if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 && "$RUN_KEYBINDS" -eq 0 && "$RUN_SKILLS" -eq 0 && "$RUN_OMC" -eq 0 && "$RUN_OUTPUT_STYLE" -eq 0 && "$RUN_MODS" -eq 0 ]]; then
         UN_KEYBINDS=1
         UN_HOOKS=1
         UN_SKILLS=1
         UN_OMC=1
+        UN_OUTPUT_STYLE=1
+        UN_MODS=1
     fi
     # 키바인드를 '먼저' 지운다. 훅 uninstall 이 매니페스트를 손보는데, 키바인드 제거는
     # 그 영수증(tmux_added 등)이 있어야 '우리가 넣은 것' 과 사용자 것을 구분할 수 있다.
@@ -236,8 +257,18 @@ if [[ "$UNINSTALL" -eq 1 ]]; then
     if [[ "$UN_SKILLS" -eq 1 ]]; then
         bash "$SCRIPT_DIR/setup_skills.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || skills_exit=$?
     fi
+    # mod·출력 스타일·캐시 TTL HUD 영수증도 매니페스트에 있으므로 훅 uninstall 보다 먼저 되돌린다.
+    # 이 셋은 설치(OMC → 출력 스타일 → mod)의 역순으로 되돌린다 — settings.json 을 처음 만든
+    # 워커가 마지막에 와야, 다른 워커의 키가 다 빠진 뒤 빈 파일을 지울 수 있다.
+    mods_exit=0
+    if [[ "$UN_MODS" -eq 1 ]]; then
+        bash "$SCRIPT_DIR/setup_mods.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || mods_exit=$?
+    fi
+    style_exit=0
+    if [[ "$UN_OUTPUT_STYLE" -eq 1 ]]; then
+        bash "$SCRIPT_DIR/setup_output_style.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || style_exit=$?
+    fi
     omc_exit=0
-    # 캐시 TTL HUD 영수증도 매니페스트에 있으므로 훅 uninstall 보다 먼저 되돌린다.
     if [[ "$UN_OMC" -eq 1 ]]; then
         bash "$SCRIPT_DIR/setup_omc.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || omc_exit=$?
     fi
@@ -250,13 +281,16 @@ if [[ "$UNINSTALL" -eq 1 ]]; then
     [[ "$hooks_exit" -ne 0 ]] && exit "$hooks_exit"
     [[ "$skills_exit" -ne 0 ]] && exit "$skills_exit"
     [[ "$omc_exit" -ne 0 ]] && exit "$omc_exit"
+    [[ "$style_exit" -ne 0 ]] && exit "$style_exit"
+    [[ "$mods_exit" -ne 0 ]] && exit "$mods_exit"
     exit "$kb_exit"
 fi
 
 # 범위 플래그가 하나도 없으면 전체 설치 (훅 + AGENTS.md + 키바인드 + 스킬).
 # --hooks 만 / --agentsmd 만 / --keybinds 만 / --omc 만이면 그 범위만.
-# OMC 는 서드파티 플러그인이라 기본 전체 설치에 끼우지 않는다 — 명시적으로 고른 경우에만.
-if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 && "$RUN_KEYBINDS" -eq 0 && "$RUN_SKILLS" -eq 0 && "$RUN_OMC" -eq 0 ]]; then
+# OMC·fluent-korean 은 서드파티 플러그인이라, mod 는 최신 Claude Code 에서만 동작해서 기본 전체
+# 설치에 끼우지 않는다 — 명시적으로 고른 경우에만.
+if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 && "$RUN_KEYBINDS" -eq 0 && "$RUN_SKILLS" -eq 0 && "$RUN_OMC" -eq 0 && "$RUN_OUTPUT_STYLE" -eq 0 && "$RUN_MODS" -eq 0 ]]; then
     RUN_HOOKS=1
     RUN_AGENTSMD=1
     RUN_KEYBINDS=1
@@ -277,6 +311,14 @@ fi
 
 if [[ "$RUN_OMC" -eq 1 ]]; then
     bash "$SCRIPT_DIR/setup_omc.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"}
+fi
+
+if [[ "$RUN_OUTPUT_STYLE" -eq 1 ]]; then
+    bash "$SCRIPT_DIR/setup_output_style.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"}
+fi
+
+if [[ "$RUN_MODS" -eq 1 ]]; then
+    bash "$SCRIPT_DIR/setup_mods.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"}
 fi
 
 if [[ "$RUN_SKILLS" -eq 1 ]]; then
