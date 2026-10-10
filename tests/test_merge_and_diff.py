@@ -609,3 +609,66 @@ def test_retired_hook_registration_is_pruned(tmp_path):
     # 사용자가 직접 넣은 훅은 그대로 둔다.
     assert any("mine.py" in c for c in cmds)
     assert any("danger_guard.py" in c for c in cmds)
+
+
+# --- autoMode.allow ---
+# 훅이 가역성을 확인한 force push 를 auto mode 분류기가 다시 막지 않도록 허용 예외를 더한다.
+# 목록에 "$defaults" 가 없으면 Claude Code 가 기본 allow 목록을 통째로 대체한다.
+
+def _frag_auto_allow():
+    return json.loads(FRAGMENT.read_text(encoding="utf-8"))["autoMode"]["allow"]
+
+
+def test_auto_allow_is_created_with_defaults_when_absent(tmp_path):
+    proc, result = run_merge(tmp_path / "settings.json")
+    assert proc.returncode == 0, proc.stdout
+    assert result["autoMode"]["allow"] == _frag_auto_allow()
+    assert result["autoMode"]["allow"][0] == "$defaults"
+
+
+def test_auto_allow_keeps_user_list_and_choice_to_drop_defaults(tmp_path):
+    target = tmp_path / "settings.json"
+    target.write_text(json.dumps({"autoMode": {"allow": ["mine"], "environment": ["env"]}}),
+                      encoding="utf-8")
+    proc, result = run_merge(target)
+    assert proc.returncode == 0, proc.stdout      # 기존 autoMode 를 '예상 밖 변경'으로 보면 설치가 실패한다
+    rules = [r for r in _frag_auto_allow() if r != "$defaults"]
+    assert result["autoMode"]["allow"] == ["mine"] + rules
+    assert result["autoMode"]["environment"] == ["env"]
+
+
+def test_uninstall_removes_only_auto_allow_it_added_even_after_reinstall(tmp_path):
+    target = tmp_path / "settings.json"
+    manifest = tmp_path / "manifest.json"
+    target.write_text(json.dumps({"autoMode": {"environment": ["env"]}}), encoding="utf-8")
+    run_merge(target, manifest_path=manifest)
+    run_merge(target, manifest_path=manifest)            # 멱등 재실행도 영수증을 잊지 않아야 한다
+    _, result = run_uninstall(target, manifest)
+    assert result["autoMode"] == {"environment": ["env"]}
+
+    target.write_text("{}", encoding="utf-8")
+    manifest.unlink()
+    run_merge(target, manifest_path=manifest)
+    _, result = run_uninstall(target, manifest)
+    assert "autoMode" not in result
+
+
+def test_uninstall_keeps_defaults_when_user_added_rules_after_install(tmp_path):
+    """"$defaults" 가 빠지면 남은 사용자 규칙이 기본 allow 목록을 통째로 대체한다."""
+    target = tmp_path / "settings.json"
+    manifest = tmp_path / "manifest.json"
+    target.write_text("{}", encoding="utf-8")
+    run_merge(target, manifest_path=manifest)
+    s = json.loads(target.read_text(encoding="utf-8"))
+    s["autoMode"]["allow"].append("mine")
+    target.write_text(json.dumps(s), encoding="utf-8")
+    _, result = run_uninstall(target, manifest)
+    assert result["autoMode"]["allow"] == ["$defaults", "mine"]
+
+
+def test_malformed_auto_mode_is_left_untouched(tmp_path):
+    target = tmp_path / "settings.json"
+    target.write_text(json.dumps({"autoMode": {"allow": "not a list"}}), encoding="utf-8")
+    proc, result = run_merge(target)
+    assert proc.returncode == 0, proc.stdout
+    assert result["autoMode"] == {"allow": "not a list"}

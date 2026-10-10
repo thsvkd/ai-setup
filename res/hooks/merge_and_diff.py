@@ -78,7 +78,7 @@ def fold_receipt(previous: dict, current: dict) -> dict:
         return current
 
     folded = dict(current)
-    for key in ("added_allow", "added_deny", "added_ask"):
+    for key in ("added_allow", "added_deny", "added_ask", "added_auto_allow"):
         merged = list(previous.get(key) or [])
         for item in current.get(key) or []:
             if item not in merged:
@@ -272,6 +272,53 @@ def merge_env(existing: dict, fragment: dict, changes: list) -> dict:
     return added
 
 
+def merge_auto_allow(existing: dict, fragment: dict, changes: list) -> list:
+    """autoMode.allow(auto mode 분류기의 허용 예외)에 조각의 규칙을 합집합으로 더한다.
+    실제로 추가한 항목을 반환한다 (uninstall 정밀 복원의 근거).
+
+    목록에 "$defaults" 가 없으면 Claude Code 는 기본 allow 목록을 통째로 대체한다. 그래서 목록이
+    없을 때 만들면서 "$defaults" 를 함께 넣고, 사용자가 이미 목록을 갖고 있으면 그 선택(기본값을
+    빼고 쓰는 것 포함)을 존중해 "$defaults" 는 더하지 않는다."""
+    incoming = ((fragment.get("autoMode") or {}).get("allow")) or []
+    if not incoming:
+        return []
+    auto = existing.get("autoMode", {})
+    if not isinstance(auto, dict) or not isinstance(auto.get("allow", []), list):
+        # 형식이 어긋난 사용자 값을 덮어쓰면 uninstall 이 원래 값을 되살릴 수 없다 — 건드리지 않는다.
+        # changes 에 넣으면 설치기가 '변경 있음'으로 보고 실행할 때마다 백업을 만든다.
+        print("  ⚠️ autoMode.allow: 형식이 예상과 달라(객체/목록 아님) 병합을 건너뜀")
+        return []
+    has_list = isinstance(auto.get("allow"), list)
+    current = list(auto["allow"]) if has_list else []
+    added = [x for x in incoming if x not in current and not (has_list and x == "$defaults")]
+    if added:
+        auto["allow"] = current + added
+        existing["autoMode"] = auto
+        changes.append(f"autoMode.allow: +{added}")
+    return added
+
+
+def revert_auto_allow(existing: dict, receipt: dict) -> list:
+    """uninstall: 설치가 autoMode.allow 에 더한 항목만 걷어낸다. 비면 키를 지운다."""
+    added = receipt.get("added_auto_allow") or []
+    auto = existing.get("autoMode")
+    if not added or not isinstance(auto, dict) or not isinstance(auto.get("allow"), list):
+        return []
+    keep = [x for x in auto["allow"] if x not in added]
+    # 사용자 규칙이 남으면 "$defaults" 도 남긴다 — 빠지면 그 목록이 기본 allow 목록을 통째로 대체한다.
+    if keep and "$defaults" in auto["allow"]:
+        keep = [x for x in auto["allow"] if x not in added or x == "$defaults"]
+    removed = [x for x in auto["allow"] if x not in keep]
+    if not removed:
+        return []
+    auto["allow"] = keep
+    if not auto["allow"]:
+        del auto["allow"]
+    if not auto:
+        del existing["autoMode"]
+    return [f"autoMode.allow: -{removed}"]
+
+
 # 우리가 한 번이라도 배포했던 훅 스크립트 이름. 조각에서 빠진 것은 '정책이 바뀌어 그만둔
 # 것'이므로 설치 중에 기존 등록을 걷어낸다. 그러지 않으면 새로 설치한 사람에게는 없고
 # 업그레이드한 사람에게만 남는 유령 훅이 생긴다 (구버전 permissions 규칙과 같은 성격의
@@ -305,6 +352,7 @@ def merge(existing: dict, fragment: dict):
         "added_ask": [],
         "added_scalars": {},
         "added_env": {},
+        "added_auto_allow": [],
         "removed_legacy": {},
         "retired_hooks": [],
         "default_mode_before": None,
@@ -314,6 +362,7 @@ def merge(existing: dict, fragment: dict):
 
     receipt["added_scalars"] = merge_scalars(existing, fragment, changes)
     receipt["added_env"] = merge_env(existing, fragment, changes)
+    receipt["added_auto_allow"] = merge_auto_allow(existing, fragment, changes)
 
     frag_perms = fragment.get("permissions", {})
     if frag_perms:
@@ -457,6 +506,12 @@ def top_level_diff(before: dict, after: dict):
         # '예상치 못한 변경' 위반 검사에서 제외한다. 사용자의 기존 env 키/값 보존은 merge_env 가 보장한다.
         if k in ("permissions", "hooks", "env"):
             continue
+        if k == "autoMode" and isinstance(before[k], dict) and isinstance(after.get(k), dict):
+            # merge_auto_allow 는 allow 만 바꾼다. 그 밖의 autoMode 하위 키는 그대로여야 한다.
+            same = {x: v for x, v in before[k].items() if x != "allow"} == \
+                {x: v for x, v in after[k].items() if x != "allow"}
+            (preserved if same else violated).append(k)
+            continue
         (preserved if after.get(k) == before.get(k) else violated).append(k)
     return preserved, violated
 
@@ -485,6 +540,7 @@ def main_uninstall(argv) -> int:
     changes += revert_permissions(after, receipt)
     changes += revert_scalars(after, receipt)
     changes += revert_env(after, receipt)
+    changes += revert_auto_allow(after, receipt)
 
     print("── 되돌리기 계획 ──────────────────────")
     if changes:
