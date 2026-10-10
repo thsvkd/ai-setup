@@ -435,6 +435,19 @@ def test_force_push_checks_the_push_url_not_the_fetch_url(repo, tmp_path):
     assert _decision("git push -f origin main", repo) == "ask"
 
 
+@pytest.mark.parametrize("cmd", ["git push --force --repo up", "git push --force --repo=up"])
+def test_force_push_with_repo_option_checks_that_remote(repo, tmp_path, cmd):
+    """`--repo <원격>` 은 원격 위치 인자와 같다 — 기본 원격(origin)을 보면 안 된다."""
+    _with_origin(repo, tmp_path, "main")
+    up = tmp_path / "up.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(up)], check=True)
+    git(repo, "remote", "add", "up", str(up))
+    branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    git(repo, "push", "-q", "up", "HEAD:refs/heads/%s" % branch)
+    _remote_ahead(up, tmp_path, branch)
+    assert _decision(cmd, repo) == "ask", cmd
+
+
 def test_deleting_remote_ref_outside_heads_and_tags_asks(repo, tmp_path):
     bare = _with_origin(repo, tmp_path, "main")
     _remote_ahead(bare, tmp_path, "main")
@@ -537,3 +550,23 @@ def test_clean_x_includes_ignored_when_small(repo):
     run_hook("git clean -fdx", repo)
     ref = latest_backup(repo)
     assert "local.env" in git(repo, "ls-tree", "-r", "--name-only", ref).stdout
+
+
+def test_push_check_error_asks_instead_of_passing(repo, monkeypatch, capsys):
+    """가역성을 확인하지 못한 push 를 그냥 내보내지 않는다 — 훅의 다른 오류는 통과(fail-open)다."""
+    import io
+    monkeypatch.syspath_prepend(str(HOOK.parent))
+    import danger_guard
+
+    def boom(command, cwd):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(danger_guard, "push_check", boom)
+    monkeypatch.setattr(danger_guard, "log", lambda entry: None)
+    for cmd, expected in (("git push -f origin main", "ask"), ("ls", None)):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+            {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": cmd}})))
+        with pytest.raises(SystemExit):
+            danger_guard.main()
+        out = capsys.readouterr().out.strip()
+        got = json.loads(out)["hookSpecificOutput"].get("permissionDecision") if out else None
+        assert got == expected, cmd

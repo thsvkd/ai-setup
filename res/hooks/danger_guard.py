@@ -416,18 +416,18 @@ def _check_push(args, dirs, cwd):
 
     force = any(PUSH_FORCE_RE.match(a) for a in args)
     positionals = []
-    skip = False
-    for a in args:
-        if skip:
-            skip = False
+    repo_opt = None                         # `--repo <원격>` 은 위치 인자 원격과 같다 (둘 다 있으면 위치 인자)
+    for i, a in enumerate(args):
+        if i and args[i - 1] in PUSH_VALUE_OPTS:
+            if args[i - 1] == "--repo":
+                repo_opt = a
             continue
-        if a in PUSH_VALUE_OPTS:
-            skip = True
-            continue
+        if a.startswith("--repo="):
+            repo_opt = a[len("--repo="):]
         if a.startswith("-"):
             continue
         positionals.append(a)
-    remote = positionals[0] if positionals else _push_remote(cwd)
+    remote = positionals[0] if positionals else (repo_opt or _push_remote(cwd))
     refspecs = positionals[1:]
 
     def local_refs(prefix):
@@ -619,7 +619,12 @@ def main():
 
     cwd = data.get("cwd") or os.getcwd()
 
-    reason, notes = push_check(command, cwd)
+    try:
+        reason, notes = push_check(command, cwd)
+    except Exception as exc:  # noqa: BLE001 — 가역성을 확인하지 못한 push 를 그냥 내보내지 않는다
+        log({"decision": "guard-error", "error": repr(exc)})
+        reason, notes = ("push 가 되돌릴 수 있는지 확인하다 훅 오류가 났습니다(%r). 계속할까요?" % exc
+                         if _find_pushes(command) else None), []
     if reason:
         log({"tool": tool_name, "command": command, "decision": "ask-push-irreversible"})
         emit("ask", reason)
