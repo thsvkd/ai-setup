@@ -211,9 +211,12 @@ def test_session_start_puts_shims_first_on_path_for_later_bash_commands(tmp_path
     assert not proc.stdout.strip()
     # startup/resume/clear/compact 마다 다시 불려 같은 줄이 여러 번 쌓여도 PATH 는 한 번만 는다.
     _session_start(env_file)
+    # Git Bash 는 PATH 를 `:` 로 구분한 /c/... 형식으로 보여준다. cygpath 가 있으면 Windows 형식으로 돌려 비교한다.
     out = subprocess.run(
-        ["bash", "-c", '. "$1"; . "$1"; command -v rm; echo "$PATH"', "_", str(env_file)],
-        capture_output=True, text=True).stdout.splitlines()
+        ["bash", "-c", '. "$1"; . "$1"; r=$(command -v rm); p=$PATH; '
+         'if command -v cygpath >/dev/null; then r=$(cygpath -w "$r"); p=$(cygpath -wp "$p"); fi; '
+         'echo "$r"; echo "$p"', "_", str(env_file)],
+        capture_output=True, text=True, encoding="utf-8").stdout.splitlines()
     shim_dir = str(HOOK_PATH.parent / "shims")
     assert out[0] == os.path.join(shim_dir, "rm")
     assert out[1].split(os.pathsep).count(shim_dir) == 1

@@ -18,8 +18,9 @@ BACKUP_PREFIX = "refs/claude-backups/"
 
 
 def git(repo, *args):
+    # 로캘 인코딩(Windows 한국어는 cp949)으로 읽으면 UTF-8 내용이 디코딩에 실패해 stdout 이 None 이 된다.
     return subprocess.run(["git"] + list(args), cwd=str(repo),
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, encoding="utf-8")
 
 
 def run_hook(command, cwd):
