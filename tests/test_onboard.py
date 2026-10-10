@@ -629,7 +629,8 @@ def test_default_mode_옵션이_settings에_반영된다(tmp_path):
         encoding="utf-8", timeout=120,
     )
     assert proc.returncode == 0, proc.stderr
-    assert '"defaultMode": "bypassPermissions"' in proc.stdout, proc.stdout
+    # dry-run 은 병합 결과 전체를 찍지 않고 변경 계획만 보인다. 빈 홈이라 계획에 항상 나온다.
+    assert "permissions.defaultMode: None -> 'bypassPermissions'" in proc.stdout, proc.stdout
 
 
 @posix_only

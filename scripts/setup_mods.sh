@@ -30,5 +30,5 @@ if ! PY="$(resolve_python_command)"; then
     exit 1
 fi
 
-echo "── Claude Code mod ─────────────────────"
+echo "🔧 Claude Code mod"
 exec "$PY" -X utf8 "$REPO_ROOT/res/mods/apply.py" --home "$HOME" ${FLAGS[@]+"${FLAGS[@]}"}

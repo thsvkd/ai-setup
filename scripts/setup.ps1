@@ -249,6 +249,103 @@ if (-not $hadArgs) {
     }
 }
 
+# ── 출력 서식 ────────────────────────────────────────────────────────
+# setup.sh 의 ui_format 과 같은 규칙. 워커는 단독으로도 실행되므로 각자 이모지 마커로 줄을
+# 찍고, 여기서 그 출력(Write-Host 는 6>&1 로 받는다)을 한 줄씩 clack 거터 모양으로 바꾼다.
+# 문구는 그대로 둔다. 기본 conhost 는 이 기호들을 못 그리는 글꼴이 많아 ASCII 로 대체한다
+# (clack 이 쓰는 is-unicode-supported 와 같은 판정).
+$onWindows = [System.Environment]::OSVersion.Platform -eq 'Win32NT'
+$uiUnicode = (-not $onWindows) -or [bool]$env:WT_SESSION -or ($env:TERM_PROGRAM -eq 'vscode') -or
+    ($env:TERMINAL_EMULATOR -eq 'JetBrains-JediTerm') -or ($env:ConEmuTask -eq '{cmd::Cmder}')
+if ($uiUnicode) {
+    $G = @{ Bar = '│'; Start = '┌'; End = '└'; Section = '◇'; Ok = '✓'; Warn = '▲'; Err = '✗'; Dry = '○'; Dot = '•' }
+} else {
+    $G = @{ Bar = '|'; Start = 'T'; End = '-'; Section = 'o'; Ok = '+'; Warn = '!'; Err = 'x'; Dry = 'o'; Dot = '-' }
+}
+$uiMarks = @(
+    @{ Prefixes = @('✅', '🎉'); Mark = 'Ok'; Color = 'Green' },
+    @{ Prefixes = @('⚠️', '⚠'); Mark = 'Warn'; Color = 'Yellow' },
+    @{ Prefixes = @('❌'); Mark = 'Err'; Color = 'Red' },
+    @{ Prefixes = @('🧪'); Mark = 'Dry'; Color = 'Cyan' },
+    @{ Prefixes = @('ℹ️', '💾', '🗑️', '📦', '🐍', '🧾', '🔁', '•'); Mark = 'Dot'; Color = 'DarkGray' }
+)
+
+$ord = [System.StringComparison]::Ordinal
+
+function Write-UiBar([string]$Rest = '') {
+    Write-Host $G.Bar -ForegroundColor DarkGray -NoNewline
+    Write-Host $Rest
+}
+
+filter Format-SetupOutput {
+    foreach ($line in ([string]$_ -split "`r?`n")) {
+        if (-not $line.Trim()) { Write-UiBar; continue }
+        $body = $line.TrimStart(' ')
+        $pad = [Math]::Max(0, $line.Length - $body.Length - 2)
+        # Windows PowerShell 5.1(.NET Framework)의 StartsWith 는 문화권 비교라 이모지를 무시할 수 있다.
+        if ($body.StartsWith('🔧 ', $ord) -or $body.StartsWith('🧹 ', $ord)) {
+            $title = $body.Substring($body.IndexOf(' ') + 1).Replace('...', '')
+            if ($title.EndsWith(' 시작', $ord)) { $title = $title.Substring(0, $title.Length - 3) }
+            Write-UiBar
+            Write-Host $G.Section -ForegroundColor Green -NoNewline
+            Write-Host "  $title"
+            continue
+        }
+        if ($body.StartsWith('── ', $ord)) {
+            $title = $body.Substring(3)
+            $cut = $title.IndexOf(' ─', $ord)
+            if ($cut -ge 0) { $title = $title.Substring(0, $cut) }
+            Write-UiBar "  $title"
+            continue
+        }
+        if ($body -match '^\[\d/\d\] ') { Write-UiBar ("  " + $body.Replace('...', '')); continue }
+        # 닫는 가로줄(──────)만 있는 줄은 거터가 대신하므로 버린다.
+        if (-not $body.Replace('─', '')) { continue }
+
+        $hit = $null
+        foreach ($m in $uiMarks) {
+            foreach ($p in $m.Prefixes) {
+                if ($body.StartsWith("$p ", $ord)) { $hit = $m; $body = $body.Substring($p.Length).TrimStart(' '); break }
+            }
+            if ($hit) { break }
+        }
+        Write-Host $G.Bar -ForegroundColor DarkGray -NoNewline
+        Write-Host ("  " + (' ' * $pad)) -NoNewline
+        if ($hit) {
+            Write-Host $G[$hit.Mark] -ForegroundColor $hit.Color -NoNewline
+            Write-Host " $body"
+        } else {
+            Write-Host $body
+        }
+    }
+}
+
+function Exit-Setup([int]$Code) {
+    # 설치 출력은 온보딩과 같은 모양의 블록 하나로 묶는다. 끝줄은 종료 코드를 보고 찍는다.
+    $what = if ($Uninstall) { "제거" } else { "설치" }
+    Write-UiBar
+    Write-Host $G.End -ForegroundColor DarkGray -NoNewline
+    if ($Code -ne 0) {
+        Write-Host "  $what 실패 (exit $Code) — 위 메시지를 확인하세요." -ForegroundColor Red
+    } elseif ($dryRun) {
+        Write-Host "  DRY RUN 완료 — 아무것도 바꾸지 않았습니다."
+    } else {
+        Write-Host "  $what 완료"
+    }
+    Write-Host ""
+    exit $Code
+}
+
+# 워커가 찍는 python 출력이 파이프 너머에서 블록 버퍼링되면 stderr 경고와 순서가 뒤바뀐다.
+$env:PYTHONUNBUFFERED = '1'
+
+Write-Host ""
+Write-Host $G.Start -ForegroundColor DarkGray -NoNewline
+Write-Host "  claude-code-setup"
+
+# 워커가 throw 로 끝나도(셀프테스트 실패 등) 끝줄을 찍고 실패 코드로 나간다.
+try {
+
 # 제거도 설치와 같은 범위 규칙을 따른다. 범위를 지정했으면 그것만 지운다 —
 # -Hooks -Uninstall 이 키바인딩까지 지우면 "-Hooks 는 키바인딩을 건드리지 않는다"
 # (핵심 결정 4)를 제거 쪽에서만 어기는 것이 된다.
@@ -267,7 +364,7 @@ if ($Uninstall) {
     $hooksExit = 0
     $skillsExit = 0
     if ($unSkills) {
-        & (Join-Path $PSScriptRoot "setup_skills.ps1") -Uninstall -DryRun:$dryRun
+        & (Join-Path $PSScriptRoot "setup_skills.ps1") -Uninstall -DryRun:$dryRun 6>&1 | Format-SetupOutput
         $skillsExit = $LASTEXITCODE
     }
     # mod·출력 스타일·캐시 TTL HUD 영수증도 매니페스트에 있으므로 훅 uninstall 보다 먼저 되돌린다.
@@ -275,33 +372,33 @@ if ($Uninstall) {
     # 워커가 마지막에 와야, 다른 워커의 키가 다 빠진 뒤 빈 파일을 지울 수 있다.
     $modsExit = 0
     if ($unMods) {
-        & (Join-Path $PSScriptRoot "setup_mods.ps1") -Uninstall -DryRun:$dryRun
+        & (Join-Path $PSScriptRoot "setup_mods.ps1") -Uninstall -DryRun:$dryRun 6>&1 | Format-SetupOutput
         $modsExit = $LASTEXITCODE
     }
     $styleExit = 0
     if ($unOutputStyle) {
-        & (Join-Path $PSScriptRoot "setup_output_style.ps1") -Uninstall -DryRun:$dryRun
+        & (Join-Path $PSScriptRoot "setup_output_style.ps1") -Uninstall -DryRun:$dryRun 6>&1 | Format-SetupOutput
         $styleExit = $LASTEXITCODE
     }
     $omcExit = 0
     if ($unOmc) {
-        & (Join-Path $PSScriptRoot "setup_omc.ps1") -Uninstall -DryRun:$dryRun
+        & (Join-Path $PSScriptRoot "setup_omc.ps1") -Uninstall -DryRun:$dryRun 6>&1 | Format-SetupOutput
         $omcExit = $LASTEXITCODE
     }
     if ($unKeybinds) {
-        & (Join-Path $PSScriptRoot "setup_keybinds.ps1") -Uninstall -DryRun:$dryRun
+        & (Join-Path $PSScriptRoot "setup_keybinds.ps1") -Uninstall -DryRun:$dryRun 6>&1 | Format-SetupOutput
         $kbExit = $LASTEXITCODE
     }
     if ($unHooks) {
-        & (Join-Path $PSScriptRoot "setup_hooks.ps1") -Uninstall -DryRun:$dryRun
+        & (Join-Path $PSScriptRoot "setup_hooks.ps1") -Uninstall -DryRun:$dryRun 6>&1 | Format-SetupOutput
         $hooksExit = $LASTEXITCODE
     }
-    if ($hooksExit -ne 0) { exit $hooksExit }
-    if ($skillsExit -ne 0) { exit $skillsExit }
-    if ($omcExit -ne 0) { exit $omcExit }
-    if ($styleExit -ne 0) { exit $styleExit }
-    if ($modsExit -ne 0) { exit $modsExit }
-    exit $kbExit
+    if ($hooksExit -ne 0) { Exit-Setup $hooksExit }
+    if ($skillsExit -ne 0) { Exit-Setup $skillsExit }
+    if ($omcExit -ne 0) { Exit-Setup $omcExit }
+    if ($styleExit -ne 0) { Exit-Setup $styleExit }
+    if ($modsExit -ne 0) { Exit-Setup $modsExit }
+    Exit-Setup $kbExit
 }
 
 # OMC·fluent-korean 은 서드파티 플러그인이라, mod 는 최신 Claude Code 에서만 동작해서 기본 전체
@@ -314,46 +411,52 @@ if (-not ($runHooks -or $runAgentsMd -or $runKeybinds -or $runSkills -or $runOmc
 }
 
 if ($runHooks) {
-    & (Join-Path $PSScriptRoot "setup_hooks.ps1") -DryRun:$dryRun -DefaultMode $defaultMode
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & (Join-Path $PSScriptRoot "setup_hooks.ps1") -DryRun:$dryRun -DefaultMode $defaultMode 6>&1 | Format-SetupOutput
+    if ($LASTEXITCODE -ne 0) { Exit-Setup $LASTEXITCODE }
 }
 
 if ($runAgentsMd) {
     # An empty selection means "not specified", so the worker applies its own
     # default rather than being handed an empty array it would have to reject.
     if ($harnesses.Count -gt 0) {
-        & (Join-Path $PSScriptRoot "setup_agentsmd.ps1") -DryRun:$dryRun -Force:$forceAgentsMd -Harness $harnesses
+        & (Join-Path $PSScriptRoot "setup_agentsmd.ps1") -DryRun:$dryRun -Force:$forceAgentsMd -Harness $harnesses 6>&1 | Format-SetupOutput
     } else {
-        & (Join-Path $PSScriptRoot "setup_agentsmd.ps1") -DryRun:$dryRun -Force:$forceAgentsMd
+        & (Join-Path $PSScriptRoot "setup_agentsmd.ps1") -DryRun:$dryRun -Force:$forceAgentsMd 6>&1 | Format-SetupOutput
     }
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if ($LASTEXITCODE -ne 0) { Exit-Setup $LASTEXITCODE }
 }
 
 if ($runKeybinds) {
     $kbParams = @{ DryRun = $dryRun }
     if ($newlineChord) { $kbParams["Newline"] = $newlineChord }
-    & (Join-Path $PSScriptRoot "setup_keybinds.ps1") @kbParams
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & (Join-Path $PSScriptRoot "setup_keybinds.ps1") @kbParams 6>&1 | Format-SetupOutput
+    if ($LASTEXITCODE -ne 0) { Exit-Setup $LASTEXITCODE }
 }
 
 if ($runOmc) {
-    & (Join-Path $PSScriptRoot "setup_omc.ps1") -DryRun:$dryRun
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & (Join-Path $PSScriptRoot "setup_omc.ps1") -DryRun:$dryRun 6>&1 | Format-SetupOutput
+    if ($LASTEXITCODE -ne 0) { Exit-Setup $LASTEXITCODE }
 }
 
 if ($runOutputStyle) {
-    & (Join-Path $PSScriptRoot "setup_output_style.ps1") -DryRun:$dryRun
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & (Join-Path $PSScriptRoot "setup_output_style.ps1") -DryRun:$dryRun 6>&1 | Format-SetupOutput
+    if ($LASTEXITCODE -ne 0) { Exit-Setup $LASTEXITCODE }
 }
 
 if ($runMods) {
-    & (Join-Path $PSScriptRoot "setup_mods.ps1") -DryRun:$dryRun
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & (Join-Path $PSScriptRoot "setup_mods.ps1") -DryRun:$dryRun 6>&1 | Format-SetupOutput
+    if ($LASTEXITCODE -ne 0) { Exit-Setup $LASTEXITCODE }
 }
 
 if ($runSkills) {
-    & (Join-Path $PSScriptRoot "setup_skills.ps1") -DryRun:$dryRun
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & (Join-Path $PSScriptRoot "setup_skills.ps1") -DryRun:$dryRun 6>&1 | Format-SetupOutput
+    if ($LASTEXITCODE -ne 0) { Exit-Setup $LASTEXITCODE }
 }
 
-exit 0
+Exit-Setup 0
+} catch {
+    "❌ $($_.Exception.Message)" | Format-SetupOutput
+    # 어디서 실패했는지는 거터 밖(stderr)에 남긴다 — throw 를 잡지 않던 때 보이던 정보다.
+    [Console]::Error.WriteLine($_.InvocationInfo.PositionMessage)
+    Exit-Setup 1
+}

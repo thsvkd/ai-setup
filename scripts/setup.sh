@@ -134,6 +134,80 @@ resolve_python_command() {
     fi
 }
 
+# ── 출력 서식 ────────────────────────────────────────────────────────
+# 워커는 단독으로도 실행되므로 각자 이모지 마커(🔧 ✅ ⚠️ 🧪 …)로 줄을 찍는다. 여기서 그 출력을
+# 한 줄씩 받아 온보딩과 같은 clack 거터 모양(◇ │ ✓ ▲ └)으로 바꾼다. 문구는 그대로 둔다.
+# stderr 는 손대지 않는다 — 오류는 그 스트림 그대로 보여야 한다.
+UI_COLOR=0
+[[ -t 1 && -z "${NO_COLOR:-}" ]] && UI_COLOR=1
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) UI_UNICODE=1 ;;
+    *) UI_UNICODE=0 ;;
+esac
+[[ "${TERM:-}" == "linux" ]] && UI_UNICODE=0
+if [[ "$UI_UNICODE" -eq 1 ]]; then
+    G_BAR="│"; G_START="┌"; G_END="└"; G_SECTION="◇"
+    G_OK="✓"; G_WARN="▲"; G_ERR="✗"; G_DRY="○"; G_DOT="•"
+else
+    G_BAR="|"; G_START="T"; G_END="-"; G_SECTION="o"
+    G_OK="+"; G_WARN="!"; G_ERR="x"; G_DRY="o"; G_DOT="-"
+fi
+
+ui_paint() {    # SGR 코드, 문자열
+    if [[ "$UI_COLOR" -eq 1 ]]; then
+        printf '\033[%sm%s\033[0m' "$1" "$2"
+    else
+        printf '%s' "$2"
+    fi
+}
+
+ui_format() {
+    local line body pad mark color
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ -z "${line//[[:space:]]/}" ]]; then
+            printf '%s\n' "$(ui_paint 90 "$G_BAR")"
+            continue
+        fi
+        body="${line#"${line%%[! ]*}"}"
+        pad="$(( ${#line} - ${#body} - 2 ))"
+        [[ "$pad" -lt 0 ]] && pad=0
+        mark=""
+        color=""
+        case "$body" in
+            "🔧 "*|"🧹 "*)
+                body="${body#* }"
+                body="${body//.../}"
+                body="${body% 시작}"
+                printf '%s\n%s  %s\n' "$(ui_paint 90 "$G_BAR")" "$(ui_paint 32 "$G_SECTION")" "$(ui_paint 1 "$body")"
+                continue ;;
+            "── "*)
+                body="${body#── }"
+                body="${body%% ─*}"
+                printf '%s  %s\n' "$(ui_paint 90 "$G_BAR")" "$(ui_paint 1 "$body")"
+                continue ;;
+            "["[0-9]"/"[0-9]"] "*)
+                printf '%s  %s\n' "$(ui_paint 90 "$G_BAR")" "$(ui_paint 1 "${body%...}")"
+                continue ;;
+            "✅ "*|"🎉 "*) mark="$G_OK"; color=32 ;;
+            "⚠️ "*|"⚠ "*) mark="$G_WARN"; color=33 ;;
+            "❌ "*) mark="$G_ERR"; color=31 ;;
+            "🧪 "*) mark="$G_DRY"; color=36 ;;
+            "ℹ️ "*|"💾 "*|"🗑️ "*|"📦 "*|"🐍 "*|"🧾 "*|"🔁 "*|"• "*) mark="$G_DOT"; color=90 ;;
+        esac
+        # 닫는 가로줄(──────)만 있는 줄은 거터가 대신하므로 버린다.
+        [[ -z "${body//─/}" ]] && continue
+        if [[ -n "$mark" ]]; then
+            body="${body#* }"
+            body="${body#"${body%%[! ]*}"}"
+            body="$(ui_paint "$color" "$mark") $body"
+        fi
+        printf '%s  %*s%s\n' "$(ui_paint 90 "$G_BAR")" "$pad" "" "$body"
+    done
+}
+
+# 워커가 찍는 python 출력이 파이프 너머에서 블록 버퍼링되면 stderr 경고와 순서가 뒤바뀐다.
+export PYTHONUNBUFFERED=1
+
 # 인자가 하나도 없을 때만 온보딩을 띄운다.
 #
 # 온보딩 종료 코드: 0=선택 완료, 2=대화형 불가(TTY 없음/CI), 130=사용자 취소.
@@ -228,6 +302,24 @@ HARNESS_FLAG=()
 NEWLINE_FLAG=()
 [[ -n "$NEWLINE_CHORD" ]] && NEWLINE_FLAG=(--newline "$NEWLINE_CHORD")
 
+# 설치 출력은 온보딩과 같은 모양의 블록 하나로 묶는다. 끝줄은 어떤 경로로 끝나든(set -e 로
+# 워커 실패에 끊겨도) 종료 코드를 보고 찍는다.
+ui_close() {
+    local rc=$?
+    local what="설치"
+    [[ "$UNINSTALL" -eq 1 ]] && what="제거"
+    printf '%s\n' "$(ui_paint 90 "$G_BAR")"
+    if [[ "$rc" -ne 0 ]]; then
+        printf '%s  %s\n\n' "$(ui_paint 90 "$G_END")" "$(ui_paint 31 "$what 실패 (exit $rc) — 위 메시지를 확인하세요.")"
+    elif [[ "$DRY_RUN" -eq 1 ]]; then
+        printf '%s  %s\n\n' "$(ui_paint 90 "$G_END")" "DRY RUN 완료 — 아무것도 바꾸지 않았습니다."
+    else
+        printf '%s  %s\n\n' "$(ui_paint 90 "$G_END")" "$what 완료"
+    fi
+}
+printf '\n%s  %s\n' "$(ui_paint 90 "$G_START")" "$(ui_paint 1 "claude-code-setup")"
+trap ui_close EXIT
+
 # uninstall: --keybinds --uninstall 은 키바인드만. 아니면 훅 다음 키바인드.
 # exec 하면 키바인드 uninstall 이 실행되지 않는다.
 if [[ "$UNINSTALL" -eq 1 ]]; then
@@ -255,28 +347,28 @@ if [[ "$UNINSTALL" -eq 1 ]]; then
     hooks_exit=0
     skills_exit=0
     if [[ "$UN_SKILLS" -eq 1 ]]; then
-        bash "$SCRIPT_DIR/setup_skills.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || skills_exit=$?
+        bash "$SCRIPT_DIR/setup_skills.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} | ui_format || skills_exit=$?
     fi
     # mod·출력 스타일·캐시 TTL HUD 영수증도 매니페스트에 있으므로 훅 uninstall 보다 먼저 되돌린다.
     # 이 셋은 설치(OMC → 출력 스타일 → mod)의 역순으로 되돌린다 — settings.json 을 처음 만든
     # 워커가 마지막에 와야, 다른 워커의 키가 다 빠진 뒤 빈 파일을 지울 수 있다.
     mods_exit=0
     if [[ "$UN_MODS" -eq 1 ]]; then
-        bash "$SCRIPT_DIR/setup_mods.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || mods_exit=$?
+        bash "$SCRIPT_DIR/setup_mods.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} | ui_format || mods_exit=$?
     fi
     style_exit=0
     if [[ "$UN_OUTPUT_STYLE" -eq 1 ]]; then
-        bash "$SCRIPT_DIR/setup_output_style.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || style_exit=$?
+        bash "$SCRIPT_DIR/setup_output_style.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} | ui_format || style_exit=$?
     fi
     omc_exit=0
     if [[ "$UN_OMC" -eq 1 ]]; then
-        bash "$SCRIPT_DIR/setup_omc.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || omc_exit=$?
+        bash "$SCRIPT_DIR/setup_omc.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} | ui_format || omc_exit=$?
     fi
     if [[ "$UN_KEYBINDS" -eq 1 ]]; then
-        bash "$SCRIPT_DIR/setup_keybinds.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || kb_exit=$?
+        bash "$SCRIPT_DIR/setup_keybinds.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} | ui_format || kb_exit=$?
     fi
     if [[ "$UN_HOOKS" -eq 1 ]]; then
-        bash "$SCRIPT_DIR/setup_hooks.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} || hooks_exit=$?
+        bash "$SCRIPT_DIR/setup_hooks.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} | ui_format || hooks_exit=$?
     fi
     [[ "$hooks_exit" -ne 0 ]] && exit "$hooks_exit"
     [[ "$skills_exit" -ne 0 ]] && exit "$skills_exit"
@@ -298,29 +390,29 @@ if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 && "$RUN_KEYBINDS" -eq 0 && "$
 fi
 
 if [[ "$RUN_HOOKS" -eq 1 ]]; then
-    bash "$SCRIPT_DIR/setup_hooks.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} ${MODE_FLAG[@]+"${MODE_FLAG[@]}"}
+    bash "$SCRIPT_DIR/setup_hooks.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} ${MODE_FLAG[@]+"${MODE_FLAG[@]}"} | ui_format
 fi
 
 if [[ "$RUN_AGENTSMD" -eq 1 ]]; then
-    bash "$SCRIPT_DIR/setup_agentsmd.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} ${FORCE_FLAG[@]+"${FORCE_FLAG[@]}"} ${HARNESS_FLAG[@]+"${HARNESS_FLAG[@]}"}
+    bash "$SCRIPT_DIR/setup_agentsmd.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} ${FORCE_FLAG[@]+"${FORCE_FLAG[@]}"} ${HARNESS_FLAG[@]+"${HARNESS_FLAG[@]}"} | ui_format
 fi
 
 if [[ "$RUN_KEYBINDS" -eq 1 ]]; then
-    bash "$SCRIPT_DIR/setup_keybinds.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} ${NEWLINE_FLAG[@]+"${NEWLINE_FLAG[@]}"}
+    bash "$SCRIPT_DIR/setup_keybinds.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} ${NEWLINE_FLAG[@]+"${NEWLINE_FLAG[@]}"} | ui_format
 fi
 
 if [[ "$RUN_OMC" -eq 1 ]]; then
-    bash "$SCRIPT_DIR/setup_omc.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"}
+    bash "$SCRIPT_DIR/setup_omc.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} | ui_format
 fi
 
 if [[ "$RUN_OUTPUT_STYLE" -eq 1 ]]; then
-    bash "$SCRIPT_DIR/setup_output_style.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"}
+    bash "$SCRIPT_DIR/setup_output_style.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} | ui_format
 fi
 
 if [[ "$RUN_MODS" -eq 1 ]]; then
-    bash "$SCRIPT_DIR/setup_mods.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"}
+    bash "$SCRIPT_DIR/setup_mods.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} | ui_format
 fi
 
 if [[ "$RUN_SKILLS" -eq 1 ]]; then
-    bash "$SCRIPT_DIR/setup_skills.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"}
+    bash "$SCRIPT_DIR/setup_skills.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} | ui_format
 fi

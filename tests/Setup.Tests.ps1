@@ -591,13 +591,13 @@ Describe "온보딩이 고른 값이 설치에 반영된다" {
     It "-DefaultMode bypassPermissions 가 settings.json 계획에 반영된다" {
         $r = Invoke-Script $script:SetupHooks @("-DryRun", "-DefaultMode", "bypassPermissions")
         $r.ExitCode | Should -Be 0
-        $r.Output | Should -Match '"defaultMode":\s*"bypassPermissions"'
+        $r.Output | Should -Match "permissions\.defaultMode: None -> 'bypassPermissions'"
     }
 
     It "-DefaultMode 를 주지 않으면 조각의 기본값(auto)이 그대로 쓰인다" {
         $r = Invoke-Script $script:SetupHooks @("-DryRun")
         $r.ExitCode | Should -Be 0
-        $r.Output | Should -Match '"defaultMode":\s*"auto"'
+        $r.Output | Should -Match "permissions\.defaultMode: None -> 'auto'"
     }
 
     It "알 수 없는 -DefaultMode 는 ValidateSet 이 거부한다" {

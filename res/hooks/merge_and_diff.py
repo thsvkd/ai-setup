@@ -645,8 +645,6 @@ def main() -> int:
 
     if dry_run:
         print(f"🧪 DRY RUN — {settings_path} 에 실제로 쓰지 않았습니다.")
-        print("── 병합 결과 미리보기 (AFTER) ──")
-        print(json.dumps(after, ensure_ascii=False, indent=2))
     else:
         if changes and settings_existed:
             backup = backup_file(settings_path)

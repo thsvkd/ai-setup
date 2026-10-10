@@ -39,6 +39,7 @@ FLAGS=()
 [[ "$DRY_RUN" -eq 1 ]] && FLAGS+=(--dry-run)
 
 if [[ "$UNINSTALL" -eq 1 ]]; then
+    echo "🧹 출력 스타일 되돌리기"
     exec "$PY" -X utf8 "$REPO_ROOT/res/output_style/apply.py" --home "$HOME" --uninstall ${FLAGS[@]+"${FLAGS[@]}"}
 fi
 
@@ -55,7 +56,7 @@ if ! command -v claude &>/dev/null; then
     exit 1
 fi
 
-echo "── fluent-korean 플러그인 ──────────────"
+echo "🔧 fluent-korean 플러그인"
 # 출력을 먼저 받아 두고 검사한다. pipefail 아래에서 grep -q 가 일찍 끝나면 claude 가 EPIPE 로
 # 실패해 '미설치' 로 오판할 수 있다.
 plugins="$(claude plugin list 2>/dev/null || true)"
@@ -69,5 +70,5 @@ else
     run claude plugin install "$PLUGIN"
 fi
 
-echo "── 출력 스타일 ─────────────────────────"
+echo "🔧 출력 스타일"
 "$PY" -X utf8 "$REPO_ROOT/res/output_style/apply.py" --home "$HOME" ${FLAGS[@]+"${FLAGS[@]}"}

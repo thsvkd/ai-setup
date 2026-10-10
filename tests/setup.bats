@@ -102,6 +102,17 @@ _keybind_sandbox() {
     export CLAUDE_SETUP_WT_SETTINGS="$SANDBOX/wt/settings.json"
 }
 
+@test "setup.sh keeps a failing worker's exit code through the output formatter" {
+    # 워커 출력은 ui_format 파이프를 지난다. pipefail 이 빠지면 실패가 0 으로 바뀌어 설치가
+    # 성공한 것처럼 끝난다. 파싱할 수 없는 settings.json 은 병합이 멈추는 실제 실패 경로다.
+    mkdir -p "$HOME/.claude"
+    printf '{broken' > "$HOME/.claude/settings.json"
+    run bash "$REPO_ROOT/scripts/setup.sh" --hooks
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"실패 (exit $status)"* ]]
+    [ "$(cat "$HOME/.claude/settings.json")" = "{broken" ]
+}
+
 @test "setup.sh --help shows --keybinds and --newline (covers: Test-15)" {
     run bash "$REPO_ROOT/scripts/setup.sh" --help
     [ "$status" -eq 0 ]

@@ -192,7 +192,8 @@ function Invoke-HookSelfTest {
     .DESCRIPTION
         '출력이 비어 있음' 을 성공으로 읽지 않는다. 훅이 죽었거나 stdin 이 전달되지 않으면
         판정이 없는데, 그걸 조용히 넘기면 셀프테스트가 존재할 이유가 없다. 통과(무판단)를
-        기대하는 케이스는 라벨에 '통과' 를 넣어 구분한다.
+        기대하는 케이스는 라벨에 '통과' 를 넣어 구분한다. 성공한 케이스는 한 줄 요약으로 접고,
+        실패한 케이스만 사유와 함께 보여 준다 (setup_common.sh 의 run_hook_self_test 와 같다).
     #>
     param(
         [Parameter(Mandatory)][string]$HookPath,
@@ -202,21 +203,20 @@ function Invoke-HookSelfTest {
     )
     $failures = 0
     foreach ($c in $Cases) {
-        Write-Host "  🧪 $($c.Label)" -ForegroundColor DarkCyan
         $r = Invoke-HookProbe -HookPath $HookPath -PyExe $PyExe -PyArgs $PyArgs -Json $c.Json
         $expectsPass = $c.Label -match '통과'
 
         if ($r.ExitCode -ne 0) {
             $failures++
-            Write-Host "     ❌ 훅이 비정상 종료했습니다 (exit $($r.ExitCode)): $($r.Stderr)" -ForegroundColor Red
+            Write-Host "  ❌ $($c.Label)" -ForegroundColor Red
+            Write-Host "     훅이 비정상 종료했습니다 (exit $($r.ExitCode)): $($r.Stderr)" -ForegroundColor Red
             continue
         }
         if (-not $r.Stdout) {
-            if ($expectsPass) {
-                Write-Host "     ✅ 판정 없음 (통과)" -ForegroundColor DarkGray
-            } else {
+            if (-not $expectsPass) {
                 $failures++
-                Write-Host "     ❌ 판정이 비어 있습니다 — 가드가 이 명령을 그대로 흘려보냅니다." -ForegroundColor Red
+                Write-Host "  ❌ $($c.Label)" -ForegroundColor Red
+                Write-Host "     판정이 비어 있습니다 — 가드가 이 명령을 그대로 흘려보냅니다." -ForegroundColor Red
             }
             continue
         }
@@ -231,11 +231,12 @@ function Invoke-HookSelfTest {
         } catch { }
         if (-not $decision) {
             $failures++
-            Write-Host "     ❌ 판정을 파싱할 수 없습니다: $($r.Stdout)" -ForegroundColor Red
-            continue
+            Write-Host "  ❌ $($c.Label)" -ForegroundColor Red
+            Write-Host "     판정을 파싱할 수 없습니다: $($r.Stdout)" -ForegroundColor Red
         }
-        Write-Host "     ✅ $decision" -ForegroundColor DarkGray
-        Write-Host "        $($r.Stdout)" -ForegroundColor DarkGray
+    }
+    if ($failures -eq 0) {
+        Write-Host "  ✅ 셀프테스트 $($Cases.Count)/$($Cases.Count) 통과" -ForegroundColor Green
     }
     return $failures
 }

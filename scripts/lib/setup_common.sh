@@ -177,15 +177,47 @@ uninstall_hooks() {
 
 run_hook_self_test() {
     # args: py_exe hook_path  "label1:::json1" ["label2:::json2" ...]
+    # 판정 규칙은 SetupCommon.ps1 의 Invoke-HookSelfTest 와 같다. '출력이 비어 있음' 을 성공으로
+    # 읽지 않는다 — 훅이 죽었거나 stdin 이 전달되지 않아도 출력은 비기 때문이다. 판정 없이
+    # 통과하는 게 맞는 케이스는 라벨에 '통과' 를 넣어 구분한다. 성공한 케이스는 한 줄 요약으로
+    # 접고, 실패한 케이스만 사유와 함께 보여 준다. 실패 건수를 종료 코드로 돌려준다.
     local py_exe="$1" hook_path="$2"
     shift 2
-    local pair label json
+    local pair label json out rc decision failures=0 errf
+    errf="$(mktemp)"
     for pair in "$@"; do
         label="${pair%%:::*}"
         json="${pair#*:::}"
-        echo "  🧪 $label"
-        echo "     $(echo "$json" | "$py_exe" -X utf8 "$hook_path")"
+        rc=0
+        out="$(printf '%s' "$json" | "$py_exe" -X utf8 "$hook_path" 2>"$errf")" || rc=$?
+        if [[ "$rc" -ne 0 ]]; then
+            echo "  ❌ $label"
+            echo "     훅이 비정상 종료했습니다 (exit $rc): $(cat "$errf")"
+            failures=$((failures + 1))
+            continue
+        fi
+        if [[ -z "$out" ]]; then
+            if [[ "$label" != *통과* ]]; then
+                echo "  ❌ $label"
+                echo "     판정이 비어 있습니다 — 가드가 이 명령을 그대로 흘려보냅니다."
+                failures=$((failures + 1))
+            fi
+            continue
+        fi
+        decision="$(printf '%s' "$out" | "$py_exe" -X utf8 -c 'import json, sys
+h = json.load(sys.stdin).get("hookSpecificOutput", {})
+print(h.get("permissionDecision") or ("updatedInput" if "updatedInput" in h else ""))' 2>/dev/null)" || decision=""
+        if [[ -z "$decision" ]]; then
+            echo "  ❌ $label"
+            echo "     판정을 파싱할 수 없습니다: $out"
+            failures=$((failures + 1))
+        fi
     done
+    rm -f "$errf"
+    if [[ "$failures" -eq 0 ]]; then
+        echo "  ✅ 셀프테스트 $#/$# 통과"
+    fi
+    return "$failures"
 }
 
 print_setup_report() {

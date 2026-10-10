@@ -192,12 +192,20 @@ echo "[4/4] 셀프테스트 실행..."
 # git 저장소인지에 따라 결과가 달라지는데, 설치는 저장소 밖에서도 실행된다(curl 부트스트랩).
 # 스냅샷은 cwd 저장소에 실제로 백업 ref 를 만들어 dry-run 도 깨뜨린다. 두 경로 모두
 # tests/test_git_snapshot.py 가 임시 저장소를 만들어 검증한다.
+# 셀프테스트가 판정을 못 내면 가드가 설치는 됐어도 실제로는 동작하지 않는 상태다. 훅이
+# 유일한 방어선이므로 조용히 넘기지 않는다 (setup_hooks.ps1 과 같은 정책).
+SELF_TEST_FAILURES=0
 run_hook_self_test "$PY" "$HOOKS_DIR/danger_guard.py" \
     'rm -rf temp/ → 통과(무판단) 기대 — 셰임 PATH 는 SessionStart 가 설정:::{"tool_name":"Bash","tool_input":{"command":"rm -rf temp/"}}' \
     'rm -rf "$V/x" → 변수 확장을 깨지 않고 통과 기대:::{"tool_name":"Bash","tool_input":{"command":"rm -rf \"$V/x\""}}' \
     'rm -rf ~ → deny 기대 (홈 디렉터리 전체):::{"tool_name":"Bash","tool_input":{"command":"rm -rf ~"}}' \
     'find . -exec rm -f {} + → 통과 기대 (종전 ask):::{"tool_name":"Bash","tool_input":{"command":"find . -name x -exec rm -f {} +"}}' \
-    'ls -la → 통과(무판단) 기대:::{"tool_name":"Bash","tool_input":{"command":"ls -la"}}'
+    'ls -la → 통과(무판단) 기대:::{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' \
+    || SELF_TEST_FAILURES=$?
+if [[ "$SELF_TEST_FAILURES" -gt 0 ]]; then
+    echo "❌ 셀프테스트 $SELF_TEST_FAILURES 건 실패 — 가드 훅이 정상 동작하지 않습니다. 위 ❌ 항목을 확인하세요." >&2
+    exit 1
+fi
 
 # --- 6. 리포트 ---
 DEP_WARNING=""

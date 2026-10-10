@@ -37,6 +37,6 @@ $pyArgs = @("-X", "utf8", $apply, "--home", $homeDir)
 if ($DryRun) { $pyArgs += "--dry-run" }
 if ($Uninstall) { $pyArgs += "--uninstall" }
 
-Write-Host "── Claude Code mod ─────────────────────"
+Write-Host "🔧 Claude Code mod"
 & $py.Exe @($py.Args) @pyArgs
 exit $LASTEXITCODE

@@ -40,6 +40,7 @@ $pyArgs = @("-X", "utf8", $apply, "--home", $homeDir)
 if ($DryRun) { $pyArgs += "--dry-run" }
 
 if ($Uninstall) {
+    Write-Host "🧹 OMC HUD (캐시 TTL) 되돌리기"
     & $py.Exe @($py.Args) @pyArgs --uninstall
     exit $LASTEXITCODE
 }
@@ -66,7 +67,7 @@ $plugins = & claude plugin list 2>$null | Out-String
 $marketplaces = & claude plugin marketplace list 2>$null | Out-String
 $ErrorActionPreference = $prevEap
 
-Write-Host "── OMC 플러그인 ────────────────────────"
+Write-Host "🔧 OMC 플러그인"
 if ($plugins -match "oh-my-claudecode@") {
     Write-Host "  • 이미 설치됨: $OmcPlugin"
 } else {
@@ -76,7 +77,7 @@ if ($plugins -match "oh-my-claudecode@") {
     Invoke-Step @("plugin", "install", $OmcPlugin)
 }
 
-Write-Host "── OMC HUD (캐시 TTL) ──────────────────"
+Write-Host "🔧 OMC HUD (캐시 TTL)"
 & $py.Exe @($py.Args) @pyArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

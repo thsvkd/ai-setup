@@ -40,6 +40,7 @@ $pyArgs = @("-X", "utf8", $apply, "--home", $homeDir)
 if ($DryRun) { $pyArgs += "--dry-run" }
 
 if ($Uninstall) {
+    Write-Host "🧹 출력 스타일 되돌리기"
     & $py.Exe @($py.Args) @pyArgs --uninstall
     exit $LASTEXITCODE
 }
@@ -66,7 +67,7 @@ $plugins = & claude plugin list 2>$null | Out-String
 $marketplaces = & claude plugin marketplace list 2>$null | Out-String
 $ErrorActionPreference = $prevEap
 
-Write-Host "── fluent-korean 플러그인 ──────────────"
+Write-Host "🔧 fluent-korean 플러그인"
 if ($plugins -match [regex]::Escape($Plugin)) {
     Write-Host "  • 이미 설치됨: $Plugin"
 } else {
@@ -76,6 +77,6 @@ if ($plugins -match [regex]::Escape($Plugin)) {
     Invoke-Step @("plugin", "install", $Plugin)
 }
 
-Write-Host "── 출력 스타일 ─────────────────────────"
+Write-Host "🔧 출력 스타일"
 & $py.Exe @($py.Args) @pyArgs
 exit $LASTEXITCODE
