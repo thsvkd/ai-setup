@@ -313,17 +313,32 @@ Describe "실제 설치 경로 (S2)" {
     }
 
     Context "claude CLI 스텁" {
+        BeforeAll {
+            # 실제 claude 를 부르지 않도록 PATH 앞에 기록만 하는 스텁을 둔다. Windows 는 claude.cmd,
+            # Linux/macOS 의 pwsh 는 배치 파일을 실행하지 못하므로 같은 일을 하는 셸 스크립트를 함께 둔다.
+            function Set-ClaudeStub([string]$Log, [string]$ListLine) {
+                $cmd = @()
+                if ($Log) { $cmd += "@echo %* >> `"$Log`"" }
+                $cmd += "@if `"%1 %2`"==`"plugin list`" echo   $ListLine"
+                Set-Content -Path (Join-Path $script:stubBin "claude.cmd") -Encoding ascii -Value $cmd
+                if ($IsLinux -or $IsMacOS) {
+                    $sh = @("#!/bin/sh")
+                    if ($Log) { $sh += "echo `"`$*`" >> '$Log'" }
+                    $sh += "[ `"`$1 `$2`" = 'plugin list' ] && echo '  $ListLine'"
+                    $sh += "exit 0"
+                    $p = Join-Path $script:stubBin "claude"
+                    Set-Content -Path $p -Encoding ascii -Value $sh
+                    chmod +x $p
+                }
+            }
+        }
         BeforeEach {
-            # 실제 claude 를 부르지 않도록 PATH 앞에 기록만 하는 claude.cmd 를 둔다.
             $script:stubBin = Join-Path $script:sandbox "stubbin"
             New-Item -ItemType Directory -Force -Path $script:stubBin | Out-Null
             $script:claudeLog = Join-Path $script:sandbox "claude.log"
-            Set-Content -Path (Join-Path $script:stubBin "claude.cmd") -Encoding ascii -Value @(
-                "@echo %* >> `"$script:claudeLog`"",
-                "@if `"%1 %2`"==`"plugin list`" echo   other@x"
-            )
+            Set-ClaudeStub -Log $script:claudeLog -ListLine "other@x"
             $script:oldPath = $env:PATH
-            $env:PATH = "$script:stubBin;$env:PATH"
+            $env:PATH = $script:stubBin + [System.IO.Path]::PathSeparator + $env:PATH
         }
         AfterEach { $env:PATH = $script:oldPath }
 
@@ -340,9 +355,7 @@ Describe "실제 설치 경로 (S2)" {
         }
 
         It "빈 홈에서 -Omc -Mods 설치 뒤 -Uninstall 은 settings.json 과 mod 를 남기지 않는다" {
-            Set-Content -Path (Join-Path $script:stubBin "claude.cmd") -Encoding ascii -Value @(
-                "@if `"%1 %2`"==`"plugin list`" echo   oh-my-claudecode@omc"
-            )
+            Set-ClaudeStub -ListLine "oh-my-claudecode@omc"
             # HUD 래퍼 템플릿을 복사할 플러그인 캐시를 흉내 낸다
             $lib = Join-Path $env:USERPROFILE ".claude\plugins\cache\omc\oh-my-claudecode\5.4.0\scripts\lib"
             New-Item -ItemType Directory -Force -Path $lib | Out-Null
@@ -353,7 +366,8 @@ Describe "실제 설치 경로 (S2)" {
             (Invoke-Script $script:Setup @("-Omc", "-Mods")).ExitCode | Should -Be 0
             $after = Get-Content (Join-Path $claudeDir "settings.json") -Raw | ConvertFrom-Json
             $after.statusLine.command | Should -Match "omc-hud-ttl.mjs"
-            $after.env.CLAUDE_CODE_PLUGIN_DIRS | Should -Be ((Join-Path $claudeDir "mods\bash-diff-filter") + ";" + (Join-Path $claudeDir "mods\cache-ttl-status"))
+            # 목록 구분자는 OS 의 경로 구분자다(apply.py 의 os.pathsep — Windows ';', 그 외 ':').
+            $after.env.CLAUDE_CODE_PLUGIN_DIRS | Should -Be ((Join-Path $claudeDir "mods\bash-diff-filter") + [System.IO.Path]::PathSeparator + (Join-Path $claudeDir "mods\cache-ttl-status"))
             Test-Path (Join-Path $claudeDir "mods\bash-diff-filter\hooks\register.ts") | Should -Be $true
             Test-Path (Join-Path $claudeDir "mods\cache-ttl-status\hooks\register.ts") | Should -Be $true
 
