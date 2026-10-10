@@ -22,6 +22,13 @@ BASE = REPO / ".tmp-rmshim"
 
 @pytest.fixture(scope="module", autouse=True)
 def base_dir():
+    # 이 모듈의 bash 는 넘겨준 환경(PATH·HOME·D)을 받는다고 가정하고 rm 을 돌린다. Windows 에서
+    # `bash` 가 WSL 로 잡히면 환경이 넘어가지 않아 엉뚱한 곳을 지운다. 그러면 아무것도 돌리지 않는다.
+    probe = subprocess.run(["bash", "-c", 'printf %s "$RMSHIM_PROBE"'], capture_output=True,
+                           env=dict(os.environ, RMSHIM_PROBE="ok"))
+    if probe.stdout != b"ok":
+        pytest.fail("bash 가 넘겨준 환경을 받지 못한다(WSL bash?) — rm 테스트를 돌리지 않는다: %r"
+                    % shutil.which("bash"))
     shutil.rmtree(str(BASE), ignore_errors=True)
     BASE.mkdir(parents=True, exist_ok=True)
     yield
@@ -48,7 +55,7 @@ def observe(script, use_shim):
     if use_shim:
         env["PATH"] = str(SHIM_DIR) + os.pathsep + env["PATH"]
     proc = subprocess.run(["bash", "-c", script], cwd=str(d), env=env,
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, encoding="utf-8")
     survivors = sorted(
         str(p.relative_to(d)) for p in d.rglob("*")
     )
@@ -109,7 +116,7 @@ SHIM_GUARD = ('case "$(command -v rm)" in */shims/rm) ;; '
 
 def run_via_shim(script, **kwargs):
     proc = subprocess.run(["bash", "-c", SHIM_GUARD + script],
-                          capture_output=True, text=True, **kwargs)
+                          capture_output=True, text=True, encoding="utf-8", **kwargs)
     assert proc.returncode != 97, "bash 가 셰임을 쓰지 않는다 — %s" % proc.stderr
     return proc
 
@@ -164,7 +171,7 @@ def test_deleted_content_is_recoverable():
     env["PATH"] = str(SHIM_DIR) + os.pathsep + env["PATH"]
     subprocess.run(["bash", "-c", "rm -rf sub"], cwd=str(d), env=env, capture_output=True)
     assert not (d / "sub").exists()
-    listing = subprocess.run(["trash-list"], capture_output=True, text=True).stdout
+    listing = subprocess.run(["trash-list"], capture_output=True, text=True, encoding="utf-8").stdout
     assert str(d / "sub") in listing
 
 
@@ -191,7 +198,7 @@ def test_macos_builtin_trash_is_used_when_trash_put_is_absent(tmp_path):
     env.pop("CLAUDE_NO_TRASH", None)
     env["PATH"] = os.pathsep.join([str(SHIM_DIR), str(fake), "/usr/bin", "/bin"])
     proc = subprocess.run(["bash", "-c", "rm -rf sub a.txt -- -weird"], cwd=str(d), env=env,
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, encoding="utf-8")
     assert proc.returncode == 0, proc.stderr
     assert "휴지통 없이" not in proc.stderr
     assert "OPT:" not in log.read_text(encoding="utf-8")

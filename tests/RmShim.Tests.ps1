@@ -84,17 +84,31 @@ Describe 'RmShim 이 원본 Remove-Item 과 같은 결과를 낸다' {
 }
 
 Describe '루트/홈 전체 삭제는 거부한다' {
+    # 실제 홈을 대상으로 삼지 않는다. 셰임 import 가 실패하거나 퇴행하면 원본 Remove-Item 이 그대로
+    # 지우기 때문이다. 셰임은 $env:USERPROFILE 을 먼저 홈으로 보므로 자식 프로세스의 홈을 샌드박스로 둔다.
     It '<script>' -ForEach @(
-        @{ script = 'Remove-Item $HOME -Recurse -Force' }
-        @{ script = 'Remove-Item -LiteralPath $HOME' }
+        @{ script = 'Remove-Item $env:USERPROFILE -Recurse -Force' }
+        @{ script = 'Remove-Item -LiteralPath $env:USERPROFILE' }
     ) {
-        $out = & (Join-Path $PSHOME 'pwsh') -NoProfile -Command @"
+        $sandbox = Join-Path $Base 'guarded-home'
+        New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
+        'x' | Set-Content -LiteralPath (Join-Path $sandbox 'keep')
+        $old = @($env:USERPROFILE, $env:HOME)
+        $env:USERPROFILE = $sandbox; $env:HOME = $sandbox
+        try {
+            # 셰임이 실제로 잡혔는지 같은 세션에서 확인하고, 아니면 아무것도 지우지 않고 97 로 끝낸다.
+            $out = & (Join-Path $PSHOME 'pwsh') -NoProfile -Command @"
+`$ErrorActionPreference='Stop'
 Import-Module '$ModulePath' -Force -DisableNameChecking -Global
+if ((Get-Command Remove-Item).Source -ne 'RmShim') { exit 97 }
 `$ErrorActionPreference='Continue'
 $script
 "@ 2>&1 | Out-String
+            $rc = $LASTEXITCODE
+        } finally { $env:USERPROFILE = $old[0]; $env:HOME = $old[1] }
+        $rc | Should -Not -Be 97 -Because "Remove-Item 이 셰임으로 잡혀야 한다: $out"
         $out | Should -Match '거부'
-        (Test-Path -LiteralPath $HOME) | Should -BeTrue
+        (Test-Path -LiteralPath (Join-Path $sandbox 'keep')) | Should -BeTrue
     }
 }
 
