@@ -120,7 +120,7 @@ def paint(segments):
 _console_ready = False
 
 
-def _prepare_console():
+def prepare_console():
     """Windows 콘솔에서 ANSI 이스케이프를 켠다. 프로세스당 한 번, 종료할 때 되돌린다.
 
     프롬프트 사이에 찍는 intro·warn·outro 도 색을 쓰므로 프롬프트마다 켰다 끄면 안 된다.
@@ -160,7 +160,7 @@ def _columns():
 
 def _emit(lines):
     """프롬프트 밖에서 줄들을 찍는다. 감싼 화면 행 수를 반환한다."""
-    _prepare_console()
+    prepare_console()
     cols = _columns()
     rows = [row for segs in lines for row in wrap(segs, cols)]
     sys.stdout.write("\r\n".join(paint(r) for r in rows))
@@ -172,7 +172,7 @@ class _Terminal:
     """프롬프트 하나가 떠 있는 동안 키 입력 모드를 바꾸고, 어떤 경로로 나가든 되돌린다."""
 
     def __enter__(self):
-        _prepare_console()
+        prepare_console()
         self._saved = None
         self._signals = {}
         if not _WIN:

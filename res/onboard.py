@@ -25,8 +25,8 @@ scripts/setup.sh (와 setup.ps1) 가 **인자 없이** 호출됐을 때만 실�
   0   사용자가 선택을 마쳤다 — --out 파일에 결과가 있다.
   1   프롬프트를 띄우다가 깨졌다 (렌더·입력 오류). 사용자는 무언가를 고르던 중이었으므로
       호출부는 설치를 중단해야 한다. 고르지도 않은 기본값으로 설치하면 안 된다.
-  2   대화형으로 물을 수 없는 환경이다 (TTY 없음 / CI / Git Bash). 프롬프트를 띄우기 전에
-      판정한다. 호출부는 지금까지처럼 기본값으로 그냥 진행해야 한다. 실패가 아니다.
+  2   대화형으로 물을 수 없는 환경이다 (TTY 없음 / CI / Git Bash / 콘솔 준비 실패). 프롬프트를
+      띄우기 전에 판정한다. 호출부는 지금까지처럼 기본값으로 그냥 진행해야 한다. 실패가 아니다.
   130 사용자가 Ctrl+C 로 취소했다. 호출부는 설치를 중단해야 한다.
       2 와 달리 "기본값으로 진행"으로 해석하면 안 된다 — 명시적 거부다.
 
@@ -295,6 +295,14 @@ def main(argv) -> int:
         # 스크립트 폴더가 sys.path 에 없는 실행(PYTHONSAFEPATH 등)에서도 옆의 tui.py 를 찾는다.
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import tui
+        # 아무것도 그리기 전의 콘솔 준비다. 여기서 실패하면(보이지 않는 콘솔, VT 미지원) 사용자는
+        # 아무것도 보지 못했으므로 '물을 수 없음'이다.
+        tui.prepare_console()
+    except Exception as exc:
+        print("  대화형 온보딩을 띄울 수 없어 기본값으로 진행합니다 (%s)." % exc, file=sys.stderr)
+        return EXIT_NON_INTERACTIVE
+
+    try:
         answers = ask_all(tui, project_dir)
     except KeyboardInterrupt:
         return EXIT_CANCELLED
