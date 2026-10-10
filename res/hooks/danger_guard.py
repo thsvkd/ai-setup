@@ -205,9 +205,14 @@ def emit(decision, reason, updated_input=None, context=None):
 
 
 def _git(args, cwd, env=None, timeout=60, stdin=None):
-    return subprocess.run(["git"] + args, cwd=cwd, env=env, input=stdin,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          universal_newlines=True, timeout=timeout)
+    # 바이트로 주고받는다. Windows 의 텍스트 모드 파이프는 stdin 의 \n 을 \r\n 으로 바꿔서
+    # update-ref --stdin 이 sha 뒤의 \r 때문에 거부했다. surrogateescape 로 ref 이름 바이트를 보존한다.
+    p = subprocess.run(["git"] + args, cwd=cwd, env=env,
+                       input=None if stdin is None else stdin.encode("utf-8", "surrogateescape"),
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+    p.stdout = p.stdout.decode("utf-8", "surrogateescape").replace("\r\n", "\n")
+    p.stderr = p.stderr.decode("utf-8", "surrogateescape").replace("\r\n", "\n")
+    return p
 
 
 # --- deny 판정 -------------------------------------------------------------------
