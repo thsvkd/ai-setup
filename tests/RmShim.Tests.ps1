@@ -30,8 +30,9 @@ BeforeAll {
         New-Fixture $dir
         $import = if ($UseShim) { "Import-Module '$ModulePath' -Force -DisableNameChecking -Global" } else { '' }
         $body = @"
-`$ErrorActionPreference = 'Continue'
+`$ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath '$dir'
+`$ErrorActionPreference = 'Continue'
 $import
 `$global:Error.Clear()
 $script
@@ -85,28 +86,44 @@ Describe 'RmShim 이 원본 Remove-Item 과 같은 결과를 낸다' {
 
 Describe '루트/홈 전체 삭제는 거부한다' {
     # 실제 홈을 대상으로 삼지 않는다. 셰임 import 가 실패하거나 퇴행하면 원본 Remove-Item 이 그대로
-    # 지우기 때문이다. 셰임은 $env:USERPROFILE 을 먼저 홈으로 보므로 자식 프로세스의 홈을 샌드박스로 둔다.
+    # 지우기 때문이다. 자식 프로세스의 홈을 샌드박스로 두고, 휴지통 도구도 아무것도 옮기지 않는 가짜로 둔다.
+    # 셰임은 $env:USERPROFILE 을 먼저 보고, 없으면(POSIX pwsh) $HOME 을 본다. 두 경로를 각각 검증한다.
     It '<script>' -ForEach @(
-        @{ script = 'Remove-Item $env:USERPROFILE -Recurse -Force' }
-        @{ script = 'Remove-Item -LiteralPath $env:USERPROFILE' }
+        @{ script = 'Remove-Item $env:USERPROFILE -Recurse -Force'; posixHome = $false }
+        @{ script = 'Remove-Item -LiteralPath $env:USERPROFILE'; posixHome = $false }
+        @{ script = 'Remove-Item $HOME -Recurse -Force'; posixHome = $true }
     ) {
+        if ($posixHome -and $IsWindows) {
+            Set-ItResult -Skipped -Because 'Windows 의 $HOME 은 HOME 환경변수를 따르지 않는다 — USERPROFILE 경로로 검증한다'
+            return
+        }
         $sandbox = Join-Path $Base 'guarded-home'
         New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
         'x' | Set-Content -LiteralPath (Join-Path $sandbox 'keep')
-        $old = @($env:USERPROFILE, $env:HOME)
-        $env:USERPROFILE = $sandbox; $env:HOME = $sandbox
+        $fakeBin = Join-Path $Base 'fakebin'
+        New-Item -ItemType Directory -Path $fakeBin -Force | Out-Null
+        if (-not $IsWindows) {
+            $fake = Join-Path $fakeBin 'trash-put'
+            "#!/bin/sh`necho TRASHED `"`$*`"" | Set-Content -LiteralPath $fake
+            chmod +x $fake
+        }
+        $old = @($env:USERPROFILE, $env:HOME, $env:PATH)
+        $env:USERPROFILE = if ($posixHome) { $null } else { $sandbox }
+        $env:HOME = $sandbox
+        $env:PATH = $fakeBin + [System.IO.Path]::PathSeparator + $env:PATH
         try {
-            # 셰임이 실제로 잡혔는지 같은 세션에서 확인하고, 아니면 아무것도 지우지 않고 97 로 끝낸다.
+            # 셰임이 실제로 잡혔는지, 홈이 샌드박스인지 같은 세션에서 확인하고, 아니면 아무것도 지우지 않고 97 로 끝낸다.
             $out = & (Join-Path $PSHOME 'pwsh') -NoProfile -Command @"
 `$ErrorActionPreference='Stop'
 Import-Module '$ModulePath' -Force -DisableNameChecking -Global
 if ((Get-Command Remove-Item).Source -ne 'RmShim') { exit 97 }
+if ('$posixHome' -eq 'True' -and `$HOME -ne '$sandbox') { exit 97 }
 `$ErrorActionPreference='Continue'
 $script
 "@ 2>&1 | Out-String
             $rc = $LASTEXITCODE
-        } finally { $env:USERPROFILE = $old[0]; $env:HOME = $old[1] }
-        $rc | Should -Not -Be 97 -Because "Remove-Item 이 셰임으로 잡혀야 한다: $out"
+        } finally { $env:USERPROFILE = $old[0]; $env:HOME = $old[1]; $env:PATH = $old[2] }
+        $rc | Should -Not -Be 97 -Because "셰임과 샌드박스 홈이 잡혀야 한다: $out"
         $out | Should -Match '거부'
         (Test-Path -LiteralPath (Join-Path $sandbox 'keep')) | Should -BeTrue
     }

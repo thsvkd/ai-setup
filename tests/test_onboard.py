@@ -319,12 +319,13 @@ def test_콘솔을_준비하지_못하면_그리기_전이므로_기본값으로
     assert read_answers(out) == {}
 
 
+@posix_only
 def test_stdin이_닫혀_있으면_물을_수_없음으로_끝난다(tmp_path):
     out = tmp_path / "answers"
     proc = subprocess.run(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out)],
         stdin=subprocess.DEVNULL, capture_output=True, env=clean_env(), timeout=60,
-        **({} if sys.platform == "win32" else {"preexec_fn": lambda: os.close(0)}),
+        preexec_fn=lambda: os.close(0),
     )
     assert proc.returncode == EXIT_NON_INTERACTIVE, proc.stderr
     assert read_answers(out) == {}
