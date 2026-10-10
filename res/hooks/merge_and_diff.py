@@ -183,9 +183,18 @@ def merge_list(perms, key, incoming, changes):
 LEGACY_PERMISSION_RULES = {
     "deny": [
         "Bash(git push *)",
+        "Bash(git push --force*)",
+        "Bash(git push -f*)",
         "Bash(git reset --hard *)",
         "PowerShell(git push *)",
+        "PowerShell(git push --force*)",
+        "PowerShell(git push -f*)",
         "PowerShell(git reset --hard *)",
+    ],
+    # 7377065~c73cf92 사이의 조각이 ask 로 배포했다. 남아 있으면 fast-forward push 까지 매번 묻는다.
+    "ask": [
+        "Bash(git push *)",
+        "PowerShell(git push *)",
     ],
 }
 

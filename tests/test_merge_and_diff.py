@@ -485,27 +485,42 @@ def test_reinstall_after_uninstall_starts_fresh_receipt(tmp_path):
     assert m["default_mode_before"] == "plan"
 
 
-# --- 구버전 git deny 규칙 마이그레이션 ---
-# 배경: 예전 res/settings.json 은 Bash(git push *) 등을 permissions.deny 로 막았다. 지금은
-# 훅이 브랜치 이름을 보고 판단하지만, Claude Code 는 deny 를 훅 판정보다 우선 적용하므로
+# --- 구버전 git deny/ask 규칙 마이그레이션 ---
+# 배경: 예전 res/settings.json 은 Bash(git push *) 등을 permissions.deny·ask 로 막았다. 지금은
+# 훅이 브랜치 이름을 보고 판단하지만, Claude Code 는 deny/ask 를 훅 판정보다 우선 적용하므로
 # 기존 설치본에 그 규칙이 남아 있으면 새 git 정책이 통째로 죽는다. merge 는 원래 '추가만'
 # 하므로, 이 규칙만은 설치 중에 제거해야 업그레이드한 사용자에게도 기능이 살아난다.
 
-LEGACY_DENY = [
-    "Bash(git push *)",
-    "Bash(git reset --hard *)",
-    "PowerShell(git push *)",
-    "PowerShell(git reset --hard *)",
-]
+LEGACY = {
+    "deny": [
+        "Bash(git push *)",
+        "Bash(git push --force*)",
+        "Bash(git push -f*)",
+        "Bash(git reset --hard *)",
+        "PowerShell(git push *)",
+        "PowerShell(git push --force*)",
+        "PowerShell(git push -f*)",
+        "PowerShell(git reset --hard *)",
+    ],
+    "ask": [
+        "Bash(git push *)",
+        "PowerShell(git push *)",
+    ],
+}
+
+
+def legacy_settings():
+    return json.dumps({"permissions": {k: list(v) for k, v in LEGACY.items()}})
 
 
 def test_legacy_git_deny_rules_are_removed_on_install(tmp_path):
     target = tmp_path / "settings.json"
-    target.write_text(json.dumps({"permissions": {"deny": list(LEGACY_DENY)}}), encoding="utf-8")
+    target.write_text(legacy_settings(), encoding="utf-8")
     proc, result = run_merge(target)
     assert proc.returncode == 0
-    assert not any("git" in rule for rule in result["permissions"].get("deny", [])), \
-        "구버전 git deny 규칙이 남아 있으면 훅의 git 정책이 무력화된다"
+    for key in LEGACY:
+        assert not any("git" in rule for rule in result["permissions"].get(key, [])), \
+            "구버전 git %s 규칙이 남아 있으면 훅의 git 정책이 무력화된다" % key
 
 
 def test_legacy_removal_leaves_user_own_deny_rules(tmp_path):
@@ -534,10 +549,10 @@ def test_legacy_removal_when_no_such_rules_is_a_noop(tmp_path):
 def test_legacy_removal_is_recorded_in_manifest(tmp_path):
     target = tmp_path / "settings.json"
     manifest = tmp_path / "manifest.json"
-    target.write_text(json.dumps({"permissions": {"deny": list(LEGACY_DENY)}}), encoding="utf-8")
+    target.write_text(legacy_settings(), encoding="utf-8")
     run_merge(target, manifest_path=manifest)
-    recorded = json.loads(manifest.read_text(encoding="utf-8"))["removed_legacy"]["deny"]
-    assert sorted(recorded) == sorted(LEGACY_DENY)
+    recorded = json.loads(manifest.read_text(encoding="utf-8"))["removed_legacy"]
+    assert {k: sorted(v) for k, v in recorded.items()} == {k: sorted(v) for k, v in LEGACY.items()}
 
 
 def test_legacy_removal_survives_reinstall_in_manifest(tmp_path):
@@ -545,26 +560,27 @@ def test_legacy_removal_survives_reinstall_in_manifest(tmp_path):
     무엇을 되돌려야 하는지 잊는다 — added_* 와 동일하게 누적돼야 한다."""
     target = tmp_path / "settings.json"
     manifest = tmp_path / "manifest.json"
-    target.write_text(json.dumps({"permissions": {"deny": list(LEGACY_DENY)}}), encoding="utf-8")
+    target.write_text(legacy_settings(), encoding="utf-8")
     run_merge(target, manifest_path=manifest)
     run_merge(target, manifest_path=manifest)
-    recorded = json.loads(manifest.read_text(encoding="utf-8"))["removed_legacy"]["deny"]
-    assert sorted(recorded) == sorted(LEGACY_DENY)
+    recorded = json.loads(manifest.read_text(encoding="utf-8"))["removed_legacy"]
+    assert {k: sorted(v) for k, v in recorded.items()} == {k: sorted(v) for k, v in LEGACY.items()}
 
 
 def test_uninstall_restores_removed_legacy_rules(tmp_path):
     """uninstall 은 '설치가 바꾼 것'을 되돌린다. 설치가 지운 규칙이라면 복원까지가 그 계약이다."""
     target = tmp_path / "settings.json"
     manifest = tmp_path / "manifest.json"
-    target.write_text(json.dumps({"permissions": {"deny": list(LEGACY_DENY)}}), encoding="utf-8")
+    target.write_text(legacy_settings(), encoding="utf-8")
     run_merge(target, manifest_path=manifest)
     _, result = run_uninstall(target, manifest)
-    assert sorted(result["permissions"]["deny"]) == sorted(LEGACY_DENY)
+    for key, rules in LEGACY.items():
+        assert sorted(result["permissions"][key]) == sorted(rules)
 
 
 def test_dry_run_reports_legacy_removal_without_writing(tmp_path):
     target = tmp_path / "settings.json"
-    original = json.dumps({"permissions": {"deny": list(LEGACY_DENY)}})
+    original = legacy_settings()
     target.write_text(original, encoding="utf-8")
     proc, _ = run_merge(target, dry="1")
     assert proc.returncode == 0
