@@ -203,7 +203,7 @@ run_hook_self_test "$PY" "$HOOKS_DIR/danger_guard.py" \
     'ls -la → 통과(무판단) 기대:::{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' \
     || SELF_TEST_FAILURES=$?
 if [[ "$SELF_TEST_FAILURES" -gt 0 ]]; then
-    echo "❌ 셀프테스트 $SELF_TEST_FAILURES 건 실패 — 가드 훅이 정상 동작하지 않습니다. 위 ❌ 항목을 확인하세요." >&2
+    echo "❌ 셀프테스트 $SELF_TEST_FAILURES 건 실패 — 가드 훅이 정상 동작하지 않습니다. 위 실패 항목을 확인하세요."
     exit 1
 fi
 

@@ -177,7 +177,7 @@ $selfTestFailures = Invoke-HookSelfTest -HookPath (Join-Path $hooksDir "danger_g
 # 셀프테스트가 판정을 못 내면 가드가 설치는 됐어도 실제로는 동작하지 않는 상태다. 훅이
 # 유일한 방어선이므로(permissions 에 git deny 규칙을 두지 않는다) 조용히 넘기지 않는다.
 if ($selfTestFailures -gt 0) {
-    throw "셀프테스트 $selfTestFailures 건 실패 — 가드 훅이 정상 동작하지 않습니다. 위 ❌ 항목을 확인하세요."
+    throw "셀프테스트 $selfTestFailures 건 실패 — 가드 훅이 정상 동작하지 않습니다. 위 실패 항목을 확인하세요."
 }
 
 # --- 6. 리포트 ---
