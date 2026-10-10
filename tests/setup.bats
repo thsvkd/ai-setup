@@ -77,6 +77,21 @@ teardown() {
     [ -f "$SANDBOX/AGENTS.md" ]
 }
 
+@test "setup.sh installs nothing when the onboarding breaks mid-prompt" {
+    # 2(물을 수 없음)만 기본값으로 진행한다. 프롬프트가 깨지거나(1) traceback 으로 죽으면
+    # 사용자는 고르던 중이었으므로, 고르지도 않은 기본값으로 설치하면 안 된다.
+    mkdir -p "$SANDBOX/repo"
+    cp -R "$REPO_ROOT/scripts" "$REPO_ROOT/res" "$SANDBOX/repo/"
+    printf 'import sys\nsys.exit(1)\n' > "$SANDBOX/repo/res/onboard.py"
+    cd "$SANDBOX"
+    run bash "$SANDBOX/repo/scripts/setup.sh"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"설치를 중단합니다"* ]]
+    [ ! -e "$HOME/.claude/settings.json" ]
+    [ ! -e "$HOME/.claude/hooks/danger_guard.py" ]
+    [ ! -e "$SANDBOX/AGENTS.md" ]
+}
+
 @test "setup.sh --uninstall removes the hooks it installed" {
     bash "$REPO_ROOT/scripts/setup.sh" --hooks
     run bash "$REPO_ROOT/scripts/setup.sh" --uninstall

@@ -574,6 +574,25 @@ Describe "온보딩 연결" {
         $written = if (Test-Path $answers) { Get-Content $answers -Raw -ErrorAction SilentlyContinue } else { $null }
         [string]::IsNullOrWhiteSpace($written) | Should -BeTrue -Because "선택을 못 받았으면 결과 파일도 비어 있어야 한다"
     }
+
+    It "온보딩이 도중에 깨지면 기본값으로 진행하지 않고 아무것도 설치하지 않는다" {
+        # 2(물을 수 없음)만 기본값으로 진행한다. 1(프롬프트가 깨짐)·traceback 은 고르던 중이었다.
+        $repo = Join-Path $script:sandbox "repo"
+        New-Item -ItemType Directory -Force -Path $repo | Out-Null
+        Copy-Item -Recurse (Join-Path $script:RepoRoot "scripts"), (Join-Path $script:RepoRoot "res") $repo
+        Set-Content -Path (Join-Path $repo "res/onboard.py") -Value "import sys`nsys.exit(1)" -Encoding ascii
+        # 회귀로 기본값 설치가 진행돼도 POSIX pwsh 의 워커가 실제 홈에 쓰지 않도록 HOME 도 격리한다.
+        $oldHome = $env:HOME
+        $env:HOME = $script:sandbox
+        Push-Location $script:sandbox
+        try {
+            $r = Invoke-Script (Join-Path $repo "scripts/setup.ps1") @()
+        } finally { Pop-Location; $env:HOME = $oldHome }
+        $r.ExitCode | Should -Be 1
+        $r.Output | Should -Match "설치를 중단합니다"
+        Join-Path $script:sandbox ".claude" | Should -Not -Exist
+        Join-Path $script:sandbox "AGENTS.md" | Should -Not -Exist
+    }
 }
 
 Describe "온보딩이 고른 값이 설치에 반영된다" {

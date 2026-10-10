@@ -186,9 +186,9 @@ function Resolve-PythonForOnboard {
     return $null
 }
 
-# 온보딩 종료 코드: 0=선택 완료, 2=대화형 불가(콘솔 없음/CI), 130=사용자 취소.
-# 2 와 130 을 구분하는 게 중요하다 — 2 는 "물어볼 수 없었다"라서 예전 기본값으로 계속
-# 진행해야 하고, 130 은 사용자가 명시적으로 거부한 것이라 아무것도 설치하면 안 된다.
+# 온보딩 종료 코드: 0=선택 완료, 1=프롬프트가 깨짐, 2=대화형 불가(콘솔 없음/CI), 130=사용자 취소.
+# 2 만 "물어볼 수 없었다"라서 예전 기본값으로 계속 진행한다. 나머지(취소·깨짐·traceback)는
+# 사용자가 고르던 중이었으므로 아무것도 설치하지 않고 멈춘다.
 function Invoke-Onboarding {
     $onboard = Join-Path $RepoRoot "res\onboard.py"
     if (-not (Test-Path $onboard)) { return $null }
@@ -201,8 +201,11 @@ function Invoke-Onboarding {
         & $py.Exe @($py.Args) -X utf8 $onboard --out $answersPath --project-dir (Get-Location).Path
         $status = $LASTEXITCODE
 
-        if ($status -eq 130) { exit 130 }
-        if ($status -ne 0) { return $null }   # 대화형 불가 — 예전 기본값 그대로
+        if ($status -eq 2) { return $null }   # 대화형 불가 — 예전 기본값 그대로
+        if ($status -ne 0) {
+            if ($status -ne 130) { Write-Host "온보딩이 끝나지 않아 설치를 중단합니다 (exit $status)." -ForegroundColor Red }
+            exit $status
+        }
 
         # Invoke-Expression 대신 한 줄씩 읽어 아는 키만 받는다.
         $parsed = @{}

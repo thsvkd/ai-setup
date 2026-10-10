@@ -20,13 +20,17 @@ scripts/setup.sh (와 setup.ps1) 가 **인자 없이** 호출됐을 때만 실�
   MODS=0|1                     Claude Code mod 설치 여부 (SCOPE=all|hooks 일 때만 기록)
   DRY_RUN=0|1                  실제 적용 전에 변경 계획만 볼지
 
-종료 코드로 세 상황을 구분한다:
+종료 코드로 네 상황을 구분한다:
 
   0   사용자가 선택을 마쳤다 — --out 파일에 결과가 있다.
-  2   대화형으로 물을 수 없는 환경이다 (TTY 없음 / CI / 벤더 import 실패).
-      호출부는 지금까지처럼 기본값으로 그냥 진행해야 한다. 실패가 아니다.
+  1   프롬프트를 띄우다가 깨졌다 (렌더·입력 오류). 사용자는 무언가를 고르던 중이었으므로
+      호출부는 설치를 중단해야 한다. 고르지도 않은 기본값으로 설치하면 안 된다.
+  2   대화형으로 물을 수 없는 환경이다 (TTY 없음 / CI / Git Bash). 프롬프트를 띄우기 전에
+      판정한다. 호출부는 지금까지처럼 기본값으로 그냥 진행해야 한다. 실패가 아니다.
   130 사용자가 Ctrl+C 로 취소했다. 호출부는 설치를 중단해야 한다.
       2 와 달리 "기본값으로 진행"으로 해석하면 안 된다 — 명시적 거부다.
+
+호출부는 2 일 때만 기본값으로 진행한다. 파이썬이 traceback 으로 죽는 경우(1)도 중단이다.
 
 ## curl … | sh 에서 프롬프트가 동작하는 이유
 
@@ -43,6 +47,7 @@ import os
 import sys
 
 EXIT_OK = 0
+EXIT_FAILED = 1
 EXIT_NON_INTERACTIVE = 2
 EXIT_CANCELLED = 130
 
@@ -294,13 +299,14 @@ def main(argv) -> int:
     except KeyboardInterrupt:
         return EXIT_CANCELLED
     except Exception as exc:
-        # 터미널이 프롬프트를 못 그리는 경우(예: VT 를 못 켜는 콘솔)에도 설치를 막지 않는다.
-        # 다만 조용히 넘어가면 사용자는 고르지도 않은 기본값으로 설치됐다는 걸 모른다.
+        # 프롬프트가 깨졌다(예: VT 를 못 켜는 콘솔). 사용자는 고르던 중이었으므로 고르지도 않은
+        # 기본값으로 설치하지 않고 전체를 멈춘다.
         try:
-            print("\n  대화형 온보딩을 띄우지 못해 기본값으로 진행합니다 (%s)." % exc)
+            print("\n  대화형 온보딩이 중단되어 아무것도 설치하지 않았습니다 (%s).\n"
+                  "  --no-onboard 와 범위 플래그로 다시 실행하세요." % exc)
         except Exception:
             pass    # 터미널이 끊겨 안내조차 못 찍는 경우에도 종료 코드는 지킨다.
-        return EXIT_NON_INTERACTIVE
+        return EXIT_FAILED
 
     if answers is None:
         tui.cancel("취소했습니다. 아무것도 설치하지 않았습니다.")

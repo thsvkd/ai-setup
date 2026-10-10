@@ -27,6 +27,7 @@ CTRL_C = b"\x03"
 SPACE = b" "        # 체크박스에서 항목 선택/해제
 
 EXIT_OK = 0
+EXIT_FAILED = 1
 EXIT_NON_INTERACTIVE = 2
 EXIT_CANCELLED = 130
 
@@ -266,6 +267,36 @@ def test_ctrl_c_취소는_비대화형_폴백과_구분된다(tmp_path):
     assert code == EXIT_CANCELLED
     assert read_answers(out) == {}
     assert not out.exists() or not out.read_text(encoding="utf-8").strip()
+
+
+@posix_only
+def test_프롬프트가_깨지면_기본값_폴백이_아니라_중단한다(tmp_path):
+    """렌더·입력 오류는 2(물을 수 없음)가 아니다. 사용자는 고르던 중이었으므로 1 로 멈춘다.
+
+    첫 질문에 답한 뒤 두 번째 질문을 그리다 깨지는 tui 를 옆에 둔다.
+    """
+    shutil.copy(ONBOARD, tmp_path / "onboard.py")
+    real_tui = (ROOT / "res" / "tui.py").read_text(encoding="utf-8")
+    (tmp_path / "tui.py").write_text(
+        real_tui + "\n\n_real_select = select\n_calls = []\n\n"
+        "def select(*a, **k):\n"
+        "    _calls.append(1)\n"
+        "    if len(_calls) > 1:\n"
+        "        raise RuntimeError('render broke')\n"
+        "    return _real_select(*a, **k)\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "answers"
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(tmp_path / "onboard.py"), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        keys=[ENTER],
+    )
+    text = screen.decode(errors="replace")
+    assert code == EXIT_FAILED, text
+    assert "render broke" in text, text
+    assert "아무것도 설치하지 않았습니다" in text, text
+    assert read_answers(out) == {}
 
 
 @posix_only
