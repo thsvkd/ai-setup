@@ -246,6 +246,9 @@ def test_old_backups_are_pruned(repo):
 
 
 # --- push 확인 --------------------------------------------------------------------
+#
+# 계약: 원격 커밋을 덮어쓰거나 지우는 push 는, 사라질 커밋이 전부 로컬에 있으면 refs/claude-backups/
+# 에 고정하고 통과한다. 하나라도 로컬에 없으면(다른 사람이 push 했고 아직 fetch 하지 않음) 묻는다.
 
 
 def _with_origin(repo, tmp_path, default_branch):
@@ -258,6 +261,24 @@ def _with_origin(repo, tmp_path, default_branch):
     return bare
 
 
+def _remote_ahead(bare, tmp_path, *branches):
+    """다른 클론이 branches 에 커밋을 push 한다 — 그 커밋은 이 저장소에 없다."""
+    other = tmp_path / "other"
+    if not other.exists():
+        subprocess.run(["git", "clone", "-q", str(bare), str(other)], check=True)
+        git(other, "config", "user.email", "o@o")
+        git(other, "config", "user.name", "o")
+        # 원격 HEAD 가 없는 브랜치를 가리키면 클론이 빈 채로 시작한다 — 기존 커밋 위에서 쌓는다.
+        base = [r for r in git(other, "for-each-ref", "--format=%(refname)",
+                               "refs/remotes/origin").stdout.split() if not r.endswith("/HEAD")]
+        git(other, "checkout", "-q", base[0])
+    for b in branches:
+        (other / "theirs.txt").write_text(b + "\n", encoding="utf-8")
+        git(other, "add", "-A")
+        git(other, "commit", "-qm", "theirs " + b)
+        git(other, "push", "-q", "origin", "HEAD:refs/heads/%s" % b)
+
+
 def _decision(command, cwd):
     p = run_hook(command, cwd)
     return p["hookSpecificOutput"].get("permissionDecision") if p else None
@@ -266,13 +287,14 @@ def _decision(command, cwd):
 def test_plain_push_to_remote_default_branch_passes(repo, tmp_path):
     """fast-forward push 는 원격 히스토리를 지우지 않는다(되돌리려면 revert).
     실사용 로그에서 이 확인은 23건 모두 평범한 작업 흐름을 멈춰 세우기만 했다."""
-    _with_origin(repo, tmp_path, "main")
+    bare = _with_origin(repo, tmp_path, "main")
+    _remote_ahead(bare, tmp_path, "main")
     assert _decision("git push origin main", repo) is None
     assert _decision("git push -u origin main", repo) is None
     assert _decision("git push", repo) is None
 
 
-@pytest.mark.parametrize("cmd", [
+FORCE_TO_DEFAULT = [
     "git push --force origin main",
     "git push -f origin main",
     "git push -uf origin main",
@@ -291,11 +313,55 @@ def test_plain_push_to_remote_default_branch_passes(repo, tmp_path):
     "git -c core.x=y push -f origin main",
     "git push -f origin 'refs/heads/*:refs/heads/*'",
     "git push -f origin :",                 # 일치하는 브랜치 전부
-])
-def test_force_push_to_remote_default_branch_asks(repo, tmp_path, cmd):
-    """덮어쓴 원격 커밋은 로컬 백업이 닿지 않는다."""
-    _with_origin(repo, tmp_path, "main")
+    # 리뷰에서 나온 누락: 삭제와 섞인 force, 한 명령 속 여러 push
+    "git push -f origin main :tmp",
+    "git push origin +main :tmp",
+    "git push origin HEAD:refs/heads/x && git push -f origin main",
+    "git push origin x; git push -f origin main",
+    "git push -f origin HEAD:heads/main",   # git 은 `refs/<이름>` 도 대상으로 푼다
+]
+
+
+@pytest.mark.parametrize("cmd", FORCE_TO_DEFAULT)
+def test_force_push_to_remote_default_branch_asks_when_remote_commits_are_not_local(
+        repo, tmp_path, cmd):
+    """덮어쓸 원격 커밋이 로컬에 없으면 어디에도 보존되지 않는다."""
+    bare = _with_origin(repo, tmp_path, "main")
+    _remote_ahead(bare, tmp_path, "main")
     assert _decision(cmd, repo) == "ask", cmd
+
+
+@pytest.mark.parametrize("cmd", FORCE_TO_DEFAULT)
+def test_force_push_to_remote_default_branch_passes_when_remote_commits_are_local(
+        repo, tmp_path, cmd):
+    bare = _with_origin(repo, tmp_path, "main")
+    _remote_ahead(bare, tmp_path, "main")
+    git(repo, "fetch", "-q", "origin")
+    assert _decision(cmd, repo) is None, cmd
+
+
+def test_force_push_pins_overwritten_remote_commit_and_restores_it(repo, tmp_path):
+    """실측: force push 로 덮어쓴 원격 main 을 고정 ref 로 되돌릴 수 있어야 한다."""
+    bare = _with_origin(repo, tmp_path, "main")
+    _remote_ahead(bare, tmp_path, "main")
+    git(repo, "fetch", "-q", "origin")
+    theirs = git(bare, "rev-parse", "main").stdout.strip()
+    (repo / "mine.txt").write_text("mine\n", encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "mine")
+
+    p = run_hook("git push -f origin main", repo)
+    assert p and "permissionDecision" not in p["hookSpecificOutput"]
+    pins = git(repo, "for-each-ref", "--format=%(refname) %(objectname)",
+               BACKUP_PREFIX).stdout.split("\n")
+    pin = next(line.split()[0] for line in pins if line.endswith(theirs))
+    assert "-push/" in pin and pin.endswith("/heads/main")
+    assert pin[:-len("heads/main")] in p["hookSpecificOutput"]["additionalContext"]
+
+    git(repo, "push", "-q", "-f", "origin", "main")
+    assert git(bare, "rev-parse", "main").stdout.strip() != theirs
+    git(repo, "push", "-q", "--force", "origin", "%s:refs/heads/main" % pin)
+    assert git(bare, "rev-parse", "main").stdout.strip() == theirs
 
 
 def test_push_to_side_branch_passes(repo, tmp_path):
@@ -303,11 +369,14 @@ def test_push_to_side_branch_passes(repo, tmp_path):
     assert _decision("git push origin feature/x", repo) is None
 
 
-def test_push_force_to_side_branch_passes(repo, tmp_path):
-    """곁다리 브랜치는 force 여도 확인하지 않는다."""
-    _with_origin(repo, tmp_path, "main")
+def test_push_force_to_side_branch_asks_only_when_remote_commits_are_not_local(repo, tmp_path):
+    """가역성은 브랜치 이름과 무관하다 — 곁다리 브랜치도 남의 커밋을 덮어쓰면 묻는다."""
+    bare = _with_origin(repo, tmp_path, "main")
+    _remote_ahead(bare, tmp_path, "fix/y")
+    assert _decision("git push --force origin fix/y", repo) == "ask"
+    assert _decision("git push origin +fix/y", repo) == "ask"
+    git(repo, "fetch", "-q", "origin")
     assert _decision("git push --force origin fix/y", repo) is None
-    assert _decision("git push origin +fix/y", repo) is None
 
 
 def test_push_all_without_force_passes(repo, tmp_path):
@@ -315,40 +384,93 @@ def test_push_all_without_force_passes(repo, tmp_path):
     assert _decision("git push --all origin", repo) is None
 
 
-def test_push_mirror_asks(repo, tmp_path):
-    """--mirror 는 원격에만 있는 ref 를 지우고 나머지를 강제로 맞춘다."""
-    _with_origin(repo, tmp_path, "main")
-    assert _decision("git push --mirror origin", repo) == "ask"
+@pytest.mark.parametrize("cmd", [
+    "git push --mirror origin",
+    # --prune 은 로컬에 없는 원격 브랜치를 지운다 — 원격 브랜치 삭제와 같다.
+    "git push --prune origin 'refs/heads/*:refs/heads/*'",
+])
+def test_push_mirror_and_prune_ask_only_when_remote_commits_are_not_local(repo, tmp_path, cmd):
+    """--mirror/--prune 은 원격에만 있는 ref 를 지운다 — 어느 브랜치든 대상이다."""
+    bare = _with_origin(repo, tmp_path, "main")
+    _remote_ahead(bare, tmp_path, "feature/x")
+    assert _decision(cmd, repo) == "ask"
+    git(repo, "fetch", "-q", "origin")
+    assert _decision(cmd, repo) is None
 
 
 def test_force_push_with_quoted_dash_c_path_asks(repo, tmp_path):
     """`git -C "경로 공백"` 처럼 값이 따옴표로 묶여도 push 를 찾고, 판정은 -C 저장소에서 한다."""
-    _with_origin(repo, tmp_path, "main")
+    bare = _with_origin(repo, tmp_path, "main")
+    _remote_ahead(bare, tmp_path, "main")
     (tmp_path / "my repo").symlink_to(repo)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     assert _decision('git -C "%s" push -f origin main' % (tmp_path / "my repo"), elsewhere) == "ask"
     assert _decision('git -c a=b -C "%s" push -f origin main' % (tmp_path / "my repo"), elsewhere) == "ask"
     assert _decision('git -C "%s" push origin main' % (tmp_path / "my repo"), elsewhere) is None
-
-
-def test_push_prune_asks(repo, tmp_path):
-    """--prune 은 로컬에 없는 원격 브랜치를 지운다 — 원격 브랜치 삭제와 같다."""
-    _with_origin(repo, tmp_path, "main")
-    assert _decision("git push --prune origin 'refs/heads/*:refs/heads/*'", repo) == "ask"
+    # 선행 `cd` 도 따른다 (LEADING_CD_RE 는 공백 든 경로를 못 읽어 공백 없는 경로로 본다)
+    assert _decision('cd %s && git push -f origin main' % repo, elsewhere) == "ask"
 
 
 def test_force_push_not_touching_default_branch_passes(repo, tmp_path):
-    _with_origin(repo, tmp_path, "main")
+    bare = _with_origin(repo, tmp_path, "main")
+    _remote_ahead(bare, tmp_path, "main")
     assert _decision("git push --tags -f origin", repo) is None
     assert _decision("git push -f origin refs/heads/release/main", repo) is None
 
 
-def test_push_respects_remote_default_branch_name(repo, tmp_path):
-    """기본 브랜치가 main 이 아니어도 원격이 지정한 이름을 따른다."""
-    _with_origin(repo, tmp_path, "trunk")
-    assert _decision("git push --force origin trunk", repo) == "ask"
-    assert _decision("git push --force origin main", repo) is None
+def test_force_push_checks_the_push_url_not_the_fetch_url(repo, tmp_path):
+    """fetch 는 미러에서, push 는 원본으로 하면 원본의 커밋을 봐야 한다."""
+    bare = _with_origin(repo, tmp_path, "main")
+    mirror = tmp_path / "mirror.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(bare), str(mirror)], check=True)
+    git(repo, "remote", "set-url", "origin", str(mirror))
+    git(repo, "remote", "set-url", "--push", "origin", str(bare))
+    _remote_ahead(bare, tmp_path, "main")
+    assert _decision("git push -f origin main", repo) == "ask"
+    # pushurl 이 여럿이면 git 은 전부에 쓴다 — 첫 번째(미러, 로컬과 같음)만 보면 안 된다.
+    git(repo, "config", "--unset-all", "remote.origin.pushurl")
+    git(repo, "config", "--add", "remote.origin.pushurl", str(mirror))
+    git(repo, "config", "--add", "remote.origin.pushurl", str(bare))
+    assert _decision("git push -f origin main", repo) == "ask"
+
+
+def test_deleting_remote_ref_outside_heads_and_tags_asks(repo, tmp_path):
+    bare = _with_origin(repo, tmp_path, "main")
+    _remote_ahead(bare, tmp_path, "main")
+    other = tmp_path / "other"
+    git(other, "notes", "add", "-m", "theirs", "HEAD")
+    git(other, "push", "-q", "origin", "refs/notes/commits")
+    assert _decision("git push origin :refs/notes/commits", repo) == "ask"
+
+
+def test_mirror_pins_do_not_collide_on_slash_and_dash_names(repo, tmp_path):
+    """feat/x 와 feat-x 의 고정 ref 가 같은 이름이 되면 하나를 잃는다."""
+    bare = _with_origin(repo, tmp_path, "main")
+    _remote_ahead(bare, tmp_path, "feat/x", "feat-x")
+    git(repo, "fetch", "-q", "origin")
+    assert _decision("git push --mirror origin", repo) is None
+    pinned = set(git(repo, "for-each-ref", "--format=%(objectname)", BACKUP_PREFIX).stdout.split())
+    for b in ("feat/x", "feat-x"):
+        assert git(bare, "rev-parse", b).stdout.strip() in pinned, b
+
+
+def test_pins_from_two_pushes_in_one_command_do_not_overwrite_each_other(repo, tmp_path):
+    """같은 초에 두 원격의 main 을 고정해도 둘 다 남아야 한다."""
+    bare = _with_origin(repo, tmp_path, "main")
+    _remote_ahead(bare, tmp_path, "main")
+    b2 = tmp_path / "b2.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(b2)], check=True)
+    git(repo, "remote", "add", "b2", str(b2))
+    git(repo, "push", "-q", "b2", "HEAD:refs/heads/main")
+    git(repo, "fetch", "-q", "--all")
+    (repo / "mine.txt").write_text("mine\n", encoding="utf-8")   # 두 원격의 main 이 모두 로컬 main 과 달라진다
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "mine")
+    assert _decision("git push -f origin HEAD:main && git push -f b2 HEAD:main", repo) is None
+    pinned = set(git(repo, "for-each-ref", "--format=%(objectname)", BACKUP_PREFIX).stdout.split())
+    for remote in (bare, b2):
+        assert git(remote, "rev-parse", "main").stdout.strip() in pinned, remote
 
 
 def test_push_outside_git_repo_passes(tmp_path):
@@ -362,16 +484,24 @@ def test_stash_push_is_not_treated_as_push(repo, tmp_path):
     assert _decision("git stash push -m wip", repo) is None
 
 
-def test_push_delete_remote_branch_asks(repo, tmp_path):
-    """원격 브랜치 삭제는 로컬 백업이 닿지 않는다 — 곁다리 브랜치여도 확인한다."""
-    _with_origin(repo, tmp_path, "main")
+@pytest.mark.parametrize("cmd", [
+    "git push --delete origin feature/x",
+    "git push origin :feature/x",           # 빈 src refspec 도 같은 삭제다
+])
+def test_push_delete_remote_branch_asks_only_when_its_commits_are_not_local(repo, tmp_path, cmd):
+    """원격 브랜치 삭제는 곁다리 브랜치여도 본다 — 그 커밋이 로컬에 없으면 영영 사라진다."""
+    bare = _with_origin(repo, tmp_path, "main")
+    _remote_ahead(bare, tmp_path, "feature/x")
+    assert _decision(cmd, repo) == "ask"
+    git(repo, "fetch", "-q", "origin")
+    assert _decision(cmd, repo) is None
+
+
+def test_destructive_push_asks_when_remote_is_unreachable(repo, tmp_path):
+    """원격을 조회하지 못하면 가역성을 보장할 수 없다."""
+    git(repo, "remote", "add", "origin", str(tmp_path / "missing.git"))
+    assert _decision("git push -f origin master", repo) == "ask"
     assert _decision("git push --delete origin feature/x", repo) == "ask"
-
-
-def test_push_empty_src_refspec_asks(repo, tmp_path):
-    """`git push origin :branch` 도 같은 삭제다."""
-    _with_origin(repo, tmp_path, "main")
-    assert _decision("git push origin :feature/x", repo) == "ask"
 
 
 def test_clean_x_skips_ignored_when_too_large(repo, monkeypatch):

@@ -44,10 +44,12 @@ Bash 툴(POSIX 셸·Git Bash)과 PowerShell 툴 양쪽을 대상으로 한다. �
        - 디스크 파괴 (mkfs*/fdisk/parted/wipefs, dd of=/dev/*, diskutil erase*, > /dev/sdX,
          format <드라이브>:, diskpart, Clear-Disk/Initialize-Disk/Remove-Partition)
      되돌릴 수단이 아예 없는 두 부류라 오탐 비용을 감수한다. 로그상 발동 0회.
-  4) ask 는 원격 커밋을 지울 수 있을 때뿐이다 — 원격 기본 브랜치로의 force push(`+refspec`,
-     --force-with-lease, HEAD/@, 글로브 refspec 포함), --mirror/--prune, 원격 브랜치 삭제. 로컬 백업이 닿지 않는 유일한
-     영역이다. fast-forward push 는 기본 브랜치여도 확인하지 않는다(로그상 23건 전부 정상
-     작업이었다). 곁다리 브랜치 push 는 force 여부와 무관하게 확인하지 않는다.
+  4) ask 는 push 가 원격 커밋을 되돌릴 수 없게 지울 때뿐이다. force push(`+refspec`,
+     --force-with-lease, HEAD/@, 글로브 refspec 포함), --mirror/--prune, 원격 ref 삭제는 push URL 에
+     `git ls-remote` 해 사라질 원격 커밋을 조회한다. 전부 로컬에 있으면 refs/claude-backups/ 에
+     고정하고 통과시키고(그 ref 를 다시 push 하면 원격이 돌아온다), 하나라도 로컬에 없거나 원격을
+     조회하지 못할 때만 확인한다. 브랜치 이름은 따지지 않는다. fast-forward push 는 기본
+     브랜치여도 확인하지 않는다(로그상 23건 전부 정상 작업이었다).
 
   종전에 있었으나 실측 근거로 제거한 것: 포크밤 패턴, curl|sh 패턴, find/xargs 대량 삭제
   ask, 체이닝 삭제 ask, 글로브 미일치 deny, `.`/`..` deny, 대상 100개 초과 ask,
@@ -202,10 +204,10 @@ def emit(decision, reason, updated_input=None, context=None):
     sys.exit(0)
 
 
-def _git(args, cwd, env=None):
-    return subprocess.run(["git"] + args, cwd=cwd, env=env,
+def _git(args, cwd, env=None, timeout=60, stdin=None):
+    return subprocess.run(["git"] + args, cwd=cwd, env=env, input=stdin,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          universal_newlines=True, timeout=60)
+                          universal_newlines=True, timeout=timeout)
 
 
 # --- deny 판정 -------------------------------------------------------------------
@@ -339,16 +341,9 @@ def git_snapshot(command, cwd):
 # --- git push 확인 ---------------------------------------------------------------
 
 
-def _default_branches(cwd):
-    """원격이 기본으로 지정한 브랜치. 확인할 수 없으면 관례적인 이름들로 대신한다."""
-    out = _git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd).stdout.strip()
-    if out:
-        return {out.split("/", 1)[-1]}
-    return {"main", "master"}
-
-
-def _find_push(command):
-    """명령에서 `git … push` 를 찾는다. 반환: (push 뒤 인자들, -C 디렉터리들) 또는 None."""
+def _find_pushes(command):
+    """명령 속 `git … push` 전부. 반환: [(push 뒤 인자들, -C 디렉터리들)]."""
+    found = []
     for segment in SEGMENT_SPLIT_RE.split(command):
         if "push" not in segment:
             continue
@@ -368,33 +363,58 @@ def _find_push(command):
                 else:
                     j += 1
             if j < len(toks) and toks[j] == "push":
-                return toks[j + 1:], dirs
-    return None
+                found.append((toks[j + 1:], dirs))
+                break
+    return found
 
 
-def push_ask_reason(command, cwd):
-    """원격 커밋을 지울 수 있는 push 만 확인한다.
+def _push_remote(cwd):
+    """원격 이름 없이 `git push` 했을 때 git 이 고르는 원격."""
+    b = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd).stdout.strip()
+    for key in ("branch.%s.pushRemote" % b, "remote.pushDefault", "branch.%s.remote" % b):
+        r = _git(["config", "--get", key], cwd).stdout.strip()
+        if r:
+            return r
+    return "origin"
 
-    기본 브랜치로의 force push, --mirror, 원격 브랜치 삭제. fast-forward push 는 원격
-    히스토리를 지우지 않으므로(되돌리려면 revert) 통과시킨다 — 실사용 로그에서 이 확인은
-    23건 모두 평범한 작업 흐름을 멈춰 세우기만 했다.
-    """
-    found = _find_push(command)
-    if not found:
+
+# 원격 조회가 사람의 입력을 기다리며 훅을 멈춰 세우지 않게 한다. GCM 은 GIT_TERMINAL_PROMPT 를
+# 무시하고 GUI 로그인 창을 띄운다(Windows). 부분 클론의 cat-file 은 누락 객체를 원격에서 받아 온다.
+_NO_PROMPT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never", "GIT_NO_LAZY_FETCH": "1"}
+
+
+def _push_urls(remote, cwd):
+    """push 가 실제로 쓰는 URL 전부(pushurl·pushInsteadOf 반영, pushurl 이 여럿이면 git 은 전부에 쓴다).
+    원격 이름 대신 URL 을 직접 주면 그대로 쓴다."""
+    return _git(["remote", "get-url", "--push", "--all", remote], cwd).stdout.split() or [remote]
+
+
+def _remote_refs(url, cwd):
+    """원격의 {ref: sha}. 조회하지 못하면 None — 그때는 가역성을 보장할 수 없다."""
+    env = dict(os.environ, **_NO_PROMPT_ENV)
+    # 호스트 키·암호 프롬프트로 ssh 가 멈추지 않게 한다. 사용자의 ssh 설정이 있으면 건드리지 않는다.
+    if not (env.get("GIT_SSH_COMMAND") or env.get("GIT_SSH")
+            or _git(["config", "core.sshCommand"], cwd).stdout.strip()):
+        env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+    r = _git(["ls-remote", url], cwd, env, timeout=20)
+    if r.returncode != 0:
         return None
-    args, dirs = found
+    refs = {}
+    for line in r.stdout.splitlines():
+        sha, _, ref = line.partition("\t")
+        if ref.startswith("refs/") and not ref.endswith("^{}"):
+            refs[ref] = sha
+    return refs
+
+
+def _check_push(args, dirs, cwd):
+    """push 하나가 되돌릴 수 있는지 본다. 반환: (ask 사유, 안내 문구들)."""
     for d in dirs:                          # 판정은 push 가 실제로 도는 저장소에서 한다
         cwd = os.path.join(cwd, os.path.expanduser(d))
     if not os.path.isdir(cwd) or _git(["rev-parse", "--git-dir"], cwd).returncode != 0:
-        return None
+        return None, []
 
-    protected = _default_branches(cwd)
-    wipe = next((a for a in args if a in ("--mirror", "--prune")), None)
-    if wipe:
-        return ("git push %s 는 로컬에 없는 원격 ref 를 지웁니다. 원격 히스토리는 로컬 백업으로 "
-                "되돌릴 수 없습니다. 계속할까요?" % wipe)
     force = any(PUSH_FORCE_RE.match(a) for a in args)
-
     positionals = []
     skip = False
     for a in args:
@@ -407,45 +427,114 @@ def push_ask_reason(command, cwd):
         if a.startswith("-"):
             continue
         positionals.append(a)
+    remote = positionals[0] if positionals else _push_remote(cwd)
+    refspecs = positionals[1:]
 
-    # 원격 브랜치 삭제는 로컬 백업이 닿지 않는다 — 어느 브랜치든 확인한다.
-    # `git push --delete origin x` 와 빈 src refspec `git push origin :x` 두 형태가 있다.
-    deleting = [a for a in args if a in PUSH_DELETE_FLAGS]
-    empty_src = [a for a in positionals[1:] if a.startswith(":") and len(a) > 1]
-    if deleting or empty_src:
-        names = [a.lstrip(":") for a in empty_src] or positionals[1:]
-        return ("원격 브랜치(%s)를 삭제하려고 합니다. 원격 히스토리는 로컬 백업으로 되돌릴 수 "
-                "없습니다. 계속할까요?" % ", ".join(names) if names else
-                "원격 브랜치를 삭제하려고 합니다. 계속할까요?")
+    def local_refs(prefix):
+        return _git(["for-each-ref", "--format=%(refname)", prefix], cwd).stdout.split()
 
-    def current_branch():
-        b = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd).stdout.strip()
-        return b if b and b != "HEAD" else None
-
-    refspecs = positionals[1:]              # 첫 위치 인자는 원격 이름
-    if any(a in PUSH_ALL_FLAGS for a in args):
-        targets = sorted(protected) if force else []
-    elif not refspecs:
-        # `--tags` 만 있으면 브랜치는 보내지 않는다.
-        targets = [current_branch()] if force and "--tags" not in args else []
-    else:
-        targets = []
-        for spec in refspecs:
-            if not (force or spec.startswith("+")):   # `+` 는 그 refspec 만 force 한다
-                continue
+    # 덮어쓰거나 지울 수 있는 원격 ref. wide 면 원격의 모든 ref 가 대상이다.
+    wide = (any(a in ("--mirror", "--prune") for a in args)
+            or _git(["config", "--bool", "remote.%s.mirror" % remote], cwd).stdout.strip() == "true")
+    deleting = any(a in PUSH_DELETE_FLAGS for a in args)
+    names = []
+    if force and any(a in PUSH_ALL_FLAGS for a in args):
+        names += local_refs("refs/heads/")
+    if force and "--tags" in args:
+        names += local_refs("refs/tags/")
+    if force and not refspecs and not any(a in PUSH_ALL_FLAGS or a == "--tags" for a in args):
+        names.append("HEAD")
+    for spec in refspecs:
+        if deleting or (spec.startswith(":") and len(spec) > 1):
+            names.append(spec.lstrip(":"))  # `--delete origin x` 와 빈 src refspec `origin :x`
+        elif force or spec.startswith("+"):   # `+` 는 그 refspec 만 force 한다
             dst = spec.split(":")[-1].lstrip("+")
-            if "*" in dst or not dst:                 # 글로브·`:`(일치 브랜치 전부)는 기본 브랜치도 덮는다
-                targets.extend(protected)
-            elif dst in ("HEAD", "@"):
-                targets.append(current_branch())
+            if "*" in dst or not dst:          # 글로브·`:`(일치 브랜치 전부)
+                wide = True
             else:
-                targets.append(dst[len("refs/heads/"):] if dst.startswith("refs/heads/") else dst)
+                names.append(dst)
+    if not wide and not names:
+        return None, []                     # fast-forward·새 브랜치 push 는 원격 커밋을 지우지 않는다
+    if any(n in ("HEAD", "@") for n in names):
+        b = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd).stdout.strip()
+        names = [b if n in ("HEAD", "@") else n for n in names]
 
-    hit = [t for t in targets if t in protected]
-    if hit:
-        return ("원격의 기본 브랜치(%s)를 force push 로 덮어쓰려고 합니다. 덮어쓴 원격 커밋은 "
-                "로컬 백업으로 되돌릴 수 없습니다. 계속할까요?" % ", ".join(hit))
-    return None
+    notes = []
+    for url in _push_urls(remote, cwd):
+        reason, note = _pin_remote(url, wide, names, cwd)
+        if reason:
+            return reason, []
+        notes += note
+    return None, notes
+
+
+def _pin_remote(url, wide, names, cwd):
+    """url 에서 사라질 원격 커밋이 전부 로컬에 있으면 고정한다. 반환: (ask 사유, 안내 문구들)."""
+    remote_refs = _remote_refs(url, cwd)
+    if remote_refs is None:
+        return ("원격(%s)을 조회하지 못해, 이 push 가 덮어쓰거나 지울 원격 커밋이 로컬에 남아 "
+                "있는지 확인할 수 없습니다. 계속할까요?" % url), []
+    # git 이 짧은 대상 이름을 푸는 규칙(ref_rev_parse_rules)을 그대로 따른다.
+    at_risk = {ref: sha for ref, sha in remote_refs.items()
+               if wide or any(ref in (n, "refs/" + n, "refs/tags/" + n, "refs/heads/" + n,
+                                      "refs/remotes/" + n) for n in names)}
+    if not at_risk:
+        return None, []
+
+    check = _git(["cat-file", "--batch-check"], cwd, dict(os.environ, **_NO_PROMPT_ENV),
+                 stdin="".join(sha + "\n" for sha in at_risk.values()))
+    absent = {line.split()[0] for line in check.stdout.splitlines() if line.endswith(" missing")}
+    missing = sorted(ref for ref, sha in at_risk.items() if sha in absent)
+    if check.returncode != 0 or missing:
+        return ("원격 %s 의 %s 에 로컬에 없는 커밋이 있습니다. 이 push 는 그 커밋을 덮어쓰거나 지워 "
+                "되돌릴 수 없게 만듭니다(먼저 git fetch 하면 로컬에 보존됩니다). 계속할까요?"
+                % (url, ", ".join(missing or sorted(at_risk)))), []
+
+    # 같은 이름의 로컬 ref 가 이미 같은 커밋을 쥐고 있으면 고정하지 않는다.
+    held = set(_git(["for-each-ref", "--format=%(refname) %(objectname)"], cwd).stdout.splitlines())
+    pins = {ref: sha for ref, sha in at_risk.items() if "%s %s" % (ref, sha) not in held}
+    if not pins:
+        return None, []
+    # 한 명령 속 여러 push·여러 URL 이 같은 초에 고정해도 겹치지 않게 번호를 붙이고, `create` 로
+    # 덮어쓰기를 막는다(겹치면 실패 → ask). `/` 는 유지한다 — feat/x 와 feat-x 를 구분해야 한다.
+    global _pin_seq
+    _pin_seq += 1
+    base = "%s%s-push/%d/" % (BACKUP_PREFIX, datetime.datetime.now().strftime("%Y%m%dT%H%M%S"),
+                              _pin_seq)
+    tx = "".join("create %s%s %s\n" % (base, ref[len("refs/"):], sha) for ref, sha in pins.items())
+    if _git(["update-ref", "--stdin"], cwd, stdin=tx).returncode != 0:
+        return ("원격 %s 의 덮어쓸 커밋을 로컬에 고정하지 못했습니다. 계속할까요?" % url), []
+    _prune(cwd)
+    shown = sorted(pins)
+    listed = ", ".join(shown[:5]) + (" 외 %d개" % (len(shown) - 5) if len(shown) > 5 else "")
+    return None, ["push 전 원격 %s 의 %s 를 %s 아래에 고정했습니다 (되돌리기: git push --force "
+                  "%s %s<ref>:refs/<ref>, 예: %s%s:%s)."
+                  % (url, listed, base, url, base, base, shown[0][len("refs/"):], shown[0])]
+
+
+_pin_seq = 0
+
+
+def push_check(command, cwd):
+    """원격 커밋을 덮어쓰거나 지우는 push 가 되돌릴 수 있는지 본다. 반환: (ask 사유, 안내 문구들).
+
+    대상은 force push(`+refspec` 포함), 원격 ref 삭제, --mirror/--prune 이다. 사라질 원격 커밋이
+    전부 로컬에 있으면 refs/claude-backups/<ts>-push/ 에 고정하고 통과시킨다 — 그 ref 를 다시
+    push 하면 원격이 원래대로 돌아온다. 하나라도 로컬에 없거나 원격을 조회하지 못하면 묻는다.
+    fast-forward push 는 원격 히스토리를 지우지 않으므로 보지 않는다.
+    """
+    dirs = _target_dirs(command, cwd)       # 선행 `cd <경로>` 를 따른다
+    base = dirs[0] if dirs else cwd
+    notes = []
+    for args, cdirs in _find_pushes(command):
+        try:
+            reason, n = _check_push(args, cdirs, base)
+        except subprocess.TimeoutExpired:
+            reason, n = "원격 조회가 시간을 넘겨 이 push 가 되돌릴 수 있는지 확인하지 못했습니다. 계속할까요?", []
+        if reason:
+            return reason, []
+        notes += n
+    return None, notes
 
 
 # --- 셰임 선행 줄 ----------------------------------------------------------------
@@ -530,12 +619,12 @@ def main():
 
     cwd = data.get("cwd") or os.getcwd()
 
-    reason = push_ask_reason(command, cwd)
+    reason, notes = push_check(command, cwd)
     if reason:
-        log({"tool": tool_name, "command": command, "decision": "ask-push-default-branch"})
+        log({"tool": tool_name, "command": command, "decision": "ask-push-irreversible"})
         emit("ask", reason)
 
-    notes = git_snapshot(command, cwd)
+    notes += git_snapshot(command, cwd)
 
     prefix = shim_prefix(tool_name, command)
     if prefix:

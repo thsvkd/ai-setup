@@ -2,7 +2,7 @@
 
 이 훅의 계약은 셋뿐이다.
   1) 되돌릴 수 없는 두 부류만 deny — 루트/홈 전체 삭제, 디스크 파괴.
-  2) 원격 커밋을 지울 수 있는 push(기본 브랜치 force push, --mirror, 원격 브랜치 삭제)만 ask.
+  2) 로컬에 없는 원격 커밋을 지우는 push(기본 브랜치 force push, --mirror, 원격 브랜치 삭제)만 ask.
   3) 그 외에는 명령을 '한 글자도 바꾸지 않고' 통과시킨다. Bash 셰임 PATH 는 SessionStart 가
      CLAUDE_ENV_FILE 로 설정하고, PowerShell 삭제에만 모듈 Import 선행 한 줄을 붙인다.
 
