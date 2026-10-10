@@ -100,6 +100,27 @@ def test_matches_real_rm(name, script):
 
 REFUSED = ["rm -rf ~", 'rm -rf "$HOME"', "rm -rf /"]
 
+# 셰임을 거쳐야 안전한 명령은 같은 셸 안에서 rm 이 셰임으로 잡히는지 먼저 확인한다. Windows 의
+# PATH 에서 `bash` 가 WSL 로 잡히면 PATH·HOME 이 넘어가지 않아, 여기 있는 명령이 WSL 의 진짜
+# rm 으로 실제 홈을 지웠다(2026-10-11). 확인에 실패하면 아무것도 지우지 않고 97 로 끝난다.
+SHIM_GUARD = ('case "$(command -v rm)" in */shims/rm) ;; '
+              '*) echo "셰임이 아닌 rm: $(command -v rm)" >&2; exit 97 ;; esac\n')
+
+
+def run_via_shim(script, **kwargs):
+    proc = subprocess.run(["bash", "-c", SHIM_GUARD + script],
+                          capture_output=True, text=True, **kwargs)
+    assert proc.returncode != 97, "bash 가 셰임을 쓰지 않는다 — %s" % proc.stderr
+    return proc
+
+
+def _guarded_home():
+    """tmp 밖의 가짜 홈. 셰임은 tmp 아래의 HOME 은 보호하지 않으므로 BASE 아래에 둔다."""
+    home = BASE / "guarded-home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "keep").write_text("x", encoding="utf-8")
+    return home
+
 
 def _fake_trash_path(tmp_path):
     """아무것도 지우지 않는 trash-put 을 앞세운 PATH. 거부 테스트가 실제 홈을 대상으로 하므로,
@@ -113,14 +134,15 @@ def _fake_trash_path(tmp_path):
 
 @pytest.mark.parametrize("script", REFUSED)
 def test_root_and_home_are_refused(script, tmp_path):
-    env = dict(os.environ)
+    # 실제 홈을 대상으로 삼지 않는다. 셰임이 퇴행하면 /bin/rm 이 그대로 지우기 때문이다.
+    home = _guarded_home()
+    env = dict(os.environ, HOME=str(home))
     env.pop("CLAUDE_NO_TRASH", None)
     env["PATH"] = _fake_trash_path(tmp_path)
-    proc = subprocess.run(["bash", "-c", script], cwd=str(BASE), env=env,
-                          capture_output=True, text=True)
+    proc = run_via_shim(script, cwd=str(BASE), env=env)
     assert proc.returncode != 0
     assert "거부" in proc.stderr
-    assert Path(os.path.expanduser("~")).is_dir()
+    assert (home / "keep").is_file()
 
 
 def test_tmp_targets_are_really_deleted(tmp_path):
@@ -130,7 +152,7 @@ def test_tmp_targets_are_really_deleted(tmp_path):
     (target / "f").write_text("x", encoding="utf-8")
     env = dict(os.environ)
     env["PATH"] = str(SHIM_DIR) + os.pathsep + env["PATH"]
-    subprocess.run(["bash", "-c", "rm -rf %s" % target], env=env, capture_output=True)
+    run_via_shim("rm -rf %s" % target, env=env)
     assert not target.exists()
 
 
@@ -183,8 +205,7 @@ def test_sandboxed_home_under_tmp_can_be_cleaned_up(tmp_path):
     sandbox.mkdir()
     env = dict(os.environ, HOME=str(sandbox), PATH=_fake_trash_path(tmp_path))
     env.pop("CLAUDE_NO_TRASH", None)
-    proc = subprocess.run(["bash", "-c", 'rm -rf "$HOME"'], env=env,
-                          capture_output=True, text=True)
+    proc = run_via_shim('rm -rf "$HOME"', env=env)
     assert proc.returncode == 0, proc.stderr
     assert "거부" not in proc.stderr
 
@@ -195,8 +216,7 @@ def test_overridden_home_outside_tmp_is_still_refused(tmp_path):
     app_home.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, HOME=str(app_home), PATH=_fake_trash_path(tmp_path))
     env.pop("CLAUDE_NO_TRASH", None)
-    proc = subprocess.run(["bash", "-c", 'rm -rf "$HOME"'], env=env,
-                          capture_output=True, text=True)
+    proc = run_via_shim('rm -rf "$HOME"', env=env)
     assert proc.returncode != 0
     assert "거부" in proc.stderr
     assert app_home.is_dir()
