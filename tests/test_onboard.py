@@ -59,10 +59,9 @@ def run_in_pty(argv, keys, cwd=None, env=None, stdin_pipe=False, timeout=25):
     import termios
 
     master, slave = pty.openpty()
-    try:
-        termios.tcsetwinsize(slave, (24, 100))
-    except Exception:
-        pass
+    # termios.tcsetwinsize 는 3.11+ 라, 낮은 버전에서도 같은 폭이 되도록 ioctl 로 맞춘다.
+    import struct
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 100, 0, 0))
 
     if stdin_pipe:
         pin_r, pin_w = os.pipe()
@@ -321,6 +320,22 @@ def test_SCOPE_hooks이면_NEWLINE_CHORD를_묻지_않는다(tmp_path):
 
 
 @posix_only
+def test_애플리케이션_커서_모드의_화살표도_받는다(tmp_path):
+    """tmux·vim 이후의 셸 등은 화살표를 ESC [ B 가 아니라 ESC O B 로 보낸다.
+
+    이를 놓치면 ↓ 가 무시되고 Enter 가 첫 항목(전체 설치)을 확정한다.
+    """
+    out = tmp_path / "answers"
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        keys=[b"\x1bOB", ENTER, ENTER, ENTER, ENTER, ENTER, ENTER],
+    )
+    assert code == EXIT_OK, screen.decode(errors="replace")
+    assert read_answers(out)["SCOPE"] == "hooks"
+
+
+@posix_only
 def test_SCOPE_agentsmd이면_NEWLINE_CHORD를_묻지_않는다(tmp_path):
     """covers: Test-2
     SCOPE=agentsmd 이면 줄바꿈 키를 묻지 않고 답 파일에 NEWLINE_CHORD 가 없다.
@@ -432,40 +447,27 @@ def test_SCOPE_agentsmd이면_OMC를_묻지_않는다(tmp_path):
     assert "MODS" not in read_answers(out)
 
 
-# ── 벤더링 회귀 방지 ─────────────────────────────────────────────────
+# ── 렌더러 회귀 방지 ─────────────────────────────────────────────────
 
 
-def test_벤더링된_questionary가_실제로_프롬프트를_만들_수_있다():
-    """`prompt_toolkit-*.dist-info/METADATA` 를 지우면 여기서 걸린다.
+def test_렌더러가_콘솔_없이_프레임을_만든다():
+    """res/tui.py 는 import 와 프레임 계산에 터미널을 요구하지 않는다.
 
-    prompt_toolkit 의 __version__ 은 importlib.metadata 에서 읽는다. 벤더링하면서 dist-info 를
-    빠뜨리면 import 는 멀쩡히 되고, 프롬프트를 만들 때가 되어서야 터진다 — 온보딩이 첫 화면에서
-    죽는 형태라 import 검사만으로는 잡히지 않는다.
-
-    콘솔을 요구하지 않는다. 예전에는 questionary.select 를 그냥 호출했는데, 그러면
-    prompt_toolkit 이 실제 출력 장치를 찾아 나서서 진짜 Windows 콘솔 스크린 버퍼가 없는
-    환경(CI, 출력을 파이프로 받는 러너)에서만 NoConsoleScreenBufferError 로 실패했다.
-    검증하려는 것은 장치가 아니라 '프롬프트를 구성할 수 있는가' 이므로, prompt_toolkit 이
-    이 용도로 제공하는 파이프 입력과 DummyOutput 을 물려 같은 코드 경로를 그대로 지난다.
-
-    온보딩이 실제로 쓰는 네 가지(select, confirm, Choice, Style)를 모두 만들어 본다.
+    예전 벤더(prompt_toolkit 3.0.53)는 Python 3.10+ 문법이라 3.9 에서 import 단계에 죽었고,
+    온보딩은 아무 말 없이 건너뛰어졌다. 이 테스트는 실행한 인터프리터 하나만 검사하므로,
+    낮은 버전 회귀는 CLAUDE_TEST_PYTHON 을 3.9 로 두고 돌려야 잡힌다.
+    한글은 2칸이므로, 폭 계산이 틀리면 다시 그릴 때 올라갈 행 수가 어긋난다.
     """
     code = (
         "import sys; sys.path.insert(0, %r)\n"
-        "import questionary\n"
-        "from questionary.utils import is_prompt_toolkit_3\n"
-        "from prompt_toolkit.application import create_app_session\n"
-        "from prompt_toolkit.input import create_pipe_input\n"
-        "from prompt_toolkit.output import DummyOutput\n"
-        "assert is_prompt_toolkit_3(), 'prompt_toolkit 3 이 아님'\n"
-        "style = questionary.Style([('qmark', 'fg:#00b0ff bold')])\n"
-        "with create_pipe_input() as inp:\n"
-        "    with create_app_session(input=inp, output=DummyOutput()):\n"
-        "        questionary.select('t', choices=[questionary.Choice('a', value='a'),\n"
-        "                                        questionary.Choice('b', value='b')],\n"
-        "                           style=style, instruction='(x)')\n"
-        "        questionary.confirm('t?', default=True, style=style)\n"
-        "print('OK')\n" % str(ROOT / "res" / "vendor")
+        "import tui\n"
+        "assert tui.width([('', '한글a')]) == 5\n"
+        "rows = [''.join(t for _, t in r) for r in tui.wrap([('', '가나다라마')], 8)]\n"
+        "assert rows == ['가나다라', tui.BAR + '  마'], rows\n"
+        "opts = [('a', '첫째', '설명'), ('b', '둘째', '')]\n"
+        "text = ''.join(t for line in tui.select_lines('active', '질문', opts, 1) for _, t in line)\n"
+        "assert '질문' in text and '둘째' in text and '첫째' in text\n"
+        "print('OK')\n" % str(ROOT / "res")
     )
     proc = subprocess.run([sys.executable, "-X", "utf8", "-c", code],
                           capture_output=True, text=True, encoding="utf-8", timeout=60)
@@ -532,13 +534,6 @@ def test_install_ps1이_Keybinds와_Newline을_setup에_넘긴다():
     ) or re.search(r"\$fwd\[\s*['\"]Newline['\"]\s*\]\s*=", source), (
         "install.ps1 이 -Newline 값을 setup.ps1 로 넘기지 않는다"
     )
-
-
-def test_벤더_라이선스가_함께_들어있다():
-    licenses = ROOT / "res" / "vendor" / "LICENSES"
-    names = {p.name for p in licenses.iterdir()} if licenses.is_dir() else set()
-    assert {"questionary-MIT.txt", "wcwidth-MIT.txt",
-            "prompt_toolkit-BSD-3-Clause.txt"} <= names, names
 
 
 # ── 선택이 실제 설치로 이어지는가 ───────────────────────────────────────

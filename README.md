@@ -382,12 +382,12 @@ Codex의 기존 `ctrl-j` 처럼 우리가 넣지 않은 키는 남는다. 우리
 
 | 라이브러리 | 일반 실행 | `curl \| sh` | `/dev/tty` 재바인딩 후 |
 | --- | --- | --- | --- |
-| **questionary** (채택) | ✅ | ❌ **조용히 첫 항목 확정** | ✅ |
+| questionary (예전 채택) | ✅ | ❌ **조용히 첫 항목 확정** | ✅ |
 | InquirerPy | ✅ | ❌ `EOFError` | ✅ |
 | beaupy | ✅ | ❌ | ❌ 멈춤 |
 | cutie | ✅ | ❌ | ✅ |
 
-주목할 건 questionary의 실패 방식이다 — 에러도 경고도 없이 **첫 항목("전체 설치")을 자동으로 확정**한다. 사용자가 아무것도 고르지 않았는데 전역 설치가 진행되는, 가장 위험한 실패 모드다.
+주목할 건 예전에 쓰던 questionary의 실패 방식이다 — 에러도 경고도 없이 **첫 항목("전체 설치")을 자동으로 확정**한다. 사용자가 아무것도 고르지 않았는데 전역 설치가 진행되는, 가장 위험한 실패 모드다.
 
 그래서 `res/onboard.py`는 프롬프트를 띄우기 전에 제어 터미널(POSIX `/dev/tty`, Windows `CONIN$`/`CONOUT$`)을 직접 열어 fd 0/1에 얹는다. 터미널을 못 열면 대화형을 **아예 포기한다** — 라이브러리에게 판단을 맡기지 않는다.
 
@@ -398,16 +398,21 @@ Codex의 기존 `ctrl-j` 처럼 우리가 넣지 않은 키는 남는다. 우리
 | 코드 | 상황 | 설치 동작 |
 | --- | --- | --- |
 | `0` | 사용자가 선택을 마침 | 고른 대로 실행 |
-| `2` | 물어볼 수 없음 (TTY 없음 / CI / 벤더 깨짐) | **예전 기본값으로 그대로 진행** — 실패가 아니다 |
+| `2` | 물어볼 수 없음 (TTY 없음 / CI / 프롬프트를 그릴 수 없는 콘솔) | **예전 기본값으로 그대로 진행** — 실패가 아니다 |
 | `130` | 사용자가 `Ctrl+C`로 취소 | **아무것도 설치하지 않고 중단** |
 
 `2`와 `130`을 뭉뚱그리면 "취소했는데 기본값으로 설치되는" 동작이 된다. CI 감지는 TTY 검사와 별도로 둔다 — `docker -t`나 tmux처럼 CI가 TTY를 붙여주는 경우가 있어 TTY 유무만으로는 못 거른다.
 
-### 의존성을 설치하지 않고 레포에 넣어둔 이유
+### 프롬프트를 직접 그리는 이유
 
-온보딩은 `questionary`(+`prompt_toolkit`, `wcwidth`)를 쓰는데, 이를 [`res/vendor/`](res/vendor/)에 벤더링해 둔다. 설치 중에 `pip install`을 하지 않기 위해서다 — 최신 배포판은 PEP 668(`externally-managed-environment`)로 시스템 Python에 대한 `pip install`을 거부하고, 네트워크가 막힌 환경에서는 설치가 통째로 실패한다. 설치 스크립트가 사용자의 파이썬 환경을 바꾸는 것 자체도 적절하지 않다.
+화면은 [`@clack/prompts`](https://github.com/bombshell-dev/clack)(`npx skills` 등이 쓰는 것)의 관용구 — `┌ │ ◆ ◇ └` 거터, `●/○` 라디오, `◼/◻` 체크박스 — 를 따르되, [`res/tui.py`](res/tui.py)가 **표준 라이브러리만으로** 그린다. 필요한 것은 select·multiselect·confirm 세 가지뿐이다.
 
-벤더링 갱신 방법과 주의사항(특히 `prompt_toolkit`의 `dist-info/METADATA`를 지우면 프롬프트를 띄우는 순간 죽는다)은 [`res/vendor/README.md`](res/vendor/README.md)에 있다.
+예전에는 `questionary`(+`prompt_toolkit`)를 벤더링했는데, `prompt_toolkit` 3.0.53 이 Python 3.10+ 문법을 써서 **macOS 기본 `python3`(3.9)에서 import 단계에 죽었다**. 온보딩은 종료 코드 `2`로 빠졌고, 설치는 아무 안내 없이 기본값으로 진행됐다. 의존성이 없으면 훅과 같은 Python 3.8+ 에서 그대로 돈다. 설치 중에 `pip install`을 하지 않는다는 원칙도 그대로 지켜진다.
+
+- 입력: POSIX는 `termios`, Windows는 `msvcrt.getwch`(stdin 과 무관하게 콘솔을 직접 읽는다).
+- 출력: Windows는 `SetConsoleMode`로 VT 처리를 켠다. 켤 수 없으면 대화형을 포기하고 그 사실을 알린다.
+- 기호: clack 과 같은 규칙으로 유니코드 지원을 판정해, 기본 conhost 에서는 ASCII(`| * o`)로 대체한다. `NO_COLOR`를 따른다.
+- 폭: 한글은 2칸으로 센다(`unicodedata.east_asian_width`). 다시 그릴 때 올라갈 줄 수가 여기서 정해진다.
 
 온보딩은 [`tests/test_onboard.py`](tests/test_onboard.py)가 **pty 위에서 실제 키 입력까지 재현해** 검증한다 — 일반 실행, 파이프 설치, `Ctrl+C` 취소, TTY 없는 환경, 기존 `AGENTS.md`가 있는 경우까지. 프롬프트가 "뜨는지"보다 **띄울 수 없을 때 아무것도 고르지 않는지**가 더 중요하므로 양쪽을 같은 비중으로 고정한다.
 
@@ -425,7 +430,7 @@ res/
   AGENTS.md                 # 배포될 프로젝트 워크플로 규칙
   settings.json             # 실제 settings.json 조각 (SSoT, {{PY}}·{{HOOKS_DIR}} 자리표시자)
   onboard.py                # 대화형 온보딩 TUI (인자 없이 실행할 때만 뜸)
-  vendor/                   # 온보딩 의존성 (questionary·prompt_toolkit·wcwidth, 벤더링)
+  tui.py                    # 온보딩이 쓰는 clack 스타일 프롬프트 (표준 라이브러리만 사용)
   keybinds/
     apply.py                # 줄바꿈 키바인딩 외과적 병합 (VS Code·Cursor·Claude·Codex·WT·tmux)
   omc/
