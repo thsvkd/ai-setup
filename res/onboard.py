@@ -288,10 +288,11 @@ def main(argv) -> int:
 
     if is_ci():
         return EXIT_NON_INTERACTIVE
-    if not attach_terminal():
-        return EXIT_NON_INTERACTIVE
 
     try:
+        # stdin 이 닫힌 채 실행되면 sys.stdin 이 None 이라 여기서 예외가 난다. 역시 물을 수 없음이다.
+        if not attach_terminal():
+            return EXIT_NON_INTERACTIVE
         # 스크립트 폴더가 sys.path 에 없는 실행(PYTHONSAFEPATH 등)에서도 옆의 tui.py 를 찾는다.
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import tui

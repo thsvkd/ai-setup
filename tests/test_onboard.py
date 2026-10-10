@@ -300,6 +300,37 @@ def test_프롬프트가_깨지면_기본값_폴백이_아니라_중단한다(tm
 
 
 @posix_only
+def test_콘솔을_준비하지_못하면_그리기_전이므로_기본값으로_진행한다(tmp_path):
+    """보이지 않는 콘솔·VT 미지원처럼 아무것도 그리기 전에 실패하면 '물을 수 없음'(2)이다."""
+    shutil.copy(ONBOARD, tmp_path / "onboard.py")
+    real_tui = (ROOT / "res" / "tui.py").read_text(encoding="utf-8")
+    (tmp_path / "tui.py").write_text(
+        real_tui + "\n\ndef prepare_console():\n    raise OSError('not a console')\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "answers"
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(tmp_path / "onboard.py"), "--out", str(out)],
+        keys=[],
+    )
+    text = screen.decode(errors="replace")
+    assert code == EXIT_NON_INTERACTIVE, text
+    assert "무엇을 설치할까요" not in text, text
+    assert read_answers(out) == {}
+
+
+def test_stdin이_닫혀_있으면_물을_수_없음으로_끝난다(tmp_path):
+    out = tmp_path / "answers"
+    proc = subprocess.run(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out)],
+        stdin=subprocess.DEVNULL, capture_output=True, env=clean_env(), timeout=60,
+        **({} if sys.platform == "win32" else {"preexec_fn": lambda: os.close(0)}),
+    )
+    assert proc.returncode == EXIT_NON_INTERACTIVE, proc.stderr
+    assert read_answers(out) == {}
+
+
+@posix_only
 def test_기존_agentsmd가_있을때만_덮어쓰기를_묻는다(tmp_path):
     (tmp_path / "AGENTS.md").write_text("기존 프로젝트 규칙\n", encoding="utf-8")
     out = tmp_path / "answers"
