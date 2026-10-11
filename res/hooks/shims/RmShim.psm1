@@ -47,11 +47,12 @@ function Send-ClaudeTrash {
         return
     }
 
-    $trash = Microsoft.PowerShell.Core\Get-Command trash-put -ErrorAction SilentlyContinue
+    # SilentlyContinue 는 못 찾은 기록을 $Error 에 남겨, 삭제가 성공해도 원본 cmdlet 과 달라진다(macOS).
+    $trash = Microsoft.PowerShell.Core\Get-Command trash-put -ErrorAction Ignore
     if ($trash) {
         & $trash.Source -- @Paths
     }
-    elseif ($IsMacOS -and ($trash = Microsoft.PowerShell.Core\Get-Command trash -ErrorAction SilentlyContinue)) {
+    elseif ($IsMacOS -and ($trash = Microsoft.PowerShell.Core\Get-Command trash -ErrorAction Ignore)) {
         # macOS 14.4+ 기본 /usr/bin/trash (shims/rm 과 같은 우선순위). `--` 지원이 문서화돼
         # 있지 않지만 $Paths 는 Get-Item 의 FullName(절대경로)이라 대시로 시작하지 않는다.
         & $trash.Source @Paths
