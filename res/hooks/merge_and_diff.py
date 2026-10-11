@@ -74,12 +74,17 @@ def fold_receipt(previous: dict, current: dict) -> dict:
     그걸 그대로 기록하면 첫 설치가 무엇을 바꿨는지에 대한 기억이 사라져, 이후 --uninstall
     이 권한/defaultMode/스칼라 키를 되돌리지 못한다. 그래서 덮어쓰지 않고 합친다.
     """
+    current = dict(current)
+    retired = current.pop("retired", None) or {}
     if not previous:
         return current
 
     folded = dict(current)
     for key in ("added_allow", "added_deny", "added_ask", "added_auto_allow"):
-        merged = list(previous.get(key) or [])
+        # 이번에 걷어낸 항목은 더 이상 우리 것이 아니다. 남겨 두면 사용자가 나중에 같은 문자열을
+        # 직접 넣었을 때 uninstall 이 그것을 지운다.
+        gone = retired.get(key[len("added_"):]) or []
+        merged = [x for x in previous.get(key) or [] if x not in gone]
         for item in current.get(key) or []:
             if item not in merged:
                 merged.append(item)
@@ -172,14 +177,11 @@ def merge_list(perms, key, incoming, changes):
     return added
 
 
-# 예전 버전의 res/settings.json 이 배포했던 permissions 규칙. 지금은 조각에서 빠졌지만 merge 는
-# '추가만' 하므로 기존 설치본에는 그대로 남는다. Claude Code 는 permissions 의 deny/ask 를
-# PreToolUse 훅의 판정보다 우선 적용하므로, 이게 남아 있으면 danger_guard 의 git 정책(곁다리
-# 브랜치 push 통과, reset --hard 백업 후 실행)이 통째로 무력화된다 — 새로 설치한 사용자에게는
-# 동작하고 업그레이드한 사용자에게는 조용히 죽어 있는, 가장 알아채기 어려운 형태의 고장이다.
-# 그래서 '우리가 배포했던 문자열과 정확히 일치하는 것'만 설치 중에 제거한다. 사용자가 직접
-# 적어 넣은 규칙은 문자열이 조금이라도 다르면 남으므로, 남의 설정을 임의로 지우지 않는다.
-# (legacy 키 permissions.mode 를 제거하는 아래 로직과 같은 성격의 마이그레이션이다.)
+# 예전 버전의 res/settings.json 이 배포했던 permissions 규칙. Claude Code 는 permissions 의 deny/ask
+# 를 PreToolUse 훅의 판정보다 우선 적용하므로, 이게 남아 있으면 danger_guard 의 git 정책이 통째로
+# 무력화된다. 영수증이 '우리가 넣었다'고 말하는 것은 retire_list 가 걷어낸다. 영수증에 없는 것은
+# 사용자가 직접 쓴 같은 문자열일 수 있어 지우지 않고 알리기만 한다(영수증이 없던 2026-07-04 이전
+# 설치본이 여기에 해당한다).
 LEGACY_PERMISSION_RULES = {
     "deny": [
         "Bash(git push *)",
@@ -199,25 +201,30 @@ LEGACY_PERMISSION_RULES = {
 }
 
 
-def prune_legacy_rules(perms: dict, frag_perms: dict, changes: list) -> dict:
-    """예전 버전이 심어둔 permissions 규칙 중 지금 조각에 더 이상 없는 것을 제거한다.
-    반환: {키: [제거된 규칙]} — uninstall 이 설치 전 상태로 되돌리는 근거."""
-    removed_map = {}
-    for key, legacy_rules in LEGACY_PERMISSION_RULES.items():
-        current = perms.get(key)
-        if not current:
-            continue
-        # 조각이 그 규칙을 다시 넣기로 했다면 제거 대상이 아니다 (정책이 되돌아온 경우 방어).
-        incoming = set(frag_perms.get(key) or [])
-        targets = [r for r in legacy_rules if r in current and r not in incoming]
-        if not targets:
-            continue
-        perms[key] = [x for x in current if x not in targets]
-        removed_map[key] = targets
-        changes.append(f"permissions.{key}: -{targets} (legacy rule - removed because it defeats the hook's git policy)")
+def retire_list(perms: dict, key: str, frag_perms: dict, previous: dict, changes: list) -> list:
+    """예전 설치가 더했고 지금 조각에서 빠진 규칙을 걷어낸다. 영수증에 있는 것만 지운다.
+    반환: 걷어낸 규칙 — 영수증의 '우리가 더한 것' 목록에서도 빠진다."""
+    keep = set(frag_perms.get(key) or [])
+    current = perms.get(key) or []
+    gone = [r for r in previous.get("added_" + key) or [] if r in current and r not in keep]
+    if gone:
+        perms[key] = [x for x in current if x not in gone]
         if not perms[key]:
             del perms[key]
-    return removed_map
+        changes.append(f"permissions.{key}: -{gone} (no longer shipped)")
+    return gone
+
+
+def warn_legacy_rules(perms: dict, frag_perms: dict) -> None:
+    """영수증에 없는 구버전 규칙이 남아 있으면 알린다. changes 에 넣지 않는다 — 넣으면 바뀐 것이
+    없는데도 실행할 때마다 백업을 만든다."""
+    for key, legacy_rules in LEGACY_PERMISSION_RULES.items():
+        incoming = set(frag_perms.get(key) or [])
+        left = [r for r in legacy_rules if r in (perms.get(key) or []) and r not in incoming]
+        if left:
+            print(f"  ⚠️ permissions.{key} still has {left}, which overrides the guard hook's git policy. "
+                  "The install receipt does not show that this setup added it, so it was left alone; "
+                  "remove it yourself if you did not write it.")
 
 
 def restore_legacy_rules(perms: dict, receipt: dict) -> list:
@@ -270,6 +277,21 @@ def merge_env(existing: dict, fragment: dict, changes: list) -> dict:
     if added:
         existing["env"] = existing_env
     return added
+
+
+def retire_auto_allow(existing: dict, fragment: dict, previous: dict, changes: list) -> list:
+    """예전 설치가 autoMode.allow 에 더했고 지금 조각에서 빠진 항목(문구가 바뀐 예외 등)을 걷어낸다.
+    합집합 병합만 하면 옛 문구가 새 문구 옆에 남아, 좁혀 놓은 예외가 옛 넓은 예외로 계속 열려 있다."""
+    keep = ((fragment.get("autoMode") or {}).get("allow")) or []
+    auto = existing.get("autoMode")
+    if not isinstance(auto, dict) or not isinstance(auto.get("allow"), list):
+        return []
+    gone = [x for x in previous.get("added_auto_allow") or []
+            if x in auto["allow"] and x not in keep and x != "$defaults"]
+    if gone:
+        auto["allow"] = [x for x in auto["allow"] if x not in gone]
+        changes.append(f"autoMode.allow: -{gone} (no longer shipped)")
+    return gone
 
 
 def merge_auto_allow(existing: dict, fragment: dict, changes: list) -> list:
@@ -343,8 +365,10 @@ def prune_retired_hooks(existing: dict, fragment: dict, changes: list) -> list:
     return retired if len(changes) > before else []
 
 
-def merge(existing: dict, fragment: dict):
-    """(changes, receipt) 를 반환. receipt 는 uninstall 이 정밀 복원에 쓰는 '설치 영수증'."""
+def merge(existing: dict, fragment: dict, previous: dict = None):
+    """(changes, receipt) 를 반환. receipt 는 uninstall 이 정밀 복원에 쓰는 '설치 영수증'.
+    previous 는 이전 설치 영수증이다 — 조각에서 빠진 항목 중 우리가 더했던 것만 걷어내는 근거."""
+    previous = previous or {}
     changes = []
     receipt = {
         "added_allow": [],
@@ -355,6 +379,7 @@ def merge(existing: dict, fragment: dict):
         "added_auto_allow": [],
         "removed_legacy": {},
         "retired_hooks": [],
+        "retired": {},
         "default_mode_before": None,
         "default_mode_after": None,
         "default_mode_changed": False,
@@ -362,16 +387,16 @@ def merge(existing: dict, fragment: dict):
 
     receipt["added_scalars"] = merge_scalars(existing, fragment, changes)
     receipt["added_env"] = merge_env(existing, fragment, changes)
+    receipt["retired"]["auto_allow"] = retire_auto_allow(existing, fragment, previous, changes)
     receipt["added_auto_allow"] = merge_auto_allow(existing, fragment, changes)
 
     frag_perms = fragment.get("permissions", {})
     if frag_perms:
         perms = existing.setdefault("permissions", {})
-        receipt["added_allow"] = merge_list(perms, "allow", frag_perms.get("allow", []), changes)
-        receipt["added_deny"] = merge_list(perms, "deny", frag_perms.get("deny", []), changes)
-        receipt["added_ask"] = merge_list(perms, "ask", frag_perms.get("ask", []), changes)
-        # 합집합 병합 '뒤'에 돌려야 한다 — 조각이 다시 넣은 규칙까지 지워버리지 않도록.
-        receipt["removed_legacy"] = prune_legacy_rules(perms, frag_perms, changes)
+        for key in ("allow", "deny", "ask"):
+            receipt["retired"][key] = retire_list(perms, key, frag_perms, previous, changes)
+            receipt["added_" + key] = merge_list(perms, key, frag_perms.get(key, []), changes)
+        warn_legacy_rules(perms, frag_perms)
         if "defaultMode" in frag_perms:
             old_mode = perms.get("defaultMode")
             new_mode = frag_perms["defaultMode"]
@@ -628,7 +653,8 @@ def main() -> int:
         before = {}
 
     after = copy.deepcopy(before)
-    changes, receipt = merge(after, fragment)
+    previous = load_manifest(manifest_path)
+    changes, receipt = merge(after, fragment, previous)
     preserved, violated = top_level_diff(before, after)
 
     print("── Planned changes ────────────────────")
@@ -656,7 +682,6 @@ def main() -> int:
         # 설치 영수증(매니페스트) 기록 — uninstall 이 '건드린 것만' 정밀 복원하는 근거.
         # 재실행(멱등)해도 첫 설치의 기억을 잃지 않도록 이전 영수증 위에 누적한다.
         if manifest_path:
-            previous = load_manifest(manifest_path)
             manifest = {
                 "version": 1,
                 "hooks_dir": hooks_dir,

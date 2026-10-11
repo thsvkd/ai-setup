@@ -513,29 +513,56 @@ def legacy_settings():
     return json.dumps({"permissions": {k: list(v) for k, v in LEGACY.items()}})
 
 
-def test_legacy_git_deny_rules_are_removed_on_install(tmp_path):
+def _receipt_that_added(tmp_path, rules_by_key):
+    """예전 설치가 이 규칙들을 넣었다고 적힌 영수증."""
+    manifest = tmp_path / "manifest.json"
+    receipt = {"version": 1}
+    receipt.update({"added_" + k: list(v) for k, v in rules_by_key.items()})
+    manifest.write_text(json.dumps(receipt), encoding="utf-8")
+    return manifest
+
+
+def test_legacy_git_rules_the_receipt_says_we_added_are_removed_on_install(tmp_path):
     target = tmp_path / "settings.json"
     target.write_text(legacy_settings(), encoding="utf-8")
-    proc, result = run_merge(target)
-    assert proc.returncode == 0
+    manifest = _receipt_that_added(tmp_path, LEGACY)
+    proc, result = run_merge(target, manifest_path=manifest)
+    assert proc.returncode == 0, proc.stdout
     for key in LEGACY:
         assert not any("git" in rule for rule in result["permissions"].get(key, [])), \
             "a leftover legacy git %s rule would defeat the hook's git policy" % key
+    # 걷어낸 규칙은 영수증의 '우리가 더한 것'에서도 빠진다. 남으면 사용자가 나중에 직접 넣은 같은
+    # 문자열을 uninstall 이 지운다.
+    recorded = json.loads(manifest.read_text(encoding="utf-8"))
+    for key, rules in LEGACY.items():
+        assert not set(rules) & set(recorded.get("added_" + key) or []), key
 
 
-def test_legacy_removal_leaves_user_own_deny_rules(tmp_path):
-    """정확히 일치하는 문자열만 지운다. 사용자가 직접 넣은 규칙은 비슷해도 남아야 한다."""
+def test_legacy_rules_without_a_receipt_are_kept_and_reported(tmp_path):
+    """영수증이 우리가 넣었다고 말하지 않으면 사용자가 직접 쓴 같은 문자열일 수 있다. 지우지 않고 알린다."""
+    target = tmp_path / "settings.json"
+    target.write_text(legacy_settings(), encoding="utf-8")
+    proc, result = run_merge(target, manifest_path=tmp_path / "manifest.json")
+    assert proc.returncode == 0, proc.stdout
+    for key, rules in LEGACY.items():
+        assert set(rules) <= set(result["permissions"][key]), key
+    assert "overrides the guard hook's git policy" in proc.stdout, proc.stdout
+
+
+def test_legacy_removal_leaves_user_own_rules(tmp_path):
+    """영수증에 있는 것만 지운다. 우리가 배포했던 문자열과 같아도 영수증에 없으면 남는다."""
     target = tmp_path / "settings.json"
     target.write_text(json.dumps({"permissions": {"deny": [
-        "Bash(git push *)",            # 우리가 배포했던 것 → 제거
-        "Bash(git push --force *)",     # 사용자가 직접 넣은 것 → 보존
-        "Bash(rm -rf /*)",              # 무관 → 보존
+        "Bash(git push *)",            # 영수증에 있다 → 제거
+        "Bash(git push -f*)",          # 배포했던 문자열이지만 영수증에 없다 → 보존
+        "Bash(git push --force *)",    # 사용자가 직접 넣은 것 → 보존
+        "Bash(curl *)",                # 무관 → 보존
     ]}}), encoding="utf-8")
-    _, result = run_merge(target)
-    deny = result["permissions"]["deny"]
+    manifest = _receipt_that_added(tmp_path, {"deny": ["Bash(git push *)"]})
+    run_merge(target, manifest_path=manifest)
+    deny = json.loads(target.read_text(encoding="utf-8"))["permissions"]["deny"]
     assert "Bash(git push *)" not in deny
-    assert "Bash(git push --force *)" in deny
-    assert "Bash(rm -rf /*)" in deny
+    assert {"Bash(git push -f*)", "Bash(git push --force *)", "Bash(curl *)"} <= set(deny)
 
 
 def test_legacy_removal_when_no_such_rules_is_a_noop(tmp_path):
@@ -546,46 +573,41 @@ def test_legacy_removal_when_no_such_rules_is_a_noop(tmp_path):
     assert result["permissions"]["deny"] == ["Bash(curl *)"]
 
 
-def test_legacy_removal_is_recorded_in_manifest(tmp_path):
+def test_retired_rules_stay_removed_after_reinstall_and_uninstall(tmp_path):
+    """우리가 넣었다가 거둔 규칙이다. uninstall 이 되살리면 설치 전보다 상태가 나빠진다."""
+    target = tmp_path / "settings.json"
+    target.write_text(legacy_settings(), encoding="utf-8")
+    manifest = _receipt_that_added(tmp_path, LEGACY)
+    run_merge(target, manifest_path=manifest)
+    run_merge(target, manifest_path=manifest)
+    _, result = run_uninstall(target, manifest)
+    for key in LEGACY:
+        assert not any("git" in rule for rule in (result or {}).get("permissions", {}).get(key, [])), key
+
+
+def test_uninstall_restores_legacy_rules_an_old_receipt_says_install_removed(tmp_path):
+    """예전 설치기는 영수증 근거 없이 지우고 removed_legacy 에 남겼다. 그 영수증의 uninstall 은 계속 되살린다."""
     target = tmp_path / "settings.json"
     manifest = tmp_path / "manifest.json"
-    target.write_text(legacy_settings(), encoding="utf-8")
-    run_merge(target, manifest_path=manifest)
-    recorded = json.loads(manifest.read_text(encoding="utf-8"))["removed_legacy"]
-    assert {k: sorted(v) for k, v in recorded.items()} == {k: sorted(v) for k, v in LEGACY.items()}
-
-
-def test_legacy_removal_survives_reinstall_in_manifest(tmp_path):
-    """멱등 재실행은 제거할 것이 없어 빈 결과를 낸다. 영수증이 덮어쓰이면 uninstall 이
-    무엇을 되돌려야 하는지 잊는다 — added_* 와 동일하게 누적돼야 한다."""
-    target = tmp_path / "settings.json"
-    manifest = tmp_path / "manifest.json"
-    target.write_text(legacy_settings(), encoding="utf-8")
-    run_merge(target, manifest_path=manifest)
-    run_merge(target, manifest_path=manifest)
-    recorded = json.loads(manifest.read_text(encoding="utf-8"))["removed_legacy"]
-    assert {k: sorted(v) for k, v in recorded.items()} == {k: sorted(v) for k, v in LEGACY.items()}
-
-
-def test_uninstall_restores_removed_legacy_rules(tmp_path):
-    """uninstall 은 '설치가 바꾼 것'을 되돌린다. 설치가 지운 규칙이라면 복원까지가 그 계약이다."""
-    target = tmp_path / "settings.json"
-    manifest = tmp_path / "manifest.json"
-    target.write_text(legacy_settings(), encoding="utf-8")
-    run_merge(target, manifest_path=manifest)
+    target.write_text(json.dumps({"permissions": {"allow": ["Bash"]}}), encoding="utf-8")
+    manifest.write_text(json.dumps({"version": 1, "added_allow": ["Bash"], "removed_legacy": LEGACY}),
+                        encoding="utf-8")
     _, result = run_uninstall(target, manifest)
     for key, rules in LEGACY.items():
         assert sorted(result["permissions"][key]) == sorted(rules)
 
 
-def test_dry_run_reports_legacy_removal_without_writing(tmp_path):
+def test_dry_run_reports_retirement_without_writing(tmp_path):
     target = tmp_path / "settings.json"
     original = legacy_settings()
     target.write_text(original, encoding="utf-8")
-    proc, _ = run_merge(target, dry="1")
+    manifest = _receipt_that_added(tmp_path, LEGACY)
+    receipt = manifest.read_text(encoding="utf-8")
+    proc, _ = run_merge(target, dry="1", manifest_path=manifest)
     assert proc.returncode == 0
-    assert "legacy rule" in proc.stdout, proc.stdout
+    assert "no longer shipped" in proc.stdout, proc.stdout
     assert target.read_text(encoding="utf-8") == original, "dry-run must not modify the file"
+    assert manifest.read_text(encoding="utf-8") == receipt, "dry-run must not modify the receipt"
 
 
 def test_retired_hook_registration_is_pruned(tmp_path):
@@ -664,6 +686,21 @@ def test_uninstall_keeps_defaults_when_user_added_rules_after_install(tmp_path):
     target.write_text(json.dumps(s), encoding="utf-8")
     _, result = run_uninstall(target, manifest)
     assert result["autoMode"]["allow"] == ["$defaults", "mine"]
+
+
+def test_auto_allow_text_from_an_older_install_is_replaced_not_kept(tmp_path):
+    """예외 문구를 좁혀도 합집합 병합만 하면 옛 넓은 문구가 옆에 남아 계속 열려 있다."""
+    old = "Reversible git push (old, broader wording)"
+    target = tmp_path / "settings.json"
+    target.write_text(json.dumps({"autoMode": {"allow": ["$defaults", old, "mine"]}}), encoding="utf-8")
+    manifest = _receipt_that_added(tmp_path, {"auto_allow": ["$defaults", old]})
+    proc, result = run_merge(target, manifest_path=manifest)
+    assert proc.returncode == 0, proc.stdout
+    assert old not in result["autoMode"]["allow"]
+    assert "mine" in result["autoMode"]["allow"]          # 영수증에 없는 사용자 규칙은 남는다
+    for rule in _frag_auto_allow():
+        assert rule in result["autoMode"]["allow"]
+    assert old not in json.loads(manifest.read_text(encoding="utf-8"))["added_auto_allow"]
 
 
 def test_malformed_auto_mode_is_left_untouched(tmp_path):
