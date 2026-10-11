@@ -246,9 +246,10 @@ Claude Code 의 체크포인팅(`/rewind`)은 [공식 문서상](https://code.cl
 | `Remove-Item`/`del`/`rd` + 드라이브 루트(`C:\`)·`$env:USERPROFILE`·`$HOME` | ⛔ **차단** |
 | `mkfs*`/`newfs_*`/`fdisk`/`gdisk`/`sgdisk`/`parted`/`wipefs`, `dd of=/dev/*`, `diskutil erase*`, `/dev/sd*` 리다이렉트 | ⛔ **차단** |
 | `format <드라이브>:`, `diskpart`, `Clear-Disk`/`Initialize-Disk`/`Remove-Partition`/`Clear-Volume` | ⛔ **차단** |
-| force push (`-f`/`--force`/`--force-with-lease`, `+refspec`, `HEAD`/`@`, 글로브 refspec, `--all`/`--tags` 와 함께), `--mirror`/`--prune`(및 `remote.<name>.mirror`), 원격 ref **삭제** (`--delete`/`-d`, `origin :ref`) — 브랜치 이름 무관 | 🔁 **고정 후 통과** — push URL 에 `git ls-remote` 해 사라질 원격 커밋을 조회하고, 전부 로컬에 있으면 `refs/claude-backups/<ts>-push/<ref>` 에 고정한다. 그 ref 를 다시 push 하면 원격이 돌아온다 |
+| force push (`-f`/`--force`/`--force-with-lease`, `+refspec`, `HEAD`/`@`, 글로브 refspec, `--all`/`--tags` 와 함께), `--prune`, 원격 ref **삭제** (`--delete`/`-d`, `origin :ref`), 그리고 설정(`push.default`·`remote.<name>.push`)이 그렇게 만드는 push — 브랜치 이름 무관 | 🔁 **고정 후 통과** — 같은 인자로 `git push --dry-run --porcelain` 을 돌려 git 이 강제 갱신·삭제할 원격 ref 를 받고, push URL 에 `git ls-remote` 해 그 커밋이 전부 로컬에 있으면 `refs/claude-backups/<ts>-push/<n>/<ref>` 에 고정한다(14일 보관). 그 ref 를 다시 push 하면 원격이 돌아온다 |
 | 위와 같은데 사라질 원격 커밋이 로컬에 없거나 원격 조회에 실패 | ❓ **확인** — 그 커밋은 어디에도 보존되지 않는다 (`git fetch` 후 다시 하면 통과) |
-| 일반(fast-forward) push, 새 브랜치 push — 기본 브랜치 포함 | ✅ 통과 — 원격 커밋을 지우지 않는다. 실사용 로그에서 이 확인은 23건 모두 정상 작업이었다 |
+| 훅이 알아보지 못하는 push — 파싱되지 않는 명령, 모르는 옵션·축약(`--del`), `git -c`·`--git-dir`·`GIT_DIR`, 셸이 확장하는 인자(`"$BR"`), `xargs`, push 를 부르는 git 별칭, 디렉터리를 알 수 없는 `cd`·`pushd`, `--mirror`(및 `remote.<name>.mirror`), 브랜치·태그가 아닌 ref(`refs/claude-backups/` 포함) | ❓ **확인** — 권한 규칙에 push 확인이 없으므로 훅은 모르는 push 를 통과시키지 않는다. `--mirror` 는 백업 스냅샷(무시된 `.env` 포함)까지 원격에 올린다 |
+| 일반(fast-forward) push, 새 브랜치 push — 기본 브랜치 포함. git 이 거부할 push(lease 불일치, upstream 없음) | ✅ 통과 — 원격 커밋을 지우지 않는다. 실사용 로그에서 이 확인은 23건 모두 정상 작업이었다 |
 | 그 외 전부 | ✅ 통과 (판단 안 함) |
 
 차단 규칙은 **명령 자리**에서 시작할 때만 잡는다. `grep -rn "rm -rf /" docs/` 처럼 위험한 문자열을 데이터로 다루는 명령은 막지 않는다 — 종전 오탐이 대부분 이 부류였다.
@@ -263,7 +264,7 @@ Claude Code에서 `permissions`의 `deny`/`ask` 규칙은 훅이 무엇을 반�
 
 **업그레이드 시 자동 마이그레이션**: 예전 버전은 `Bash(git push *)`·`Bash(git push --force*)`·`Bash(git push -f*)`·`Bash(git reset --hard *)`(및 PowerShell 짝)을 `deny`로, `Bash(git push *)`(및 PowerShell 짝)을 `ask`로 배포했다. 병합 엔진은 원래 '추가만' 하므로 그 규칙들이 기존 설치본에 그대로 남고, deny/ask가 훅보다 우선하니 **새로 설치한 사람에게는 동작하고 업그레이드한 사람에게는 조용히 죽는** 상태가 된다. 그래서 설치 중에 *우리가 배포했던 문자열과 정확히 일치하는* 그 규칙들만 제거하고, 무엇을 지웠는지 설치 리포트에 출력한다. 문자열이 조금이라도 다른(=사용자가 직접 넣은) 규칙은 건드리지 않으며, 제거 사실은 매니페스트에 기록돼 `--uninstall` 시 원래대로 복원된다.
 
-그 대가로 훅이 유일한 방어선이 되지만, **훅이 죽어도 잃는 것은 복구 수단이지 실행 권한이 아니다.** 훅이 예외로 죽으면 Claude Code는 판정 없이 명령을 실행한다(fail-open). 종전에는 이때 확인으로 승격했지만 실측상 그 확인은 전부 마찰이기만 했으므로, 이제 내부 오류는 `guard.log`에 `guard-error`로 남기고 조용히 통과시킨다. 설치 후 셀프테스트가 통과했는지 확인하는 것이 그만큼 더 중요하다.
+그 대가로 훅이 유일한 방어선이 되지만, **훅이 죽어도 잃는 것은 복구 수단이지 실행 권한이 아니다.** 훅이 예외로 죽으면 Claude Code는 판정 없이 명령을 실행한다(fail-open). 종전에는 이때 확인으로 승격했지만 실측상 그 확인은 전부 마찰이기만 했으므로, 이제 내부 오류는 `guard.log`에 `guard-error`로 남기고 조용히 통과시킨다. 예외는 push 판정이다 — 권한 규칙에 push 확인이 없으므로, push 를 판정하다 생긴 오류·시간 초과는 확인으로 승격한다. 설치 후 셀프테스트가 통과했는지 확인하는 것이 그만큼 더 중요하다.
 
 </details>
 

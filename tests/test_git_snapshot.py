@@ -23,8 +23,8 @@ def git(repo, *args):
                           capture_output=True, text=True, encoding="utf-8")
 
 
-def run_hook(command, cwd):
-    event = json.dumps({"tool_name": "Bash", "cwd": str(cwd),
+def run_hook(command, cwd, tool="Bash"):
+    event = json.dumps({"tool_name": tool, "cwd": str(cwd),
                         "tool_input": {"command": command}})
     proc = subprocess.run([sys.executable, "-X", "utf8", str(HOOK)],
                           input=event, capture_output=True, text=True, encoding="utf-8")
@@ -299,8 +299,6 @@ FORCE_TO_DEFAULT = [
     "git push --force origin main",
     "git push -f origin main",
     "git push -uf origin main",
-    "git push --force-with-lease origin main",
-    "git push --force-with-lease=main:abc123 origin main",
     "git push origin +main",
     "git push origin +HEAD:refs/heads/main",
     "git push -f",
@@ -309,9 +307,7 @@ FORCE_TO_DEFAULT = [
     "git push -f origin HEAD",
     "git push origin +HEAD",
     "git push -f origin @",
-    "git push --force-with-lease origin HEAD",
     "git -C . push -f origin main",
-    "git -c core.x=y push -f origin main",
     "git push -f origin 'refs/heads/*:refs/heads/*'",
     "git push -f origin :",                 # 일치하는 브랜치 전부
     # 리뷰에서 나온 누락: 삭제와 섞인 force, 한 명령 속 여러 push
@@ -320,24 +316,131 @@ FORCE_TO_DEFAULT = [
     "git push origin HEAD:refs/heads/x && git push -f origin main",
     "git push origin x; git push -f origin main",
     "git push -f origin HEAD:heads/main",   # git 은 `refs/<이름>` 도 대상으로 푼다
+    # 리뷰에서 나온 우회: 파싱이 어긋나도 push 는 그대로 실행된다
+    "git push --force \\\n  origin main",
+    "git push -f origin main  # it's rebased",
+    "(cd . && git push -f origin main)",
+    "bash -c 'git push -f origin main'",
+    'echo "$(git push -f origin main)"',
+    "git push >/dev/null -f origin main",
+    "git push -qd origin main",              # 묶인 짧은 옵션 속 삭제
+    "echo x | tee >(git push -f origin main)",   # 프로세스 치환도 실행된다
 ]
+
+
+def _force_case(repo, tmp_path):
+    """로컬 main 이 origin/main 을 추적하고, 원격에는 지울 수 있는 tmp 브랜치가 있다."""
+    bare = _with_origin(repo, tmp_path, "main")
+    git(repo, "branch", "-M", "main")
+    git(repo, "push", "-q", "origin", "HEAD:refs/heads/tmp")
+    git(repo, "fetch", "-q", "origin")
+    git(repo, "branch", "-q", "-u", "origin/main")
+    _remote_ahead(bare, tmp_path, "main")
+    return bare
 
 
 @pytest.mark.parametrize("cmd", FORCE_TO_DEFAULT)
 def test_force_push_to_remote_default_branch_asks_when_remote_commits_are_not_local(
         repo, tmp_path, cmd):
     """덮어쓸 원격 커밋이 로컬에 없으면 어디에도 보존되지 않는다."""
-    bare = _with_origin(repo, tmp_path, "main")
-    _remote_ahead(bare, tmp_path, "main")
+    _force_case(repo, tmp_path)
     assert _decision(cmd, repo) == "ask", cmd
 
 
-@pytest.mark.parametrize("cmd", FORCE_TO_DEFAULT)
+LEASE = [
+    "git push --force-with-lease origin main",
+    "git push --force-with-lease origin HEAD",
+]
+
+
+@pytest.mark.parametrize("cmd", FORCE_TO_DEFAULT + LEASE)
 def test_force_push_to_remote_default_branch_passes_when_remote_commits_are_local(
         repo, tmp_path, cmd):
-    bare = _with_origin(repo, tmp_path, "main")
-    _remote_ahead(bare, tmp_path, "main")
+    _force_case(repo, tmp_path)
     git(repo, "fetch", "-q", "origin")
+    assert _decision(cmd, repo) is None, cmd
+
+
+@pytest.mark.parametrize("cmd", LEASE + [
+    "git push --force-with-lease=main:abc123 origin main",
+    "git push -f origin HEAD:main :nonexistent",   # 없는 ref 삭제는 push 전체를 멈춘다
+])
+def test_push_that_git_rejects_passes_and_changes_nothing(repo, tmp_path, cmd):
+    """판정은 git 의 dry-run 계획을 따른다. lease 가 맞지 않거나 refspec 이 틀려 git 이 거부하는
+    push 는 원격을 바꾸지 않으므로 묻지 않는다 — 실제로 실행해 원격이 그대로인지 본다."""
+    bare = _force_case(repo, tmp_path)
+    before = git(bare, "rev-parse", "main").stdout.strip()
+    assert _decision(cmd, repo) is None, cmd
+    assert subprocess.run(cmd, shell=True, cwd=str(repo), capture_output=True).returncode != 0
+    assert git(bare, "rev-parse", "main").stdout.strip() == before
+
+
+@pytest.mark.parametrize("cmd", [
+    "git -c core.x=y push -f origin main",
+    "git --git-dir=.git push -f origin main",
+    "GIT_DIR=.git git push -f origin main",
+    "git push --mirror origin",
+    "git push --del origin tmp",             # git 은 받아 주는 축약이지만 훅은 모른다
+    "git push --mirr origin",
+    'git push -f origin "$BRANCH"',
+    "echo main | xargs git push -f origin",
+    "git -c alias.p=push p -f origin main",
+    "cd somewhere-unknown && git push -f origin main",
+    "pushd . && git push -f origin main",
+])
+def test_push_the_hook_cannot_verify_asks_even_when_reversible(repo, tmp_path, cmd):
+    """권한 규칙에 push 확인이 없으므로 훅은 fail-closed 다. 원격 커밋이 전부 로컬에 있어도
+    push 를 알아보지 못하면 묻는다."""
+    _force_case(repo, tmp_path)
+    git(repo, "fetch", "-q", "origin")
+    assert _decision(cmd, repo) == "ask", cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "git.exe push -f origin main",
+    "& git push -f origin main",
+    "git push -f `\n  origin main",
+    "git push -f origin main 2>&1 | Out-Null",
+])
+def test_powershell_push_forms_are_checked(repo, tmp_path, cmd):
+    _force_case(repo, tmp_path)
+    p = run_hook(cmd, repo, tool="PowerShell")
+    assert p and p["hookSpecificOutput"].get("permissionDecision") == "ask", cmd
+
+
+def test_git_alias_that_runs_push_asks(repo, tmp_path):
+    _force_case(repo, tmp_path)
+    git(repo, "fetch", "-q", "origin")
+    git(repo, "config", "alias.sync", "push -f origin main")
+    assert _decision("git sync", repo) == "ask"
+    git(repo, "config", "alias.st", "status")
+    assert _decision("git st", repo) is None
+
+
+@pytest.mark.parametrize("setup, cmd", [
+    (["config", "push.default", "upstream"], "git push -f"),
+    (["config", "remote.origin.push", "+refs/heads/main:refs/heads/main"], "git push origin"),
+    (["config", "remote.origin.mirror", "true"], "git push origin"),
+])
+def test_push_target_set_by_config_is_checked(repo, tmp_path, setup, cmd):
+    """대상이 설정으로 정해져도 git 의 계획을 따르므로 실제 대상을 본다."""
+    _force_case(repo, tmp_path)
+    git(repo, "checkout", "-q", "-b", "mywork")
+    git(repo, "branch", "-q", "-u", "origin/main")
+    git(repo, *setup)
+    assert _decision(cmd, repo) == "ask", cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "git commit -q --allow-empty -F - <<'EOF'\nfix: don't push it\ngit push -f origin main\nEOF",
+    'git commit -q --allow-empty -m "make push faster; it\'s ok"',
+    'grep -rn "git push -f" . || true',
+    "git stash push -m wip",
+    "git push -n -f origin main",
+])
+def test_push_text_that_is_not_a_destructive_push_stays_quiet(repo, tmp_path, cmd):
+    """커밋 메시지·검색어 속 push 는 실행되지 않는다. 묻거나 원격을 조회하면 안 된다."""
+    _force_case(repo, tmp_path)
     assert _decision(cmd, repo) is None, cmd
 
 
@@ -374,6 +477,7 @@ def test_push_force_to_side_branch_asks_only_when_remote_commits_are_not_local(r
     """가역성은 브랜치 이름과 무관하다 — 곁다리 브랜치도 남의 커밋을 덮어쓰면 묻는다."""
     bare = _with_origin(repo, tmp_path, "main")
     _remote_ahead(bare, tmp_path, "fix/y")
+    git(repo, "branch", "fix/y")
     assert _decision("git push --force origin fix/y", repo) == "ask"
     assert _decision("git push origin +fix/y", repo) == "ask"
     git(repo, "fetch", "-q", "origin")
@@ -385,18 +489,25 @@ def test_push_all_without_force_passes(repo, tmp_path):
     assert _decision("git push --all origin", repo) is None
 
 
-@pytest.mark.parametrize("cmd", [
-    "git push --mirror origin",
-    # --prune 은 로컬에 없는 원격 브랜치를 지운다 — 원격 브랜치 삭제와 같다.
-    "git push --prune origin 'refs/heads/*:refs/heads/*'",
-])
-def test_push_mirror_and_prune_ask_only_when_remote_commits_are_not_local(repo, tmp_path, cmd):
-    """--mirror/--prune 은 원격에만 있는 ref 를 지운다 — 어느 브랜치든 대상이다."""
+def test_push_prune_asks_only_when_remote_commits_are_not_local(repo, tmp_path):
+    """--prune 은 로컬에 없는 원격 브랜치를 지운다 — 원격 브랜치 삭제와 같다."""
+    cmd = "git push --prune origin 'refs/heads/*:refs/heads/*'"
     bare = _with_origin(repo, tmp_path, "main")
     _remote_ahead(bare, tmp_path, "feature/x")
     assert _decision(cmd, repo) == "ask"
     git(repo, "fetch", "-q", "origin")
     assert _decision(cmd, repo) is None
+
+
+def test_push_mirror_always_asks_because_it_publishes_backups(repo, tmp_path):
+    """--mirror 는 refs/claude-backups/ 까지 올린다. 스냅샷에는 .gitignore 대상(.env)이 담길 수 있다."""
+    bare = _with_origin(repo, tmp_path, "main")
+    git(repo, "fetch", "-q", "origin")
+    assert _decision("git push --mirror origin", repo) == "ask"
+    git(repo, "update-ref", BACKUP_PREFIX + "20990101T000000", "HEAD")
+    assert _decision("git push -f origin 'refs/*:refs/*'", repo) == "ask"
+    assert _decision("git push origin %s20990101T000000:refs/heads/x" % BACKUP_PREFIX, repo) == "ask"
+    assert git(bare, "for-each-ref", BACKUP_PREFIX).stdout == ""
 
 
 def test_force_push_with_quoted_dash_c_path_asks(repo, tmp_path):
@@ -458,12 +569,14 @@ def test_deleting_remote_ref_outside_heads_and_tags_asks(repo, tmp_path):
     assert _decision("git push origin :refs/notes/commits", repo) == "ask"
 
 
-def test_mirror_pins_do_not_collide_on_slash_and_dash_names(repo, tmp_path):
+def test_pins_do_not_collide_on_slash_and_dash_names(repo, tmp_path):
     """feat/x 와 feat-x 의 고정 ref 가 같은 이름이 되면 하나를 잃는다."""
     bare = _with_origin(repo, tmp_path, "main")
     _remote_ahead(bare, tmp_path, "feat/x", "feat-x")
     git(repo, "fetch", "-q", "origin")
-    assert _decision("git push --mirror origin", repo) is None
+    git(repo, "branch", "feat/x")
+    git(repo, "branch", "feat-x")
+    assert _decision("git push -f origin feat/x feat-x", repo) is None
     pinned = set(git(repo, "for-each-ref", "--format=%(objectname)", BACKUP_PREFIX).stdout.split())
     for b in ("feat/x", "feat-x"):
         assert git(bare, "rev-parse", b).stdout.strip() in pinned, b
@@ -477,6 +590,13 @@ def test_pins_from_two_pushes_in_one_command_do_not_overwrite_each_other(repo, t
     subprocess.run(["git", "init", "-q", "--bare", str(b2)], check=True)
     git(repo, "remote", "add", "b2", str(b2))
     git(repo, "push", "-q", "b2", "HEAD:refs/heads/main")
+    # b2 의 main 도 로컬 main 의 조상이 아니게 만든다 — fast-forward 면 지워지는 커밋이 없다.
+    git(repo, "checkout", "-q", "-b", "side")
+    (repo / "b2.txt").write_text("b2\n", encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "b2")
+    git(repo, "push", "-q", "-f", "b2", "HEAD:refs/heads/main")
+    git(repo, "checkout", "-q", "-")
     git(repo, "fetch", "-q", "--all")
     (repo / "mine.txt").write_text("mine\n", encoding="utf-8")   # 두 원격의 main 이 모두 로컬 main 과 달라진다
     git(repo, "add", "-A")
@@ -487,10 +607,11 @@ def test_pins_from_two_pushes_in_one_command_do_not_overwrite_each_other(repo, t
         assert git(remote, "rev-parse", "main").stdout.strip() in pinned, remote
 
 
-def test_push_outside_git_repo_passes(tmp_path):
+def test_push_outside_git_repo_asks(tmp_path):
+    """push 가 도는 저장소를 알 수 없다 — 다른 저장소를 가리키는 GIT_DIR·cd 를 놓쳤을 수 있다."""
     d = tmp_path / "plain"
     d.mkdir()
-    assert _decision("git push origin main", d) is None
+    assert _decision("git push -f origin main", d) == "ask"
 
 
 def test_stash_push_is_not_treated_as_push(repo, tmp_path):
@@ -514,7 +635,7 @@ def test_push_delete_remote_branch_asks_only_when_its_commits_are_not_local(repo
 def test_destructive_push_asks_when_remote_is_unreachable(repo, tmp_path):
     """원격을 조회하지 못하면 가역성을 보장할 수 없다."""
     git(repo, "remote", "add", "origin", str(tmp_path / "missing.git"))
-    assert _decision("git push -f origin master", repo) == "ask"
+    assert _decision("git push -f origin HEAD:master", repo) == "ask"
     assert _decision("git push --delete origin feature/x", repo) == "ask"
 
 

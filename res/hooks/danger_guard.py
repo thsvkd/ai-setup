@@ -44,11 +44,13 @@ Bash 툴(POSIX 셸·Git Bash)과 PowerShell 툴 양쪽을 대상으로 한다. �
        - 디스크 파괴 (mkfs*/fdisk/parted/wipefs, dd of=/dev/*, diskutil erase*, > /dev/sdX,
          format <드라이브>:, diskpart, Clear-Disk/Initialize-Disk/Remove-Partition)
      되돌릴 수단이 아예 없는 두 부류라 오탐 비용을 감수한다. 로그상 발동 0회.
-  4) ask 는 push 가 원격 커밋을 되돌릴 수 없게 지울 때뿐이다. force push(`+refspec`,
-     --force-with-lease, HEAD/@, 글로브 refspec 포함), --mirror/--prune, 원격 ref 삭제는 push URL 에
-     `git ls-remote` 해 사라질 원격 커밋을 조회한다. 전부 로컬에 있으면 refs/claude-backups/ 에
-     고정하고 통과시키고(그 ref 를 다시 push 하면 원격이 돌아온다), 하나라도 로컬에 없거나 원격을
-     조회하지 못할 때만 확인한다. 브랜치 이름은 따지지 않는다. fast-forward push 는 기본
+  4) ask 는 push 가 원격 커밋을 되돌릴 수 없게 지울 때, 그리고 그것을 확인하지 못할 때다.
+     push 가 바꿀 원격 ref 는 git 에게 같은 인자로 `push --dry-run --porcelain` 을 시켜 받는다.
+     강제 갱신·삭제될 ref 의 원격 커밋이 전부 로컬에 있으면 refs/claude-backups/ 에 고정하고
+     통과시키고(그 ref 를 다시 push 하면 원격이 돌아온다), 하나라도 로컬에 없으면 묻는다.
+     권한 규칙에 push 확인이 없으므로 이 판정은 fail-closed 다 — 파싱하지 못한 명령, 모르는
+     옵션·축약, -c/--git-dir/GIT_DIR, 알 수 없는 디렉터리, --mirror, 브랜치·태그가 아닌 ref,
+     원격 조회 실패는 전부 묻는다. 브랜치 이름은 따지지 않는다. fast-forward push 는 기본
      브랜치여도 확인하지 않는다(로그상 23건 전부 정상 작업이었다).
 
   종전에 있었으나 실측 근거로 제거한 것: 포크밤 패턴, curl|sh 패턴, find/xargs 대량 삭제
@@ -70,6 +72,7 @@ import os
 import datetime
 import subprocess
 import tempfile
+import time
 
 HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(HOOKS_DIR, "guard.log")
@@ -157,15 +160,53 @@ LEADING_CD_RE = re.compile(r"^\s*cd\s+['\"]?([^\s'\";&|]+)")
 
 # --- git push -------------------------------------------------------------------
 
-# git 전역 옵션 중 값을 따로 받는 것들(`git -C "my repo" push`). 정규식으로는 따옴표로 묶인
-# 값을 넘길 수 없어 구간을 shlex 로 나눠 본다.
-GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env",
-                  "--super-prefix"}
-PUSH_VALUE_OPTS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
-PUSH_ALL_FLAGS = {"--all", "--branches"}
-PUSH_DELETE_FLAGS = {"--delete", "-d"}
-# `-f` 는 `-uf` 처럼 다른 짧은 옵션과 묶여 올 수 있다.
-PUSH_FORCE_RE = re.compile(r"^(?:--force|--force-with-lease(?:=.*)?|-[a-zA-Z]*f[a-zA-Z]*)$")
+# 이 훅은 셸이 아니어서 명령 문자열에서 push 의 모든 꼴을 알아낼 수 없다. 그래서 알아본 꼴만
+# 통과시키고, push 일 수 있는데 알아보지 못한 것은 묻는다(fail-closed). push 가 실제로 무엇을
+# 바꾸는지는 직접 풀지 않고 git 에게 같은 인자로 `push --dry-run --porcelain` 을 시켜 받는다 —
+# push.default·remote.*.push·pushInsteadOf·글로브·--prune 을 git 과 다르게 풀 여지를 없앤다.
+PUSH_WORD_RE = re.compile(r"\bpush\b")
+# 환경 변수로 저장소·설정을 바꾸면 훅이 보는 저장소와 push 가 쓰는 저장소가 달라진다.
+GIT_ENV_RE = re.compile(r"\bGIT_(?:DIR|WORK_TREE|NAMESPACE|INDEX_FILE|OBJECT_DIRECTORY|COMMON_DIR"
+                        r"|CONFIG\w*)\b")
+# 이름이 위치에 영향을 주지 않는 git 전역 옵션. 그 밖의 전역 옵션(-c, --git-dir 등)이 붙은 push 는
+# 묻는다 — `-c` 는 원격 URL·refspec 을 바꿀 수 있는데, 훅이 그것을 대신 실행해 볼 수는 없다
+# (`-c core.sshCommand=...` 는 사용자가 승인하기 전에 임의 명령을 돌린다).
+GIT_PLAIN_FLAGS = {"--no-pager", "-p", "-P", "--paginate", "--no-optional-locks", "--no-replace-objects",
+                   "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs",
+                   "--no-advice"}
+# 내장 명령은 별칭으로 가릴 수 없다. 이 밖의 하위 명령은 별칭이 push 를 부르는지 본다.
+GIT_BUILTINS = set("""add am apply archive bisect blame branch bundle cat-file check-ignore checkout
+    cherry-pick clean clone commit config describe diff fetch for-each-ref format-patch fsck gc grep
+    help init log ls-files ls-remote ls-tree merge merge-base mv notes pull rebase reflog remote
+    reset restore rev-list rev-parse revert rm shortlog show show-ref sparse-checkout stash status
+    submodule switch symbolic-ref tag update-index update-ref version worktree""".split())
+# push 옵션 중 알아보는 것. 모르는 옵션·축약(`--del`, `--mirr`)은 git 이 받아 주더라도 묻는다.
+PUSH_SHORT = {"f": "--force", "u": "--set-upstream", "q": "--quiet", "v": "--verbose",
+              "n": "--dry-run", "d": "--delete", "4": "--ipv4", "6": "--ipv6"}
+PUSH_FLAGS = {"--force", "--force-if-includes", "--no-force-if-includes", "--no-force-with-lease",
+              "--set-upstream", "--quiet", "--verbose", "--progress", "--no-progress", "--dry-run",
+              "--porcelain", "--delete", "--tags", "--follow-tags", "--no-follow-tags", "--all",
+              "--branches", "--prune", "--atomic", "--no-atomic", "--verify", "--no-verify",
+              "--signed", "--no-signed", "--thin", "--no-thin", "--ipv4", "--ipv6",
+              "--no-recurse-submodules", "--force-with-lease"}
+# dry-run 계획에 영향이 없거나 출력을 바꾸는 것 — 계획을 받을 때는 뺀다.
+PUSH_PLAN_DROP = {"--set-upstream", "--quiet", "--verbose", "--progress", "--no-progress", "--porcelain",
+                  "--verify", "--no-verify", "--signed", "--no-signed", "--thin", "--no-thin",
+                  "--no-recurse-submodules"}
+# 셸 안의 셸·eval 로 넘긴 문자열도 실행된다.
+SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "fish", "pwsh", "powershell", "cmd"}
+EVALS = {"eval", "invoke-expression", "iex"}
+RUN_FLAG_RE = re.compile(r"^(?:-[a-zA-Z]*c|-command|/c)$", re.IGNORECASE)
+CD_WORDS = {"cd", "chdir", "set-location", "sl"}
+DIR_STACK_WORDS = {"pushd", "popd", "push-location", "pop-location"}
+LEAD_WORDS = {"if", "then", "do", "else", "elif", "while", "until", "!", "{", "time", "command", "builtin"}
+PUNCT = ";&|()<>\n"
+# 훅 하나에 쓸 수 있는 시간. Claude Code 가 훅을 시간 초과로 끊으면 판정 없이 명령이 실행된다.
+PUSH_BUDGET = 40
+# 원격에 닿기 전에 git 이 push 를 거부하는 로컬 오류.
+PUSH_LOCAL_FATAL_RE = re.compile(r"^fatal: (?:The current branch \S+ has no upstream branch"
+                                 r"|You are not currently on a branch|No configured push destination)", re.M)
+HEREDOC_RE = re.compile(r"<<(-?)[ \t]*(\\?)(?:'([^'\n]+)'|\"([^\"\n]+)\"|([A-Za-z0-9_.-]+))")
 
 
 def log(entry):
@@ -346,41 +387,271 @@ def git_snapshot(command, cwd):
 # --- git push 확인 ---------------------------------------------------------------
 
 
-def _find_pushes(command):
-    """명령 속 `git … push` 전부. 반환: [(push 뒤 인자들, -C 디렉터리들)]."""
-    found = []
-    for segment in SEGMENT_SPLIT_RE.split(command):
-        if "push" not in segment:
+class _Unclear(Exception):
+    """가역성을 확인하지 못한 push. 메시지가 ask 사유가 된다."""
+
+
+def _shell_text(command, powershell=False):
+    """판정용으로 다듬은 명령 텍스트.
+
+    주석과 따옴표 친 히어독 본문(커밋 메시지 등 데이터)을 걷어내고 줄 잇기를 합친다. 작은따옴표
+    안의 `$`·백틱은 실행되지 않으니 지운다. 따옴표 없는 백틱 명령 치환은 줄바꿈으로 바꿔 안의
+    명령이 따로 보이게 한다. `2>&1` 의 fd 번호는 지운다(남기면 refspec 처럼 보인다).
+    셸을 재현하려는 것이 아니다. 잘못 다듬으면 파싱이 실패하거나 push 가 드러나 묻게 될 뿐이다.
+    """
+    s, n, out, i = command, len(command), [], 0
+    esc = "`" if powershell else "\\"
+    quote, word_start, heredocs = None, True, []
+    while i < n:
+        c = s[i]
+        if quote == "'":
+            out.append("_" if c in "$`" else c)
+            quote = None if c == "'" else quote
+            i += 1
             continue
-        try:
-            toks = shlex.split(segment)
-        except ValueError:
-            continue
-        for i, tok in enumerate(toks):
-            if os.path.basename(tok) != "git":
+        if quote == '"':
+            if c == esc and i + 1 < n:
+                out.append(s[i:i + 2])
+                i += 2
                 continue
-            j, dirs = i + 1, []
-            while j < len(toks) and toks[j].startswith("-"):
-                if toks[j] in GIT_VALUE_OPTS and j + 1 < len(toks):
-                    if toks[j] == "-C":
-                        dirs.append(toks[j + 1])
-                    j += 2
-                else:
-                    j += 1
-            if j < len(toks) and toks[j] == "push":
-                found.append((toks[j + 1:], dirs))
-                break
-    return found
+            quote = None if c == '"' else quote
+            out.append(c)
+            i += 1
+            continue
+        if c == esc and i + 1 < n:
+            if s[i + 1] == "\n" or s.startswith("\r\n", i + 1):
+                out.append(" ")
+                i += 2 if s[i + 1] == "\n" else 3
+                continue
+            out.append(s[i:i + 2])
+            i += 2
+            word_start = False
+            continue
+        if c in "'\"":
+            quote = c
+        elif word_start and c == "#":
+            j = s.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        elif word_start and c.isdigit():
+            j = i
+            while j < n and s[j].isdigit():
+                j += 1
+            if j < n and s[j] in "<>":
+                i = j
+                continue
+        elif c == "`" and not powershell:
+            out.append("\n")
+            i += 1
+            word_start = True
+            continue
+        elif c == "<" and not powershell and not s.startswith("<<<", i):
+            m = HEREDOC_RE.match(s, i)
+            if m:
+                heredocs.append((m.group(1) == "-", m.group(3) or m.group(4) or m.group(5),
+                                 bool(m.group(2) or m.group(3) or m.group(4))))
+                out.append(" ")
+                i = m.end()
+                continue
+        elif c == "\n" and heredocs:
+            out.append("\n")
+            i += 1
+            for strip, delim, quoted in heredocs:
+                j = i
+                while True:
+                    e = s.find("\n", j)
+                    line = (s[j:] if e < 0 else s[j:e]).rstrip("\r")
+                    if (line.lstrip("\t") if strip else line) == delim:
+                        body = s[i:j]
+                        # 따옴표 없는 히어독은 본문의 명령 치환을 실행한다.
+                        if not quoted and ("$(" in body or "`" in body):
+                            out.append(body.replace("`", "\n"))
+                        out.append("\n")
+                        i = n if e < 0 else e + 1
+                        break
+                    if e < 0:
+                        # 끝 구분자가 없다. 본문을 지우지 않고 명령으로 본다.
+                        break
+                    j = e + 1
+            heredocs = []
+            word_start = True
+            continue
+        out.append(c)
+        word_start = c in " \t\r\n;&|()<>"
+        i += 1
+    return "".join(out)
 
 
-def _push_remote(cwd):
-    """원격 이름 없이 `git push` 했을 때 git 이 고르는 원격."""
-    b = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd).stdout.strip()
-    for key in ("branch.%s.pushRemote" % b, "remote.pushDefault", "branch.%s.remote" % b):
-        r = _git(["config", "--get", key], cwd).stdout.strip()
-        if r:
-            return r
-    return "origin"
+def _tokens(text, powershell):
+    lx = shlex.shlex(text, posix=True, punctuation_chars=PUNCT)
+    lx.whitespace = " \t\r"
+    lx.whitespace_split = True
+    lx.commenters = ""
+    if powershell:
+        lx.escape = ""                      # `C:\repo` 를 그대로 둔다
+    return list(lx)
+
+
+def _cmd_name(word):
+    name = re.split(r"[\\/]", word)[-1].lower()
+    return name[:-4] if name.endswith(".exe") else name
+
+
+def _resolve_dir(base, target):
+    if base is None or not target or "$" in target or "`" in target:
+        return None
+    path = os.path.expanduser(target)
+    path = path if os.path.isabs(path) else os.path.join(base, path)
+    return path if os.path.isdir(path) else None
+
+
+def _git_call(words, k, cwd, pushes):
+    """words[k] 가 git 일 때 그 호출을 본다. push 면 (인자, 디렉터리)를 pushes 에 넣는다."""
+    j, dirs, risky, aliases = k + 1, [], None, {}
+    while j < len(words) and words[j].startswith("-"):
+        opt, _, val = words[j].partition("=")
+        if words[j] in GIT_PLAIN_FLAGS:
+            j += 1
+            continue
+        if opt in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env",
+                   "--super-prefix", "--exec-path") and not val:
+            val = words[j + 1] if j + 1 < len(words) else ""
+            j += 1
+        if opt == "-C":
+            dirs.append(val)
+        else:
+            risky = risky or opt
+            if opt == "-c" and val.startswith("alias."):
+                name, _, body = val[len("alias."):].partition("=")
+                aliases[name] = body
+        j += 1
+    sub = words[j] if j < len(words) else ""
+    if sub == "push":
+        if risky:
+            raise _Unclear("`git %s` can change which repository or remote the push uses" % risky)
+        d = cwd
+        for x in dirs:
+            d = _resolve_dir(d, x)
+        if d is None:
+            raise _Unclear("the directory this push runs in cannot be determined from the command")
+        pushes.append((words[j + 1:], d))
+    elif ("$" in sub or "`" in sub) and PUSH_WORD_RE.search(_command):
+        raise _Unclear("the git subcommand is expanded by the shell")
+    elif sub and sub not in GIT_BUILTINS:
+        body = aliases.get(sub)
+        if body is None:
+            body = _git(["config", "--get", "alias." + sub], cwd or os.getcwd()).stdout
+        if PUSH_WORD_RE.search(body):
+            raise _Unclear("git alias `%s` runs push" % sub)
+
+
+def _simple_command(words, cwd, powershell, pushes, depth):
+    """한 단순 명령을 본다. 반환: 이 명령 뒤의 작업 디렉터리(None 이면 알 수 없음)."""
+    for k, w in enumerate(words):
+        # 셸 안의 셸·eval·명령 치환으로 넘긴 문자열은 그 자리에서 실행된다.
+        if depth < 3 and PUSH_WORD_RE.search(w) and (
+                "$(" in w or "`" in w and not powershell
+                or k and RUN_FLAG_RE.match(words[k - 1]) and any(_cmd_name(x) in SHELLS for x in words[:k - 1])
+                or k and _cmd_name(words[0]) in EVALS):
+            _walk(w, cwd, powershell, pushes, depth + 1)
+    for k, w in enumerate(words):
+        name = _cmd_name(w)
+        if name in ("git", "git-push"):
+            if name == "git-push":
+                words = words[:k] + ["git", "push"] + words[k + 1:]
+            if any(_cmd_name(x) in ("xargs", "parallel") for x in words[:k]):
+                if "push" in words[k + 1:]:
+                    raise _Unclear("the push arguments come from xargs")
+            _git_call(words, k, cwd, pushes)
+    lead = 0
+    while lead < len(words) and words[lead] in LEAD_WORDS:
+        lead += 1
+    names = [_cmd_name(w) for w in words]
+    if any(n in DIR_STACK_WORDS for n in names) or any(n in CD_WORDS for n in names[lead + 1:]):
+        return None
+    if lead < len(words) and names[lead] in CD_WORDS:
+        args = words[lead + 1:]
+        if "-" in args:
+            return None
+        args = [a for a in args if not a.startswith("-")]
+        return _resolve_dir(cwd, args[0] if args else "~")
+    return cwd
+
+
+def _walk(text, cwd, powershell, pushes, depth=0):
+    """명령 텍스트를 단순 명령 단위로 차례로 보며 push 를 모은다. 파싱하지 못하면 ValueError."""
+    toks = _tokens(text, powershell)
+    stack, words, i = [], [], 0
+    while i < len(toks):
+        t = toks[i]
+        i += 1
+        if not set(t) <= set(PUNCT):
+            words.append(t)
+            continue
+        # 리다이렉트와 그 대상은 명령의 일부가 아니다. `>(…)`·`<(…)` 는 프로세스 치환이라 안의 명령이 실행된다.
+        if ("<" in t or ">" in t) and "(" not in t:
+            i += 1
+            if not any(ch in t for ch in "();|\n"):
+                continue
+        if words:
+            cwd = _simple_command(words, cwd, powershell, pushes, depth)
+            words = []
+        for ch in t:
+            if ch == "(":
+                stack.append(cwd)
+            elif ch == ")" and stack:
+                cwd = stack.pop()
+    if words:
+        _simple_command(words, cwd, powershell, pushes, depth)
+
+
+def _push_plan_args(args):
+    """push 인자를 dry-run 에 넘길 꼴로 바꾼다. 반환: 인자 목록, 사용자 자신이 dry-run 이면 None."""
+    out, i, options_done = [], 0, False
+    while i < len(args):
+        a = args[i]
+        i += 1
+        if "$" in a or "`" in a:
+            raise _Unclear("the argument %r is expanded by the shell" % a)
+        if options_done or not a.startswith("-") or a == "-":
+            out.append(a)
+            continue
+        if a == "--":
+            options_done = True
+            out.append(a)
+            continue
+        if a == "-o" or a.startswith("--push-option") or a.startswith("--repo") or a.startswith("--recurse-submodules"):
+            name, eq, val = a.partition("=")
+            if name not in ("-o", "--push-option", "--repo", "--recurse-submodules"):
+                raise _Unclear("unknown push option %r" % a)
+            if not eq:
+                if i >= len(args):
+                    raise _Unclear("option %r has no value" % a)
+                val = args[i]
+                i += 1
+            if name == "--repo":
+                out.append("--repo=" + val)
+            elif name == "--recurse-submodules" and val not in ("no", "check"):
+                raise _Unclear("--recurse-submodules=%s also pushes submodules" % val)
+            continue
+        if a == "--mirror":
+            raise _Unclear("--mirror pushes every local ref, including the hook's own backups under %s"
+                           % BACKUP_PREFIX)
+        if a.startswith("--"):
+            names = [a]
+        else:                               # `-uf` 처럼 묶인 짧은 옵션
+            if any(ch not in PUSH_SHORT for ch in a[1:]):
+                raise _Unclear("unknown push option %r" % a)
+            names = [PUSH_SHORT[ch] for ch in a[1:]]
+        for name in names:
+            base = name.partition("=")[0] if name.startswith(("--force-with-lease=", "--signed=")) else name
+            if base not in PUSH_FLAGS:
+                raise _Unclear("unknown push option %r" % name)
+            if base == "--dry-run":
+                return None
+            if base not in PUSH_PLAN_DROP:
+                out.append(name)
+    return out
 
 
 # 원격 조회가 사람의 입력을 기다리며 훅을 멈춰 세우지 않게 한다. GCM 은 GIT_TERMINAL_PROMPT 를
@@ -388,20 +659,49 @@ def _push_remote(cwd):
 _NO_PROMPT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never", "GIT_NO_LAZY_FETCH": "1"}
 
 
-def _push_urls(remote, cwd):
-    """push 가 실제로 쓰는 URL 전부(pushurl·pushInsteadOf 반영, pushurl 이 여럿이면 git 은 전부에 쓴다).
-    원격 이름 대신 URL 을 직접 주면 그대로 쓴다."""
-    return _git(["remote", "get-url", "--push", "--all", remote], cwd).stdout.split() or [remote]
-
-
-def _remote_refs(url, cwd):
-    """원격의 {ref: sha}. 조회하지 못하면 None — 그때는 가역성을 보장할 수 없다."""
+def _net_env(cwd):
     env = dict(os.environ, **_NO_PROMPT_ENV)
     # 호스트 키·암호 프롬프트로 ssh 가 멈추지 않게 한다. 사용자의 ssh 설정이 있으면 건드리지 않는다.
     if not (env.get("GIT_SSH_COMMAND") or env.get("GIT_SSH")
             or _git(["config", "core.sshCommand"], cwd).stdout.strip()):
         env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
-    r = _git(["ls-remote", url], cwd, env, timeout=20)
+    return env
+
+
+def _left(deadline):
+    left = deadline - time.monotonic()
+    if left < 1:
+        raise subprocess.TimeoutExpired("git", PUSH_BUDGET)
+    return min(left, 20)
+
+
+def _push_plan(args, cwd, deadline):
+    """git 이 이 push 로 바꿀 원격 ref. 반환: {url: [(flag, src, dst)]}.
+
+    flag 는 porcelain 의 것이다: `+` 강제 갱신, `-` 삭제, `*` 새 ref, ` ` fast-forward, `!` 거부.
+    """
+    p = _git(["push", "--dry-run", "--porcelain", "--no-verify", "--recurse-submodules=no"] + args,
+             cwd, _net_env(cwd), timeout=_left(deadline))
+    if "fatal:" in p.stderr:
+        # 원격에 닿기 전에 실패하는 로컬 설정 오류는 실제 push 도 똑같이 실패한다 — 아무것도 바뀌지 않는다.
+        if PUSH_LOCAL_FATAL_RE.search(p.stderr):
+            return {}
+        last = [line for line in p.stderr.splitlines() if line.startswith("fatal:")][-1]
+        raise _Unclear("git could not plan this push (%s)" % last)
+    plan, url = {}, None
+    for line in p.stdout.splitlines():
+        if line.startswith("To "):
+            url = line[3:]
+            plan.setdefault(url, [])
+        elif url and len(line) > 2 and line[1] == "\t":
+            src, _, dst = line.split("\t")[1].partition(":")
+            plan[url].append((line[0], src, dst))
+    return plan
+
+
+def _remote_refs(url, cwd, deadline):
+    """원격의 {ref: sha}. 조회하지 못하면 None — 그때는 가역성을 보장할 수 없다."""
+    r = _git(["ls-remote", url], cwd, _net_env(cwd), timeout=_left(deadline))
     if r.returncode != 0:
         return None
     refs = {}
@@ -412,94 +712,47 @@ def _remote_refs(url, cwd):
     return refs
 
 
-def _check_push(args, dirs, cwd):
-    """push 하나가 되돌릴 수 있는지 본다. 반환: (ask 사유, 안내 문구들)."""
-    for d in dirs:                          # 판정은 push 가 실제로 도는 저장소에서 한다
-        cwd = os.path.join(cwd, os.path.expanduser(d))
-    if not os.path.isdir(cwd) or _git(["rev-parse", "--git-dir"], cwd).returncode != 0:
-        return None, []
-
-    force = any(PUSH_FORCE_RE.match(a) for a in args)
-    positionals = []
-    repo_opt = None                         # `--repo <원격>` 은 위치 인자 원격과 같다 (둘 다 있으면 위치 인자)
-    for i, a in enumerate(args):
-        if i and args[i - 1] in PUSH_VALUE_OPTS:
-            if args[i - 1] == "--repo":
-                repo_opt = a
-            continue
-        if a.startswith("--repo="):
-            repo_opt = a[len("--repo="):]
-        if a.startswith("-"):
-            continue
-        positionals.append(a)
-    remote = positionals[0] if positionals else (repo_opt or _push_remote(cwd))
-    refspecs = positionals[1:]
-
-    def local_refs(prefix):
-        return _git(["for-each-ref", "--format=%(refname)", prefix], cwd).stdout.split()
-
-    # 덮어쓰거나 지울 수 있는 원격 ref. wide 면 원격의 모든 ref 가 대상이다.
-    wide = (any(a in ("--mirror", "--prune") for a in args)
-            or _git(["config", "--bool", "remote.%s.mirror" % remote], cwd).stdout.strip() == "true")
-    deleting = any(a in PUSH_DELETE_FLAGS for a in args)
-    names = []
-    if force and any(a in PUSH_ALL_FLAGS for a in args):
-        names += local_refs("refs/heads/")
-    if force and "--tags" in args:
-        names += local_refs("refs/tags/")
-    if force and not refspecs and not any(a in PUSH_ALL_FLAGS or a == "--tags" for a in args):
-        names.append("HEAD")
-    for spec in refspecs:
-        if deleting or (spec.startswith(":") and len(spec) > 1):
-            names.append(spec.lstrip(":"))  # `--delete origin x` 와 빈 src refspec `origin :x`
-        elif force or spec.startswith("+"):   # `+` 는 그 refspec 만 force 한다
-            dst = spec.split(":")[-1].lstrip("+")
-            if "*" in dst or not dst:          # 글로브·`:`(일치 브랜치 전부)
-                wide = True
-            else:
-                names.append(dst)
-    if not wide and not names:
-        return None, []                     # fast-forward·새 브랜치 push 는 원격 커밋을 지우지 않는다
-    if any(n in ("HEAD", "@") for n in names):
-        b = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd).stdout.strip()
-        names = [b if n in ("HEAD", "@") else n for n in names]
-
+def _check_push(args, cwd, deadline):
+    """push 하나가 되돌릴 수 있는지 본다. 되돌릴 수 없거나 확인하지 못하면 _Unclear. 반환: 안내 문구들."""
+    args = _push_plan_args(args)
+    if args is None:
+        return []
     notes = []
-    for url in _push_urls(remote, cwd):
-        reason, note = _pin_remote(url, wide, names, cwd)
-        if reason:
-            return reason, []
-        notes += note
-    return None, notes
+    for url, entries in _push_plan(args, cwd, deadline).items():
+        for _flag, src, dst in entries:
+            # 백업 ref 를 내보내면 스냅샷에 담긴 .gitignore 대상(.env 등)까지 원격에 올라간다.
+            if src.startswith(BACKUP_PREFIX) or not dst.startswith(("refs/heads/", "refs/tags/")):
+                raise _Unclear("it writes %s on %s, which is not a branch or tag" % (dst or src, url))
+        doomed = [dst for flag, _src, dst in entries if flag in "+-"]
+        if doomed:
+            notes += _pin_remote(url, doomed, cwd, deadline)
+    return notes
 
 
-def _pin_remote(url, wide, names, cwd):
-    """url 에서 사라질 원격 커밋이 전부 로컬에 있으면 고정한다. 반환: (ask 사유, 안내 문구들)."""
-    remote_refs = _remote_refs(url, cwd)
+def _pin_remote(url, refs, cwd, deadline):
+    """url 의 refs 에서 사라질 원격 커밋이 전부 로컬에 있으면 고정한다. 반환: 안내 문구들."""
+    remote_refs = _remote_refs(url, cwd, deadline)
     if remote_refs is None:
-        return ("Could not query remote (%s), so it cannot be verified that the remote commits this push "
-                "would overwrite or delete are still present locally. Continue?" % url), []
-    # git 이 짧은 대상 이름을 푸는 규칙(ref_rev_parse_rules)을 그대로 따른다.
-    at_risk = {ref: sha for ref, sha in remote_refs.items()
-               if wide or any(ref in (n, "refs/" + n, "refs/tags/" + n, "refs/heads/" + n,
-                                      "refs/remotes/" + n) for n in names)}
+        raise _Unclear("could not query remote %s, so it cannot be verified that the remote commits this "
+                       "push would overwrite or delete are still present locally" % url)
+    at_risk = {ref: remote_refs[ref] for ref in refs if ref in remote_refs}
     if not at_risk:
-        return None, []
+        return []
 
     check = _git(["cat-file", "--batch-check"], cwd, dict(os.environ, **_NO_PROMPT_ENV),
                  stdin="".join(sha + "\n" for sha in at_risk.values()))
     absent = {line.split()[0] for line in check.stdout.splitlines() if line.endswith(" missing")}
     missing = sorted(ref for ref, sha in at_risk.items() if sha in absent)
     if check.returncode != 0 or missing:
-        return ("Remote %s has commits at %s that are not present locally. This push would overwrite or delete "
-                "them irreversibly (running git fetch first preserves them locally). Continue?"
-                % (url, ", ".join(missing or sorted(at_risk)))), []
+        raise _Unclear("remote %s has commits at %s that are not present locally. This push would overwrite "
+                       "or delete them irreversibly (running git fetch first preserves them locally)"
+                       % (url, ", ".join(missing or sorted(at_risk))))
 
     # 같은 이름의 로컬 ref 가 이미 같은 커밋을 쥐고 있으면 고정하지 않는다.
     held = set(_git(["for-each-ref", "--format=%(refname) %(objectname)"], cwd).stdout.splitlines())
     pins = {ref: sha for ref, sha in at_risk.items() if "%s %s" % (ref, sha) not in held}
     if not pins:
-        return None, []
+        return []
     # 한 명령 속 여러 push·여러 URL 이 같은 초에 고정해도 겹치지 않게 번호를 붙이고, `create` 로
     # 덮어쓰기를 막는다(겹치면 실패 → ask). `/` 는 유지한다 — feat/x 와 feat-x 를 구분해야 한다.
     global _pin_seq
@@ -508,38 +761,52 @@ def _pin_remote(url, wide, names, cwd):
                               _pin_seq)
     tx = "".join("create %s%s %s\n" % (base, ref[len("refs/"):], sha) for ref, sha in pins.items())
     if _git(["update-ref", "--stdin"], cwd, stdin=tx).returncode != 0:
-        return ("Could not pin locally the commits on remote %s that this push would overwrite. Continue?" % url), []
+        raise _Unclear("could not pin locally the commits on remote %s that this push would overwrite" % url)
     _prune(cwd)
     shown = sorted(pins)
     listed = ", ".join(shown[:5]) + (" and %d more" % (len(shown) - 5) if len(shown) > 5 else "")
-    return None, ["Before the push, pinned remote %s refs %s under %s (to undo: git push --force "
-                  "%s %s<ref>:refs/<ref>, e.g. %s%s:%s)."
-                  % (url, listed, base, url, base, base, shown[0][len("refs/"):], shown[0])]
+    return ["Before the push, pinned remote %s refs %s under %s for %d days (to undo: git push --force "
+            "%s %s<ref>:refs/<ref>, e.g. %s%s:%s)."
+            % (url, listed, base, PRUNE_DAYS, url, base, base, shown[0][len("refs/"):], shown[0])]
 
 
 _pin_seq = 0
+_command = ""                               # 지금 보는 명령 원문 (셸이 확장하는 하위 명령 판정용)
 
 
-def push_check(command, cwd):
+def push_check(command, cwd, powershell=False):
     """원격 커밋을 덮어쓰거나 지우는 push 가 되돌릴 수 있는지 본다. 반환: (ask 사유, 안내 문구들).
 
-    대상은 force push(`+refspec` 포함), 원격 ref 삭제, --mirror/--prune 이다. 사라질 원격 커밋이
-    전부 로컬에 있으면 refs/claude-backups/<ts>-push/ 에 고정하고 통과시킨다 — 그 ref 를 다시
-    push 하면 원격이 원래대로 돌아온다. 하나라도 로컬에 없거나 원격을 조회하지 못하면 묻는다.
-    fast-forward push 는 원격 히스토리를 지우지 않으므로 보지 않는다.
+    git 의 dry-run 계획에서 강제 갱신(`+`)·삭제(`-`)될 원격 ref 를 받아, 사라질 커밋이 전부 로컬에
+    있으면 refs/claude-backups/<ts>-push/ 에 고정하고 통과시킨다 — 그 ref 를 다시 push 하면 원격이
+    원래대로 돌아온다. 하나라도 로컬에 없거나, 원격을 조회하지 못하거나, push 를 알아보지 못하면
+    묻는다. fast-forward·새 ref push 는 원격 히스토리를 지우지 않으므로 그대로 통과한다.
     """
-    dirs = _target_dirs(command, cwd)       # 선행 `cd <경로>` 를 따른다
-    base = dirs[0] if dirs else cwd
-    notes = []
-    for args, cdirs in _find_pushes(command):
+    # push 라는 낱말이 없어도 git 별칭이 push 를 부를 수 있다.
+    if not PUSH_WORD_RE.search(command) and "git" not in command.lower():
+        return None, []
+    global _command
+    _command = command
+    deadline = time.monotonic() + PUSH_BUDGET
+    try:
+        pushes = []
         try:
-            reason, n = _check_push(args, cdirs, base)
-        except subprocess.TimeoutExpired:
-            reason, n = "Remote query timed out, so it cannot be verified that this push is reversible. Continue?", []
-        if reason:
-            return reason, []
-        notes += n
-    return None, notes
+            _walk(_shell_text(command, powershell), cwd, powershell, pushes)
+        except ValueError:
+            if not PUSH_WORD_RE.search(command):
+                return None, []
+            raise _Unclear("the command could not be parsed")
+        if pushes and GIT_ENV_RE.search(command):
+            raise _Unclear("the command sets a GIT_* variable that changes the repository the push uses")
+        notes = []
+        for args, d in pushes:
+            notes += _check_push(args, d, deadline)
+        return None, notes
+    except _Unclear as exc:
+        return "Could not confirm that this push is reversible: %s. Continue?" % exc, []
+    except subprocess.TimeoutExpired:
+        return ("Checking the remote took too long, so it cannot be verified that this push is reversible. "
+                "Continue?"), []
 
 
 # --- 셰임 선행 줄 ----------------------------------------------------------------
@@ -625,11 +892,11 @@ def main():
     cwd = data.get("cwd") or os.getcwd()
 
     try:
-        reason, notes = push_check(command, cwd)
+        reason, notes = push_check(command, cwd, tool_name == "PowerShell")
     except Exception as exc:  # noqa: BLE001 — 가역성을 확인하지 못한 push 를 그냥 내보내지 않는다
         log({"decision": "guard-error", "error": repr(exc)})
         reason, notes = ("A hook error occurred while checking whether the push is reversible (%r). Continue?" % exc
-                         if _find_pushes(command) else None), []
+                         if PUSH_WORD_RE.search(command) else None), []
     if reason:
         log({"tool": tool_name, "command": command, "decision": "ask-push-irreversible"})
         emit("ask", reason)
