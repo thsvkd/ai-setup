@@ -26,12 +26,12 @@ while [[ $# -gt 0 ]]; do
         --uninstall) UNINSTALL=1; shift ;;
         --newline)
             if [[ -z "${2:-}" ]]; then
-                echo "--newline 값은 shift-enter 또는 ctrl-enter 여야 합니다." >&2
+                echo "--newline must be shift-enter or ctrl-enter." >&2
                 exit 1
             fi
             NEWLINE="$2"; NEWLINE_GIVEN=1; shift 2 ;;
         --newline=*) NEWLINE="${1#*=}"; NEWLINE_GIVEN=1; shift ;;
-        *) echo "알 수 없는 옵션: $1" >&2; exit 1 ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
 
@@ -40,20 +40,20 @@ if [[ "$NEWLINE_GIVEN" -eq 1 ]]; then
     case "$NEWLINE" in
         shift-enter|ctrl-enter) ;;
         *)
-            echo "--newline 값은 shift-enter 또는 ctrl-enter 여야 합니다 (받은 값: $NEWLINE)." >&2
+            echo "--newline must be shift-enter or ctrl-enter (got: $NEWLINE)." >&2
             exit 1 ;;
     esac
 fi
 
 if ! PY="$(resolve_python_command)"; then
-    echo "❌ Python 3을 찾을 수 없습니다." >&2
+    echo "❌ Python 3 not found." >&2
     print_python_install_hint
     exit 1
 fi
 
 APPLY="$REPO_ROOT/res/keybinds/apply.py"
 if [[ ! -f "$APPLY" ]]; then
-    echo "❌ 키바인드 스크립트를 찾을 수 없습니다: $APPLY" >&2
+    echo "❌ Keybinding script not found: $APPLY" >&2
     exit 1
 fi
 

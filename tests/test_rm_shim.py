@@ -27,7 +27,7 @@ def base_dir():
     probe = subprocess.run(["bash", "-c", 'printf %s "$RMSHIM_PROBE"'], capture_output=True,
                            env=dict(os.environ, RMSHIM_PROBE="ok"))
     if probe.stdout != b"ok":
-        pytest.fail("bash 가 넘겨준 환경을 받지 못한다(WSL bash?) — rm 테스트를 돌리지 않는다: %r"
+        pytest.fail("bash does not receive the environment we pass (WSL bash?) - not running the rm tests: %r"
                     % shutil.which("bash"))
     shutil.rmtree(str(BASE), ignore_errors=True)
     BASE.mkdir(parents=True, exist_ok=True)
@@ -63,38 +63,38 @@ def observe(script, use_shim):
 
 
 CASES = [
-    ("일반 파일", "rm a.txt"),
-    ("디렉터리 -r", "rm -r sub"),
-    ("디렉터리 -rf", "rm -rf sub"),
-    ("빈 디렉터리 -d", "rm -d emptydir"),
-    ("-f 없는 파일", "rm -f nope.txt"),
-    ("없는 파일(플래그 없음)", "rm nope.txt"),
-    ("변수 확장", 'V="$D/sub"; rm -rf "$V"'),
-    ("변수+슬래시", 'V="$D"; rm -rf "$V/sub"'),
-    ("변수+글로브", 'V="$D"; rm -f "$V"/*.txt'),
-    ("글로브 미일치 -f", "rm -f ./*.nomatch"),
-    ("글로브 미일치(플래그 없음)", "rm ./*.nomatch"),
-    ("글로브 일치", "rm ./*.txt"),
-    ("-- 뒤 대시 파일", "rm -- -weird"),
-    ("공백 포함 이름", 'rm "name with spaces.txt"'),
-    ("줄바꿈 포함 이름", 'touch "$D/nl\nname"; rm "$D/nl\nname"'),
-    ("심볼릭 링크", "rm link"),
-    ("여러 대상", "rm a.txt b.txt c.log"),
-    ("일부만 존재 -f", "rm -f a.txt nope.txt b.txt"),
-    ("일부만 존재(플래그 없음)", "rm a.txt nope.txt b.txt"),
+    ("plain file", "rm a.txt"),
+    ("directory -r", "rm -r sub"),
+    ("directory -rf", "rm -rf sub"),
+    ("empty directory -d", "rm -d emptydir"),
+    ("nonexistent file with -f", "rm -f nope.txt"),
+    ("nonexistent file (no flags)", "rm nope.txt"),
+    ("variable expansion", 'V="$D/sub"; rm -rf "$V"'),
+    ("variable + slash", 'V="$D"; rm -rf "$V/sub"'),
+    ("variable + glob", 'V="$D"; rm -f "$V"/*.txt'),
+    ("unmatched glob with -f", "rm -f ./*.nomatch"),
+    ("unmatched glob (no flags)", "rm ./*.nomatch"),
+    ("matched glob", "rm ./*.txt"),
+    ("dash file after --", "rm -- -weird"),
+    ("name with spaces", 'rm "name with spaces.txt"'),
+    ("name with newline", 'touch "$D/nl\nname"; rm "$D/nl\nname"'),
+    ("symbolic link", "rm link"),
+    ("multiple targets", "rm a.txt b.txt c.log"),
+    ("only some exist with -f", "rm -f a.txt nope.txt b.txt"),
+    ("only some exist (no flags)", "rm a.txt nope.txt b.txt"),
     ("find -exec +", 'find . -name "*.log" -exec rm -f {} +'),
     ("find -exec ;", 'find . -name "*.log" -exec rm -f {} \\;'),
     ("xargs -0", 'find . -name "*.log" -print0 | xargs -0 rm -f'),
-    ("체이닝", "cd sub && rm -f deep/x.log; echo done"),
-    ("멀티라인", "cd sub\nrm -rf deep\necho done"),
-    ("히어독 안의 rm(데이터)", "cat > note.md <<'EOT'\nrm -rf /\nEOT\nwc -l < note.md"),
-    ("스크립트 내부 rm", "printf '#!/bin/sh\\nrm -f \"$1\"\\n' > s.sh; chmod +x s.sh; ./s.sh a.txt"),
-    ("sh -c 내부", 'sh -c "rm -f a.txt"'),
-    ("래퍼 timeout", "timeout 5 rm -f a.txt"),
-    ("인자 없음", "rm"),
-    ("점 대상", "rm -rf ."),
-    ("상위 점 대상", "rm -rf sub/.."),
-    ("CLAUDE_NO_TRASH 탈출구", "CLAUDE_NO_TRASH=1 rm -rf sub"),
+    ("chaining", "cd sub && rm -f deep/x.log; echo done"),
+    ("multiline", "cd sub\nrm -rf deep\necho done"),
+    ("rm inside a heredoc (data)", "cat > note.md <<'EOT'\nrm -rf /\nEOT\nwc -l < note.md"),
+    ("rm inside a script", "printf '#!/bin/sh\\nrm -f \"$1\"\\n' > s.sh; chmod +x s.sh; ./s.sh a.txt"),
+    ("inside sh -c", 'sh -c "rm -f a.txt"'),
+    ("timeout wrapper", "timeout 5 rm -f a.txt"),
+    ("no arguments", "rm"),
+    ("dot target", "rm -rf ."),
+    ("parent dot target", "rm -rf sub/.."),
+    ("CLAUDE_NO_TRASH escape hatch", "CLAUDE_NO_TRASH=1 rm -rf sub"),
 ]
 
 
@@ -102,7 +102,7 @@ CASES = [
 def test_matches_real_rm(name, script):
     real = observe(script, use_shim=False)
     shim = observe(script, use_shim=True)
-    assert real == shim, "원본 rm 과 결과가 다르다: %s" % name
+    assert real == shim, "result differs from the real rm: %s" % name
 
 
 REFUSED = ["rm -rf ~", 'rm -rf "$HOME"', "rm -rf /"]
@@ -111,13 +111,13 @@ REFUSED = ["rm -rf ~", 'rm -rf "$HOME"', "rm -rf /"]
 # PATH 에서 `bash` 가 WSL 로 잡히면 PATH·HOME 이 넘어가지 않아, 여기 있는 명령이 WSL 의 진짜
 # rm 으로 실제 홈을 지웠다(2026-10-11). 확인에 실패하면 아무것도 지우지 않고 97 로 끝난다.
 SHIM_GUARD = ('case "$(command -v rm)" in */shims/rm) ;; '
-              '*) echo "셰임이 아닌 rm: $(command -v rm)" >&2; exit 97 ;; esac\n')
+              '*) echo "rm is not the shim: $(command -v rm)" >&2; exit 97 ;; esac\n')
 
 
 def run_via_shim(script, **kwargs):
     proc = subprocess.run(["bash", "-c", SHIM_GUARD + script],
                           capture_output=True, text=True, encoding="utf-8", **kwargs)
-    assert proc.returncode != 97, "bash 가 셰임을 쓰지 않는다 — %s" % proc.stderr
+    assert proc.returncode != 97, "bash is not using the shim - %s" % proc.stderr
     return proc
 
 
@@ -148,7 +148,7 @@ def test_root_and_home_are_refused(script, tmp_path):
     env["PATH"] = _fake_trash_path(tmp_path)
     proc = run_via_shim(script, cwd=str(BASE), env=env)
     assert proc.returncode != 0
-    assert "거부" in proc.stderr
+    assert "refusing" in proc.stderr
     assert (home / "keep").is_file()
 
 
@@ -163,7 +163,7 @@ def test_tmp_targets_are_really_deleted(tmp_path):
     assert not target.exists()
 
 
-@pytest.mark.skipif(shutil.which("trash-put") is None, reason="trash-put 미설치")
+@pytest.mark.skipif(shutil.which("trash-put") is None, reason="trash-put not installed")
 def test_deleted_content_is_recoverable():
     d = BASE / "rec"
     make_fixture(d)
@@ -200,7 +200,7 @@ def test_macos_builtin_trash_is_used_when_trash_put_is_absent(tmp_path):
     proc = subprocess.run(["bash", "-c", "rm -rf sub a.txt -- -weird"], cwd=str(d), env=env,
                           capture_output=True, text=True, encoding="utf-8")
     assert proc.returncode == 0, proc.stderr
-    assert "휴지통 없이" not in proc.stderr
+    assert "without the trash" not in proc.stderr
     assert "OPT:" not in log.read_text(encoding="utf-8")
     assert sorted(p.name for p in bin_dir.iterdir()) == ["-weird", "a.txt", "sub"]
 
@@ -214,7 +214,7 @@ def test_sandboxed_home_under_tmp_can_be_cleaned_up(tmp_path):
     env.pop("CLAUDE_NO_TRASH", None)
     proc = run_via_shim('rm -rf "$HOME"', env=env)
     assert proc.returncode == 0, proc.stderr
-    assert "거부" not in proc.stderr
+    assert "refusing" not in proc.stderr
 
 
 def test_overridden_home_outside_tmp_is_still_refused(tmp_path):
@@ -225,7 +225,7 @@ def test_overridden_home_outside_tmp_is_still_refused(tmp_path):
     env.pop("CLAUDE_NO_TRASH", None)
     proc = run_via_shim('rm -rf "$HOME"', env=env)
     assert proc.returncode != 0
-    assert "거부" in proc.stderr
+    assert "refusing" in proc.stderr
     assert app_home.is_dir()
 
 

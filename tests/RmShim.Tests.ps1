@@ -51,32 +51,32 @@ AfterAll {
     }
 }
 
-Describe 'RmShim 이 원본 Remove-Item 과 같은 결과를 낸다' {
+Describe 'RmShim gives the same result as the real Remove-Item' {
     It '<name>' -ForEach @(
-        @{ name = '일반 파일';                  script = 'Remove-Item a.txt' }
-        @{ name = 'rm 별칭';                    script = 'rm a.txt' }
-        @{ name = 'del 별칭';                   script = 'del a.txt' }
-        @{ name = 'ri 별칭';                    script = 'ri a.txt' }
-        @{ name = '디렉터리 -Recurse';          script = 'Remove-Item sub -Recurse' }
-        @{ name = '디렉터리 -Recurse -Force';   script = 'Remove-Item sub -Recurse -Force' }
-        @{ name = '빈 디렉터리';                script = 'Remove-Item emptydir' }
-        @{ name = '와일드카드';                 script = 'Remove-Item *.txt' }
-        @{ name = '와일드카드 미일치';          script = 'Remove-Item *.nomatch' }
-        @{ name = '없는 파일';                  script = 'Remove-Item nope.txt' }
-        @{ name = '없는 파일 -EA Silent';       script = 'Remove-Item nope.txt -ErrorAction SilentlyContinue' }
-        @{ name = '여러 대상';                  script = 'Remove-Item a.txt,b.txt,c.log' }
-        @{ name = '일부만 존재';                script = 'Remove-Item a.txt,nope.txt,b.txt' }
-        @{ name = '공백 포함 이름';             script = 'Remove-Item "name with spaces.txt"' }
-        @{ name = '변수 확장';                  script = '$f = "a.txt"; Remove-Item $f' }
-        @{ name = '변수+경로 결합';             script = '$d = "sub"; Remove-Item "$d/deep" -Recurse' }
-        @{ name = '-LiteralPath';               script = 'Remove-Item -LiteralPath a.txt' }
-        @{ name = '-Path 명시';                 script = 'Remove-Item -Path a.txt' }
-        @{ name = '파이프라인';                 script = 'Get-ChildItem *.log -Recurse | Remove-Item' }
-        @{ name = '파이프라인 디렉터리';        script = 'Get-ChildItem -Directory | Remove-Item -Recurse' }
-        @{ name = '-WhatIf 는 지우지 않는다';   script = 'Remove-Item a.txt -WhatIf' }
-        @{ name = '-Include 필터';              script = 'Remove-Item * -Include *.log -Recurse' }
-        @{ name = '중첩 경로';                  script = 'Remove-Item sub/deep/x.log' }
-        @{ name = '비-파일시스템 공급자';       script = '$env:CLAUDETMP="x"; Remove-Item Env:CLAUDETMP' }
+        @{ name = 'plain file';                     script = 'Remove-Item a.txt' }
+        @{ name = 'rm alias';                       script = 'rm a.txt' }
+        @{ name = 'del alias';                      script = 'del a.txt' }
+        @{ name = 'ri alias';                       script = 'ri a.txt' }
+        @{ name = 'directory -Recurse';             script = 'Remove-Item sub -Recurse' }
+        @{ name = 'directory -Recurse -Force';      script = 'Remove-Item sub -Recurse -Force' }
+        @{ name = 'empty directory';                script = 'Remove-Item emptydir' }
+        @{ name = 'wildcard';                       script = 'Remove-Item *.txt' }
+        @{ name = 'unmatched wildcard';             script = 'Remove-Item *.nomatch' }
+        @{ name = 'nonexistent file';               script = 'Remove-Item nope.txt' }
+        @{ name = 'nonexistent file -EA Silent';    script = 'Remove-Item nope.txt -ErrorAction SilentlyContinue' }
+        @{ name = 'multiple targets';               script = 'Remove-Item a.txt,b.txt,c.log' }
+        @{ name = 'only some exist';                script = 'Remove-Item a.txt,nope.txt,b.txt' }
+        @{ name = 'name with spaces';               script = 'Remove-Item "name with spaces.txt"' }
+        @{ name = 'variable expansion';             script = '$f = "a.txt"; Remove-Item $f' }
+        @{ name = 'variable + path join';           script = '$d = "sub"; Remove-Item "$d/deep" -Recurse' }
+        @{ name = '-LiteralPath';                   script = 'Remove-Item -LiteralPath a.txt' }
+        @{ name = 'explicit -Path';                 script = 'Remove-Item -Path a.txt' }
+        @{ name = 'pipeline';                       script = 'Get-ChildItem *.log -Recurse | Remove-Item' }
+        @{ name = 'pipeline directory';             script = 'Get-ChildItem -Directory | Remove-Item -Recurse' }
+        @{ name = '-WhatIf does not delete';        script = 'Remove-Item a.txt -WhatIf' }
+        @{ name = '-Include filter';                script = 'Remove-Item * -Include *.log -Recurse' }
+        @{ name = 'nested path';                    script = 'Remove-Item sub/deep/x.log' }
+        @{ name = 'non-filesystem provider';        script = '$env:CLAUDETMP="x"; Remove-Item Env:CLAUDETMP' }
     ) {
         $real = Get-Observation $script $false
         $shim = Get-Observation $script $true
@@ -84,7 +84,7 @@ Describe 'RmShim 이 원본 Remove-Item 과 같은 결과를 낸다' {
     }
 }
 
-Describe '루트/홈 전체 삭제는 거부한다' {
+Describe 'refuses to delete the entire root/home' {
     # 실제 홈을 대상으로 삼지 않는다. 셰임 import 가 실패하거나 퇴행하면 원본 Remove-Item 이 그대로
     # 지우기 때문이다. 자식 프로세스의 홈을 샌드박스로 두고, 휴지통 도구도 아무것도 옮기지 않는 가짜로 둔다.
     # 셰임은 $env:USERPROFILE 을 먼저 보고, 없으면(POSIX pwsh) $HOME 을 본다. 두 경로를 각각 검증한다.
@@ -94,7 +94,7 @@ Describe '루트/홈 전체 삭제는 거부한다' {
         @{ script = 'Remove-Item $HOME -Recurse -Force'; posixHome = $true }
     ) {
         if ($posixHome -and $IsWindows) {
-            Set-ItResult -Skipped -Because 'Windows 의 $HOME 은 HOME 환경변수를 따르지 않는다 — USERPROFILE 경로로 검증한다'
+            Set-ItResult -Skipped -Because 'On Windows, $HOME does not follow the HOME environment variable - verified via the USERPROFILE path'
             return
         }
         $sandbox = Join-Path $Base 'guarded-home'
@@ -123,16 +123,16 @@ $script
 "@ 2>&1 | Out-String
             $rc = $LASTEXITCODE
         } finally { $env:USERPROFILE = $old[0]; $env:HOME = $old[1]; $env:PATH = $old[2] }
-        $rc | Should -Not -Be 97 -Because "셰임과 샌드박스 홈이 잡혀야 한다: $out"
-        $out | Should -Match '거부'
+        $rc | Should -Not -Be 97 -Because "the shim and the sandbox home must be in effect: $out"
+        $out | Should -Match 'refusing'
         (Test-Path -LiteralPath (Join-Path $sandbox 'keep')) | Should -BeTrue
     }
 }
 
-Describe '삭제한 내용은 복구할 수 있다' {
-    It '휴지통에서 조회된다' {
+Describe 'deleted content can be recovered' {
+    It 'shows up in the trash' {
         if (-not (Get-Command trash-list -ErrorAction SilentlyContinue)) {
-            Set-ItResult -Skipped -Because 'trash-cli 미설치 (Windows 에서는 send2trash 경로)'
+            Set-ItResult -Skipped -Because 'trash-cli not installed (on Windows the send2trash path is used)'
             return
         }
         $dir = Join-Path $Base 'rec'

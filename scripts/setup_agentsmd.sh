@@ -44,12 +44,12 @@ while [[ $# -gt 0 ]]; do
         --force) FORCE=1; shift ;;
         --harness)
             if [[ -z "${2:-}" ]]; then
-                echo "--harness 값이 필요합니다 (claude|codex|grok|opencode|all)" >&2
+                echo "--harness requires a value (claude|codex|grok|opencode|all)" >&2
                 exit 1
             fi
             HARNESS_ARG="$2"; shift 2 ;;
         --harness=*) HARNESS_ARG="${1#*=}"; shift ;;
-        *) echo "알 수 없는 옵션: $1" >&2; exit 1 ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
 
@@ -66,7 +66,7 @@ normalize_harnesses() {
             all) item="claude codex grok opencode" ;;
             claude|claude-code) item="claude" ;;
             codex|grok|opencode) ;;
-            *) echo "알 수 없는 하네스: $item (claude|codex|grok|opencode|all)" >&2; return 1 ;;
+            *) echo "Unknown harness: $item (claude|codex|grok|opencode|all)" >&2; return 1 ;;
         esac
         for seen in $item; do
             case " $SELECTED " in
@@ -77,7 +77,7 @@ normalize_harnesses() {
     done
     SELECTED="${SELECTED# }"
     if [[ -z "$SELECTED" ]]; then
-        echo "하네스를 최소 하나는 골라야 합니다 (claude|codex|grok|opencode|all)" >&2
+        echo "Pick at least one harness (claude|codex|grok|opencode|all)" >&2
         return 1
     fi
     return 0
@@ -96,20 +96,20 @@ install_file() {
     local source="$1" target="$2"
 
     if [[ ! -f "$source" ]]; then
-        echo "❌ 소스 파일을 찾을 수 없습니다: $source" >&2
+        echo "❌ Source file not found: $source" >&2
         return 1
     fi
 
     if [[ -f "$target" && "$FORCE" -eq 0 ]]; then
-        echo "  ℹ️ 이미 $target 가 존재합니다 — 덮어쓰지 않고 건너뜁니다."
+        echo "  ℹ️ $target already exists — skipped without overwriting."
         return 0
     fi
 
     if [[ "$DRY_RUN" -eq 1 ]]; then
         if [[ -f "$target" ]]; then
-            echo "  🧪 DRY RUN — 기존 $target 를 백업 후 덮어쓸 예정입니다 (실제로 쓰지 않음)."
+            echo "  🧪 DRY RUN — would back up the existing $target and overwrite it (nothing is written)."
         else
-            echo "  🧪 DRY RUN — $target 에 설치될 예정입니다 (실제로 쓰지 않음)."
+            echo "  🧪 DRY RUN — $target would be installed (nothing is written)."
         fi
         return 0
     fi
@@ -118,16 +118,16 @@ install_file() {
     if [[ -f "$target" ]]; then
         local backup="$target.bak.$(date +%Y%m%d%H%M%S)"
         cp "$target" "$backup"
-        echo "  💾 기존 파일 백업: $backup"
+        echo "  💾 Backed up existing file: $backup"
     fi
     cp "$source" "$target"
-    echo "  ✅ 설치 완료: $target"
+    echo "  ✅ Installed: $target"
     return 0
 }
 
 normalize_harnesses "$HARNESS_ARG"
 
-echo "🔧 프로젝트 지침 설치... (하네스: $(printf '%s' "$SELECTED" | tr ' ' ','))"
+echo "🔧 Installing project instructions... (harnesses: $(printf '%s' "$SELECTED" | tr ' ' ','))"
 
 # AGENTS.md is the shared source for every harness, including Claude Code, which
 # reaches it through the CLAUDE.md import.
@@ -145,7 +145,7 @@ if has_harness claude; then
     # instructions we just installed, and staying silent would report success
     # for an install that did nothing for the harness the user selected.
     if [[ "$HAD_CLAUDE_MD" -eq 1 && "$FORCE" -eq 0 ]] && ! grep -q '@AGENTS\.md' "$CLAUDE_TARGET"; then
-        echo "  ⚠️ 기존 $CLAUDE_TARGET 에 '@AGENTS.md' 가 없습니다 — Claude Code 는 방금 설치한 AGENTS.md 를 읽지 않습니다." >&2
-        echo "     기존 내용을 지우지 않으려면 그 파일 맨 위에 '@AGENTS.md' 한 줄을 직접 추가하세요." >&2
+        echo "  ⚠️ The existing $CLAUDE_TARGET has no '@AGENTS.md' — Claude Code will not read the AGENTS.md just installed." >&2
+        echo "     To keep its existing content, add a single '@AGENTS.md' line at the top of that file yourself." >&2
     fi
 fi

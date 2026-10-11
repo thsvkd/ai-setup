@@ -55,7 +55,7 @@ def our_ref(home):
     return os.pathsep.join(mod_dir(home, n) for n in MOD_NAMES)
 
 
-def test_mod를_복사하고_env에_경로를_넣는다(home):
+def test_copies_mod_and_puts_path_in_env(home):
     proc = apply(home)
     assert proc.returncode == 0, proc.stderr
     for name in MOD_NAMES:
@@ -70,7 +70,7 @@ def test_mod를_복사하고_env에_경로를_넣는다(home):
     assert settings(home)["env"][KEY] == our_ref(home)
 
 
-def test_기존_env_값과_다른_키를_보존하고_uninstall로_원복한다(home):
+def test_preserves_existing_env_value_and_other_keys_and_uninstall_restores(home):
     other = os.pathsep.join(["/opt/a", "/opt/b"])
     before = {"model": "opus", "env": {"FOO": "1", KEY: other}}
     write_settings(home, before)
@@ -86,31 +86,31 @@ def test_기존_env_값과_다른_키를_보존하고_uninstall로_원복한다(
     assert not (claude(home) / ".claude-code-setup.json").exists()
 
 
-def test_settings가_없었으면_uninstall이_만든_것을_모두_치운다(home):
+def test_uninstall_removes_everything_it_created_if_settings_was_absent(home):
     assert apply(home).returncode == 0
     assert apply(home, "--uninstall").returncode == 0
     assert not (claude(home) / "settings.json").exists()
     assert not (claude(home) / "mods").exists()
 
 
-def test_env가_없었으면_uninstall이_env를_지운다(home):
+def test_uninstall_removes_env_if_it_was_absent(home):
     write_settings(home, {"model": "opus"})
     assert apply(home).returncode == 0
     assert apply(home, "--uninstall").returncode == 0
     assert settings(home) == {"model": "opus"}
 
 
-def test_재실행은_아무것도_다시_쓰지_않는다(home):
+def test_rerun_rewrites_nothing(home):
     write_settings(home, {"model": "opus"})
     assert apply(home).returncode == 0
     snapshot = sorted(p.name for p in claude(home).iterdir())
     proc = apply(home)
     assert proc.returncode == 0, proc.stderr
-    assert "이미 설치됨" in proc.stdout
+    assert "already installed" in proc.stdout
     assert sorted(p.name for p in claude(home).iterdir()) == snapshot  # 새 .bak 없음
 
 
-def test_dry_run은_아무것도_쓰지_않는다(home):
+def test_dry_run_writes_nothing(home):
     proc = apply(home, "--dry-run")
     assert proc.returncode == 0, proc.stderr
     assert "DRY RUN" in proc.stdout
@@ -123,7 +123,7 @@ def test_dry_run은_아무것도_쓰지_않는다(home):
     assert (claude(home) / "mods" / "bash-diff-filter" / "hooks" / "register.ts").is_file()
 
 
-def test_사용자가_고친_mod_파일은_덮어쓰지도_지우지도_않는다(home):
+def test_user_edited_mod_file_is_neither_overwritten_nor_removed(home):
     write_settings(home, {"model": "opus"})
     assert apply(home).returncode == 0
     edited = claude(home) / "mods" / "bash-diff-filter" / "hooks" / "register.ts"
@@ -138,7 +138,7 @@ def test_사용자가_고친_mod_파일은_덮어쓰지도_지우지도_않는�
     assert KEY not in settings(home).get("env", {})
 
 
-def test_이미_있는_남의_mod_폴더는_덮어쓰지_않는다(home):
+def test_existing_foreign_mod_folder_is_not_overwritten(home):
     foreign = claude(home) / "mods" / "bash-diff-filter" / "hooks" / "register.ts"
     foreign.parent.mkdir(parents=True)
     foreign.write_text("// someone else\n", encoding="utf-8")
@@ -148,13 +148,13 @@ def test_이미_있는_남의_mod_폴더는_덮어쓰지_않는다(home):
     assert not (claude(home) / "settings.json").exists()
 
 
-def test_파싱할_수_없는_settings는_멈추고_쓰지_않는다(home):
+def test_unparseable_settings_stops_without_writing(home):
     (claude(home) / "settings.json").write_text("{ broken", encoding="utf-8")
     assert apply(home).returncode == 1
     assert not (claude(home) / "mods").exists()
 
 
-def test_영수증은_다른_섹션을_보존한다(home):
+def test_manifest_preserves_other_sections(home):
     (claude(home) / ".claude-code-setup.json").write_text(
         json.dumps({"omc_hud": {"refresh_interval_added": True}}), encoding="utf-8")
     assert apply(home).returncode == 0
@@ -163,7 +163,7 @@ def test_영수증은_다른_섹션을_보존한다(home):
         "omc_hud": {"refresh_interval_added": True}}
 
 
-def test_엔진이_만든_타입은_복사하지_않고_uninstall이_치운다(home):
+def test_engine_generated_types_are_not_copied_and_uninstall_removes_them(home):
     assert apply(home).returncode == 0
     mod = claude(home) / "mods" / "bash-diff-filter"
     assert not (mod / ".claude-plugin" / "types").exists()
@@ -179,7 +179,7 @@ def test_엔진이_만든_타입은_복사하지_않고_uninstall이_치운다(h
     assert not (claude(home) / "mods").exists()
 
 
-def test_끊긴_설치가_남긴_같은_내용의_파일은_재실행이_우리_것으로_기록한다(home):
+def test_identical_file_left_by_interrupted_install_is_claimed_on_rerun(home):
     write_settings(home, {"model": "opus"})
     src = ROOT / "res" / "mods" / "bash-diff-filter" / "hooks" / "register.ts"
     dst = claude(home) / "mods" / "bash-diff-filter" / "hooks" / "register.ts"
@@ -190,7 +190,7 @@ def test_끊긴_설치가_남긴_같은_내용의_파일은_재실행이_우리_
     assert not (claude(home) / "mods").exists()
 
 
-def test_같은_경로가_표기만_달라도_중복으로_넣지_않는다(home):
+def test_same_path_with_different_notation_is_not_added_twice(home):
     first = mod_dir(home, MOD_NAMES[0])
     variant = first.upper() if os.name == "nt" else first + "/"
     write_settings(home, {"env": {KEY: variant}})
@@ -198,7 +198,7 @@ def test_같은_경로가_표기만_달라도_중복으로_넣지_않는다(home
     assert settings(home)["env"][KEY] == os.pathsep.join([variant, mod_dir(home, MOD_NAMES[1])])
 
 
-def test_env_블록을_지운_뒤_재설치하면_uninstall이_env를_치운다(home):
+def test_reinstall_after_env_block_removal_lets_uninstall_remove_env(home):
     write_settings(home, {"model": "opus", "env": {"FOO": "1"}})
     assert apply(home).returncode == 0
     write_settings(home, {"model": "opus"})  # 사용자가 env 블록을 통째로 지웠다
@@ -207,7 +207,7 @@ def test_env_블록을_지운_뒤_재설치하면_uninstall이_env를_치운다(
     assert settings(home) == {"model": "opus"}
 
 
-def test_형식이_깨진_영수증은_멈추고_쓰지_않는다(home):
+def test_malformed_manifest_stops_without_writing(home):
     (claude(home) / ".claude-code-setup.json").write_text(
         json.dumps({"mods": {"env_dirs": "not-a-list"}}), encoding="utf-8")
     assert apply(home).returncode == 1
@@ -215,7 +215,7 @@ def test_형식이_깨진_영수증은_멈추고_쓰지_않는다(home):
     assert not (claude(home) / "mods").exists()
 
 
-def test_mod_원본의_작업_부산물은_복사하지_않는다(tmp_path):
+def test_mod_source_working_byproducts_are_not_copied(tmp_path):
     import importlib.util
     spec = importlib.util.spec_from_file_location("mods_apply_under_test", APPLY)
     mods = importlib.util.module_from_spec(spec)
@@ -231,7 +231,7 @@ def test_mod_원본의_작업_부산물은_복사하지_않는다(tmp_path):
     assert ".claude-plugin/plugin.json" in files
 
 
-def test_사용자가_만든_루트_tsconfig는_uninstall이_남긴다(home):
+def test_uninstall_keeps_root_tsconfig_made_by_user(home):
     write_settings(home, {"model": "opus"})
     assert apply(home).returncode == 0
     mine = claude(home) / "mods" / "bash-diff-filter" / "tsconfig.json"

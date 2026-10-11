@@ -25,12 +25,12 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY_RUN=1; shift ;;
         --uninstall) UNINSTALL=1; shift ;;
-        *) echo "알 수 없는 옵션: $1" >&2; exit 1 ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
 
 if ! PY="$(resolve_python_command)"; then
-    echo "❌ Python 3을 찾을 수 없습니다." >&2
+    echo "❌ Python 3 not found." >&2
     print_python_install_hint
     exit 1
 fi
@@ -39,7 +39,7 @@ FLAGS=()
 [[ "$DRY_RUN" -eq 1 ]] && FLAGS+=(--dry-run)
 
 if [[ "$UNINSTALL" -eq 1 ]]; then
-    echo "🧹 OMC HUD (캐시 TTL) 되돌리기"
+    echo "🧹 Reverting OMC HUD (cache TTL)"
     exec "$PY" -X utf8 "$REPO_ROOT/res/omc/apply.py" --home "$HOME" --uninstall ${FLAGS[@]+"${FLAGS[@]}"}
 fi
 
@@ -52,16 +52,16 @@ run() {
 }
 
 if ! command -v claude &>/dev/null; then
-    echo "❌ claude CLI 를 찾을 수 없습니다. Claude Code 를 먼저 설치하세요." >&2
+    echo "❌ claude CLI not found. Install Claude Code first." >&2
     exit 1
 fi
 
-echo "🔧 OMC 플러그인"
+echo "🔧 OMC plugin"
 # 출력을 먼저 받아 두고 검사한다. pipefail 아래에서 grep -q 가 일찍 끝나면 claude 가 EPIPE 로
 # 실패해 '미설치' 로 오판할 수 있다.
 plugins="$(claude plugin list 2>/dev/null || true)"
 if [[ "$plugins" == *"oh-my-claudecode@"* ]]; then
-    echo "  • 이미 설치됨: $OMC_PLUGIN"
+    echo "  • Already installed: $OMC_PLUGIN"
 else
     marketplaces="$(claude plugin marketplace list 2>/dev/null || true)"
     if [[ "$marketplaces" != *"$OMC_MARKETPLACE_REPO"* ]]; then
@@ -70,9 +70,9 @@ else
     run claude plugin install "$OMC_PLUGIN"
 fi
 
-echo "🔧 OMC HUD (캐시 TTL)"
+echo "🔧 OMC HUD (cache TTL)"
 "$PY" -X utf8 "$REPO_ROOT/res/omc/apply.py" --home "$HOME" ${FLAGS[@]+"${FLAGS[@]}"}
 
 echo ""
-echo "  ℹ️  CLAUDE.md 등 OMC 의 나머지 설정은 Claude Code 안에서 /oh-my-claudecode:omc-setup 으로 진행하세요."
-echo "     그 과정에서 statusLine 이 다시 써지면 이 스크립트를 한 번 더 실행하면 됩니다."
+echo "  ℹ️  For the rest of the OMC setup (CLAUDE.md, etc.), run /oh-my-claudecode:omc-setup inside Claude Code."
+echo "     If that rewrites statusLine, just run this script once more."

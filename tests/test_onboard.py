@@ -33,7 +33,7 @@ EXIT_CANCELLED = 130
 
 posix_only = pytest.mark.skipif(
     sys.platform == "win32" or shutil.which("bash") is None,
-    reason="POSIX 전용 (pty / bash 필요)",
+    reason="POSIX only (needs pty / bash)",
 )
 
 
@@ -131,7 +131,7 @@ def run_in_pty(argv, keys, cwd=None, env=None, stdin_pipe=False, timeout=25):
             drain(0.5)
         if proc.poll() is None:
             proc.kill()
-            pytest.fail(f"프로세스가 끝나지 않았습니다. 화면:\n{bytes(out).decode(errors='replace')}")
+            pytest.fail(f"Process did not finish. Screen:\n{bytes(out).decode(errors='replace')}")
         return proc.wait(timeout=5), bytes(out)
     finally:
         os.close(master)
@@ -151,7 +151,7 @@ def read_answers(path: Path) -> dict:
 # ── 대화형으로 물을 수 없는 상황: 아무것도 고르지 않아야 한다 ──────────────────
 
 
-def test_tty_없으면_아무것도_선택하지_않는다(tmp_path):
+def test_no_tty_selects_nothing(tmp_path):
     """가장 중요한 계약. 여기서 뭔가를 골라버리면 사용자가 동의한 적 없는 설치가 일어난다."""
     out = tmp_path / "answers"
     proc = subprocess.run(
@@ -162,7 +162,7 @@ def test_tty_없으면_아무것도_선택하지_않는다(tmp_path):
     assert read_answers(out) == {}
 
 
-def test_ci_환경에서는_프롬프트를_띄우지_않는다(tmp_path):
+def test_ci_environment_shows_no_prompt(tmp_path):
     """CI 는 TTY 를 붙여주기도 한다(docker -t, tmux). TTY 검사만으로는 못 거른다."""
     out = tmp_path / "answers"
     env = clean_env(CI="true")
@@ -175,7 +175,7 @@ def test_ci_환경에서는_프롬프트를_띄우지_않는다(tmp_path):
 
 
 @posix_only
-def test_ci_환경변수는_tty가_있어도_프롬프트를_막는다(tmp_path):
+def test_ci_env_var_blocks_prompt_even_with_tty(tmp_path):
     out = tmp_path / "answers"
     code, _ = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out)],
@@ -189,7 +189,7 @@ def test_ci_환경변수는_tty가_있어도_프롬프트를_막는다(tmp_path)
 
 
 @posix_only
-def test_기본값_그대로_선택하면_전체설치_auto_적용(tmp_path):
+def test_default_choices_give_full_install_with_auto(tmp_path):
     """covers: Test-1
     SCOPE=all 기본값: 권한 모드 다음·적용 여부 전에 줄바꿈 키를 묻고,
     Enter(기본 강조)는 Shift+Enter → NEWLINE_CHORD=shift-enter.
@@ -220,7 +220,7 @@ def test_기본값_그대로_선택하면_전체설치_auto_적용(tmp_path):
 
 
 @posix_only
-def test_curl_파이프_설치에서도_프롬프트가_동작한다(tmp_path):
+def test_prompt_works_under_curl_pipe_install(tmp_path):
     """`curl … | sh` 는 stdin 이 스크립트 본문이다. /dev/tty 를 열지 못하면 여기서 깨진다.
 
     questionary 는 이 상황에서 조용히 첫 항목을 확정해버리므로, '두 번째 항목이 제대로
@@ -242,7 +242,7 @@ def test_curl_파이프_설치에서도_프롬프트가_동작한다(tmp_path):
 
 
 @posix_only
-def test_bypass_선택시_경고를_보여준다(tmp_path):
+def test_bypass_choice_shows_warning(tmp_path):
     out = tmp_path / "answers"
     # 범위=전체, 권한=bypass, 줄바꿈=기본(Shift+Enter), 하네스=기본(전체), OMC=기본(아니오), 출력 스타일=기본(아니오), mod=기본(아니오), 적용=기본
     _, screen = run_in_pty(
@@ -251,11 +251,11 @@ def test_bypass_선택시_경고를_보여준다(tmp_path):
         keys=[ENTER, DOWN, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER],
     )
     text = screen.decode(errors="replace")
-    assert "권한 확인" in text and "생략" in text, text
+    assert "permission prompts" in text and "skip" in text, text
 
 
 @posix_only
-def test_ctrl_c_취소는_비대화형_폴백과_구분된다(tmp_path):
+def test_ctrl_c_cancel_is_distinct_from_noninteractive_fallback(tmp_path):
     """covers: Test-4
     130 과 2 를 뭉뚱그리면 '취소했는데 기본값으로 설치되는' 최악의 동작이 된다.
     """
@@ -270,7 +270,7 @@ def test_ctrl_c_취소는_비대화형_폴백과_구분된다(tmp_path):
 
 
 @posix_only
-def test_프롬프트가_깨지면_기본값_폴백이_아니라_중단한다(tmp_path):
+def test_broken_prompt_aborts_instead_of_falling_back_to_defaults(tmp_path):
     """렌더·입력 오류는 2(물을 수 없음)가 아니다. 사용자는 고르던 중이었으므로 1 로 멈춘다.
 
     첫 질문에 답한 뒤 두 번째 질문을 그리다 깨지는 tui 를 옆에 둔다.
@@ -295,12 +295,12 @@ def test_프롬프트가_깨지면_기본값_폴백이_아니라_중단한다(tm
     text = screen.decode(errors="replace")
     assert code == EXIT_FAILED, text
     assert "render broke" in text, text
-    assert "아무것도 설치하지 않았습니다" in text, text
+    assert "nothing was installed" in text, text
     assert read_answers(out) == {}
 
 
 @posix_only
-def test_콘솔을_준비하지_못하면_그리기_전이므로_기본값으로_진행한다(tmp_path):
+def test_console_setup_failure_proceeds_with_defaults_before_drawing(tmp_path):
     """보이지 않는 콘솔·VT 미지원처럼 아무것도 그리기 전에 실패하면 '물을 수 없음'(2)이다."""
     shutil.copy(ONBOARD, tmp_path / "onboard.py")
     real_tui = (ROOT / "res" / "tui.py").read_text(encoding="utf-8")
@@ -315,12 +315,12 @@ def test_콘솔을_준비하지_못하면_그리기_전이므로_기본값으로
     )
     text = screen.decode(errors="replace")
     assert code == EXIT_NON_INTERACTIVE, text
-    assert "무엇을 설치할까요" not in text, text
+    assert "What would you like to install?" not in text, text
     assert read_answers(out) == {}
 
 
 @posix_only
-def test_stdin이_닫혀_있으면_물을_수_없음으로_끝난다(tmp_path):
+def test_closed_stdin_ends_as_cannot_ask(tmp_path):
     out = tmp_path / "answers"
     proc = subprocess.run(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out)],
@@ -332,7 +332,7 @@ def test_stdin이_닫혀_있으면_물을_수_없음으로_끝난다(tmp_path):
 
 
 @posix_only
-def test_기존_agentsmd가_있을때만_덮어쓰기를_묻는다(tmp_path):
+def test_overwrite_asked_only_when_agentsmd_exists(tmp_path):
     (tmp_path / "AGENTS.md").write_text("기존 프로젝트 규칙\n", encoding="utf-8")
     out = tmp_path / "answers"
     # 질문이 하나 늘어난다: 범위 → 권한 → 줄바꿈 키 → 하네스 → 덮어쓰기 → OMC → 출력 스타일 → mod → 적용
@@ -342,14 +342,14 @@ def test_기존_agentsmd가_있을때만_덮어쓰기를_묻는다(tmp_path):
         keys=[ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER],
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
-    assert "덮어쓸까요" in screen.decode(errors="replace")
+    assert "already exists" in screen.decode(errors="replace")
     # confirm 의 기본값은 '아니오' — 사용자 콘텐츠는 실수로 날아가면 안 된다.
     assert read_answers(out)["OVERWRITE_AGENTSMD"] == "0"
     assert read_answers(out)["NEWLINE_CHORD"] == "shift-enter"
 
 
 @posix_only
-def test_온보딩에서_CtrlEnter를_고르면_NEWLINE_CHORD는_ctrl_enter다(tmp_path):
+def test_ctrl_enter_choice_makes_newline_chord_ctrl_enter(tmp_path):
     """covers: Test-1
     SCOPE=all 에서 줄바꿈 키 두 번째 항목(Ctrl+Enter)을 고르면 답 파일이 ctrl-enter 다.
     """
@@ -366,7 +366,7 @@ def test_온보딩에서_CtrlEnter를_고르면_NEWLINE_CHORD는_ctrl_enter다(t
 
 
 @posix_only
-def test_SCOPE_hooks이면_NEWLINE_CHORD를_묻지_않는다(tmp_path):
+def test_scope_hooks_does_not_ask_newline_chord(tmp_path):
     """covers: Test-2
     SCOPE=hooks 이면 줄바꿈 키를 묻지 않고 답 파일에 NEWLINE_CHORD 가 없다.
     """
@@ -383,7 +383,7 @@ def test_SCOPE_hooks이면_NEWLINE_CHORD를_묻지_않는다(tmp_path):
 
 
 @posix_only
-def test_애플리케이션_커서_모드의_화살표도_받는다(tmp_path):
+def test_accepts_application_cursor_mode_arrows(tmp_path):
     """tmux·vim 이후의 셸 등은 화살표를 ESC [ B 가 아니라 ESC O B 로 보낸다.
 
     이를 놓치면 ↓ 가 무시되고 Enter 가 첫 항목(전체 설치)을 확정한다.
@@ -399,7 +399,7 @@ def test_애플리케이션_커서_모드의_화살표도_받는다(tmp_path):
 
 
 @posix_only
-def test_SCOPE_agentsmd이면_NEWLINE_CHORD를_묻지_않는다(tmp_path):
+def test_scope_agentsmd_does_not_ask_newline_chord(tmp_path):
     """covers: Test-2
     SCOPE=agentsmd 이면 줄바꿈 키를 묻지 않고 답 파일에 NEWLINE_CHORD 가 없다.
     질문 순서: 범위 → 하네스 → 적용.
@@ -418,7 +418,7 @@ def test_SCOPE_agentsmd이면_NEWLINE_CHORD를_묻지_않는다(tmp_path):
 
 
 @posix_only
-def test_하네스를_해제하면_고른_것만_기록된다(tmp_path):
+def test_deselecting_harnesses_records_only_the_chosen(tmp_path):
     """체크박스는 전부 체크된 상태로 뜬다. Space 로 claude 를 해제하면 나머지만 남는다.
 
     이 경로가 깨지면 Codex 만 쓰는 사용자의 프로젝트에도 CLAUDE.md 가 생긴다.
@@ -436,7 +436,7 @@ def test_하네스를_해제하면_고른_것만_기록된다(tmp_path):
 
 
 @posix_only
-def test_SCOPE_hooks이면_하네스를_묻지_않는다(tmp_path):
+def test_scope_hooks_does_not_ask_harnesses(tmp_path):
     """훅은 프로젝트 지침과 무관하다. 범위가 훅뿐이면 하네스 질문이 끼면 안 된다."""
     out = tmp_path / "answers"
     code, screen = run_in_pty(
@@ -451,7 +451,7 @@ def test_SCOPE_hooks이면_하네스를_묻지_않는다(tmp_path):
 
 
 @posix_only
-def test_OMC_설치를_고르면_OMC가_1로_기록된다(tmp_path):
+def test_choosing_omc_records_omc_as_1(tmp_path):
     """범위=훅 → 권한=기본 → OMC 에서 y → 출력 스타일=기본 → mod=기본 → 적용. y 는 confirm 을 곧바로 확정한다."""
     out = tmp_path / "answers"
     code, screen = run_in_pty(
@@ -466,7 +466,7 @@ def test_OMC_설치를_고르면_OMC가_1로_기록된다(tmp_path):
 
 
 @posix_only
-def test_출력_스타일을_고르면_OUTPUT_STYLE이_1로_기록된다(tmp_path):
+def test_choosing_output_style_records_output_style_as_1(tmp_path):
     """범위=훅 → 권한=기본 → OMC=기본(아니오) → 출력 스타일에서 y → mod=기본 → 적용."""
     out = tmp_path / "answers"
     code, screen = run_in_pty(
@@ -481,7 +481,7 @@ def test_출력_스타일을_고르면_OUTPUT_STYLE이_1로_기록된다(tmp_pat
 
 
 @posix_only
-def test_mod를_고르면_MODS가_1로_기록된다(tmp_path):
+def test_choosing_mod_records_mods_as_1(tmp_path):
     """범위=훅 → 권한=기본 → OMC=기본 → 출력 스타일=기본 → mod 에서 y → 적용."""
     out = tmp_path / "answers"
     code, screen = run_in_pty(
@@ -496,7 +496,7 @@ def test_mod를_고르면_MODS가_1로_기록된다(tmp_path):
 
 
 @posix_only
-def test_SCOPE_agentsmd이면_OMC를_묻지_않는다(tmp_path):
+def test_scope_agentsmd_does_not_ask_omc(tmp_path):
     """OMC 는 전역 설치다. 현재 폴더만 고른 사용자에게 전역 변경을 묻지 않는다."""
     out = tmp_path / "answers"
     code, screen = run_in_pty(
@@ -513,7 +513,7 @@ def test_SCOPE_agentsmd이면_OMC를_묻지_않는다(tmp_path):
 # ── 렌더러 회귀 방지 ─────────────────────────────────────────────────
 
 
-def test_렌더러가_콘솔_없이_프레임을_만든다():
+def test_renderer_builds_frames_without_console():
     """res/tui.py 는 import 와 프레임 계산에 터미널을 요구하지 않는다.
 
     예전 벤더(prompt_toolkit 3.0.53)는 Python 3.10+ 문법이라 3.9 에서 import 단계에 죽었고,
@@ -538,7 +538,7 @@ def test_렌더러가_콘솔_없이_프레임을_만든다():
     assert "OK" in proc.stdout
 
 
-def test_install_ps1이_받은_스위치를_전부_setup에_넘긴다():
+def test_install_ps1_forwards_every_received_switch_to_setup():
     """install.ps1 은 param 블록의 스위치를 해시테이블 스플랫으로 setup.ps1 에 넘기는데,
     그 목록이 param 블록과 따로 적혀 있다. 한쪽에만 추가하면 플래그가 조용히 무시된다 —
     실제로 -NoOnboard 를 추가할 때 이 함정에 빠졌다.
@@ -553,21 +553,21 @@ def test_install_ps1이_받은_스위치를_전부_setup에_넘긴다():
     # 최상위 param 블록의 [switch]$Name 들 (Help 는 부트스트랩이 직접 처리하므로 제외)
     param_block = source.split("Set-StrictMode", 1)[0]
     declared = set(re.findall(r"\[switch\]\$(\w+)", param_block)) - {"Help"}
-    assert declared, "install.ps1 의 param 블록에서 스위치를 찾지 못했다"
+    assert declared, "could not find the switches in install.ps1's param block"
 
     # setup.ps1 로 넘기는 목록: foreach ($k in 'A', 'B', ...)
     forward_line = re.search(r"foreach \(\$k in ([^)]+)\)", source)
-    assert forward_line, "install.ps1 에서 스위치 전달 목록을 찾지 못했다"
+    assert forward_line, "could not find the switch forwarding list in install.ps1"
     forwarded = set(re.findall(r"'(\w+)'", forward_line.group(1)))
 
     missing = declared - forwarded
     assert not missing, (
-        f"install.ps1 이 받기만 하고 setup.ps1 에 넘기지 않는 스위치: {sorted(missing)} — "
-        "사용자가 지정해도 조용히 무시된다"
+        f"switches install.ps1 accepts but does not pass to setup.ps1: {sorted(missing)} — "
+        "they are silently ignored even when the user sets them"
     )
 
 
-def test_install_ps1이_Keybinds와_Newline을_setup에_넘긴다():
+def test_install_ps1_forwards_keybinds_and_newline_to_setup():
     """covers: Test-17
     install.ps1 param 에 -Keybinds 스위치와 -Newline 문자열이 있고,
     둘 다 setup.ps1 로 전달돼야 한다. Newline 은 스위치가 아니라 값이다.
@@ -577,17 +577,17 @@ def test_install_ps1이_Keybinds와_Newline을_setup에_넘긴다():
     source = (ROOT / "install.ps1").read_text(encoding="utf-8-sig")
     param_block = source.split("Set-StrictMode", 1)[0]
     assert re.search(r"\[switch\]\s*\$Keybinds\b", param_block), (
-        "install.ps1 param 에 [switch]$Keybinds 가 없다"
+        "install.ps1 param has no [switch]$Keybinds"
     )
     assert re.search(r"\[string\]\s*\$Newline\b", param_block), (
-        "install.ps1 param 에 [string]$Newline 가 없다"
+        "install.ps1 param has no [string]$Newline"
     )
 
     forward_line = re.search(r"foreach \(\$k in ([^)]+)\)", source)
-    assert forward_line, "install.ps1 에서 스위치 전달 목록을 찾지 못했다"
+    assert forward_line, "could not find the switch forwarding list in install.ps1"
     forwarded = set(re.findall(r"'(\w+)'", forward_line.group(1)))
     assert "Keybinds" in forwarded, (
-        "install.ps1 이 $Keybinds 를 setup.ps1 전달 목록에 넣지 않았다"
+        "install.ps1 does not put $Keybinds in the setup.ps1 forwarding list"
     )
 
     # 문자열 값은 스위치 foreach 로 못 넘긴다. BoundParameters 로 값을 실어야 한다.
@@ -595,7 +595,7 @@ def test_install_ps1이_Keybinds와_Newline을_setup에_넘긴다():
         r"\$PSBoundParameters\.ContainsKey\(\s*['\"]Newline['\"]\s*\)",
         source,
     ) or re.search(r"\$fwd\[\s*['\"]Newline['\"]\s*\]\s*=", source), (
-        "install.ps1 이 -Newline 값을 setup.ps1 로 넘기지 않는다"
+        "install.ps1 does not pass the -Newline value to setup.ps1"
     )
 
 
@@ -603,7 +603,7 @@ def test_install_ps1이_Keybinds와_Newline을_setup에_넘긴다():
 
 
 @posix_only
-def test_setup_sh가_온보딩_선택대로_dry_run을_수행한다(tmp_path):
+def test_setup_sh_dry_run_follows_onboarding_choices(tmp_path):
     """온보딩에서 '훅만 + dry-run' 을 고르면 AGENTS.md 는 건드리지 않고 미리보기만 나와야 한다."""
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
@@ -634,7 +634,7 @@ def test_setup_sh가_온보딩_선택대로_dry_run을_수행한다(tmp_path):
 
 
 @posix_only
-def test_파이프로_실행된_setup_sh에서도_온보딩이_동작한다(tmp_path):
+def test_onboarding_works_in_piped_setup_sh(tmp_path):
     """`curl … | sh` 의 실제 모양 — setup.sh 자체가 stdin 을 파이프로 받은 채 온보딩을 띄운다.
 
     install.sh 는 curl 파이프 안에서 setup.sh 를 부른다. 여기서 stdin 은 여전히 스크립트
@@ -654,7 +654,7 @@ def test_파이프로_실행된_setup_sh에서도_온보딩이_동작한다(tmp_
     )
     text = screen.decode(errors="replace")
     assert code == 0, text
-    assert "무엇을 설치할까요" in text, text
+    assert "What would you like to install?" in text, text
     assert "DRY RUN" in text, text
     # AGENTS.md 만 고르고 dry-run 이므로 훅도 파일도 설치되지 않는다.
     assert not (home / ".claude" / "settings.json").exists(), text
@@ -662,7 +662,7 @@ def test_파이프로_실행된_setup_sh에서도_온보딩이_동작한다(tmp_
 
 
 @posix_only
-def test_플래그를_주면_온보딩을_건너뛴다(tmp_path):
+def test_flags_skip_onboarding(tmp_path):
     """자동화/CI 가 쓰던 기존 호출은 온보딩 때문에 멈추면 안 된다."""
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
@@ -674,14 +674,14 @@ def test_플래그를_주면_온보딩을_건너뛴다(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr
     assert "DRY RUN" in proc.stdout
-    assert "무엇을 설치할까요" not in proc.stdout
+    assert "What would you like to install?" not in proc.stdout
 
 
 # ── 온보딩이 고른 값이 settings.json 까지 도달하는가 ──────────────────────
 
 
 @posix_only
-def test_default_mode_옵션이_settings에_반영된다(tmp_path):
+def test_default_mode_option_is_reflected_in_settings(tmp_path):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     env = clean_env(HOME=str(home))
@@ -697,7 +697,7 @@ def test_default_mode_옵션이_settings에_반영된다(tmp_path):
 
 
 @posix_only
-def test_알수없는_default_mode는_거부된다(tmp_path):
+def test_unknown_default_mode_is_rejected(tmp_path):
     """오타가 그대로 settings.json 에 박히면 사용자는 모드가 왜 안 켜지는지 알 길이 없다."""
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
@@ -709,10 +709,10 @@ def test_알수없는_default_mode는_거부된다(tmp_path):
         encoding="utf-8", timeout=120,
     )
     assert proc.returncode != 0
-    assert "알 수 없는 defaultMode" in proc.stderr
+    assert "Unknown defaultMode" in proc.stderr
 
 
-def test_merge가_default_mode를_조각보다_우선한다(tmp_path):
+def test_merge_prefers_default_mode_over_fragment(tmp_path):
     """조각(res/settings.json) 파일 자체는 건드리지 않고 값만 갈아끼워야 한다."""
     settings = tmp_path / "settings.json"
     manifest = tmp_path / "manifest.json"
@@ -732,7 +732,7 @@ def test_merge가_default_mode를_조각보다_우선한다(tmp_path):
     assert fragment["permissions"]["defaultMode"] == "auto"
 
 
-def test_merge의_잘못된_default_mode는_병합을_막는다(tmp_path):
+def test_merge_blocks_on_invalid_default_mode(tmp_path):
     settings = tmp_path / "settings.json"
     proc = subprocess.run(
         [sys.executable, "-X", "utf8", str(ROOT / "res" / "hooks" / "merge_and_diff.py"),
@@ -749,7 +749,7 @@ def test_merge의_잘못된_default_mode는_병합을_막는다(tmp_path):
 
 
 @posix_only
-def test_force는_기존_agentsmd를_백업한_뒤_덮어쓴다(tmp_path):
+def test_force_backs_up_existing_agentsmd_then_overwrites(tmp_path):
     target = tmp_path / "AGENTS.md"
     target.write_text("사용자가 손댄 내용\n", encoding="utf-8")
     proc = subprocess.run(
@@ -766,7 +766,7 @@ def test_force는_기존_agentsmd를_백업한_뒤_덮어쓴다(tmp_path):
 
 
 @posix_only
-def test_force가_없으면_기존_agentsmd를_건드리지_않는다(tmp_path):
+def test_without_force_existing_agentsmd_is_untouched(tmp_path):
     target = tmp_path / "AGENTS.md"
     target.write_text("사용자가 손댄 내용\n", encoding="utf-8")
     proc = subprocess.run(

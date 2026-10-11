@@ -19,7 +19,7 @@ def main() -> int:
         paths = paths[1:]
 
     if not paths:
-        print("send_to_trash: 대상 경로가 없어 아무 작업도 하지 않습니다.", file=sys.stderr)
+        print("send_to_trash: no target paths given; nothing to do.", file=sys.stderr)
         return 0
 
     try:
@@ -28,8 +28,8 @@ def main() -> int:
         # 127 은 '휴지통으로 옮길 수단이 없다'는 뜻으로 호출자(rm 셰임)와 약속된 코드다.
         # 셰임은 이 코드를 보고 경고 후 원본 rm 으로 넘긴다 — 아무것도 못 지우게 만드는
         # 쪽이 더 해롭기 때문이다.
-        print("send_to_trash: send2trash 모듈이 없어 휴지통으로 옮길 수 없습니다.", file=sys.stderr)
-        print("설치: pip install send2trash", file=sys.stderr)
+        print("send_to_trash: the send2trash module is missing, so nothing can be moved to the trash.", file=sys.stderr)
+        print("Install: pip install send2trash", file=sys.stderr)
         return 127
 
     had_failure = False
@@ -38,7 +38,7 @@ def main() -> int:
             continue
         try:
             send2trash(p)
-            print(f"🗑️  휴지통으로 이동: {p}")
+            print(f"🗑️  Moved to trash: {p}")
         except Exception as exc:  # noqa: BLE001 - 사용자에게 그대로 보여줘야 함
             had_failure = True
             print(f"FAILED: {p} ({exc})", file=sys.stderr)

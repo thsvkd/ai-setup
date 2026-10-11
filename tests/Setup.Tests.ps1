@@ -49,7 +49,7 @@ Describe "setup.ps1 dispatcher" {
     It "-Help exits 0 and prints usage" {
         $r = Invoke-Script $script:Setup @("-Help")
         $r.ExitCode | Should -Be 0
-        $r.Output | Should -Match "사용법"
+        $r.Output | Should -Match "Usage"
     }
 
     It "-Hooks -DryRun does not create settings.json" {
@@ -65,32 +65,32 @@ Describe "setup.ps1 dispatcher" {
 
     # 회귀: 셸에서 직접 실행하면 `--help` 가 위치 인자로 들어와 -Newline 에 바인딩됐고,
     # 도움말 대신 "값은 shift-enter 또는 ctrl-enter 여야 합니다 (받은 값: --help)" 가 나왔다.
-    It "셸에서 직접 실행한 --help 도 도움말을 낸다" {
+    It "--help run directly from the shell also prints the help" {
         $r = Invoke-ScriptInline $script:Setup "--help"
         $r.ExitCode | Should -Be 0
-        $r.Output | Should -Match "사용법"
+        $r.Output | Should -Match "Usage"
         $r.Output | Should -Match "--no-onboard"
     }
 
-    It "setup.sh 식 --hooks --dry-run 도 받고 훅 범위만 실행한다" {
+    It "also accepts setup.sh-style --hooks --dry-run and runs only the hooks scope" {
         $r = Invoke-ScriptInline $script:Setup "--hooks --dry-run"
         $r.ExitCode | Should -Be 0
         $r.Output | Should -Not -Match "AGENTS.md"      # --hooks 범위가 지켜졌다
         Test-Path (Join-Path $env:USERPROFILE ".claude\settings.json") | Should -Be $false
     }
 
-    It "잘못된 --newline 값은 표기와 무관하게 exit 1 이다" {
+    It "an invalid --newline value exits 1 regardless of notation" {
         $r = Invoke-ScriptInline $script:Setup "--keybinds --newline foo"
         $r.ExitCode | Should -Be 1
         $r.Output | Should -Match "shift-enter"
     }
 
     # 조용히 무시하면 오타(--keybind)가 '전체 설치' 로 둔갑한다.
-    It "알 수 없는 옵션은 exit 1 이고 사용법을 함께 보여준다" {
+    It "an unknown option exits 1 and shows the usage too" {
         $r = Invoke-ScriptInline $script:Setup "--keybind"
         $r.ExitCode | Should -Be 1
-        $r.Output | Should -Match "알 수 없는 옵션"
-        $r.Output | Should -Match "사용법"
+        $r.Output | Should -Match "Unknown option"
+        $r.Output | Should -Match "Usage"
         Test-Path (Join-Path $env:USERPROFILE ".claude\settings.json") | Should -Be $false
     }
 }
@@ -99,19 +99,19 @@ Describe "install.ps1 bootstrap" {
     It "-Help exits 0 without network" {
         $r = Invoke-Script (Join-Path $script:RepoRoot "install.ps1") @("-Help")
         $r.ExitCode | Should -Be 0
-        $r.Output | Should -Match "부트스트랩"
+        $r.Output | Should -Match "bootstrap"
     }
 
     # scriptblock 형태(= 셸 직접 실행)에서 --help 가 -Newline 에 바인딩되던 회귀.
-    It "셸에서 직접 실행한 --help 도 도움말을 낸다" {
+    It "--help run directly from the shell also prints the help" {
         $r = Invoke-ScriptInline (Join-Path $script:RepoRoot "install.ps1") "--help"
         $r.ExitCode | Should -Be 0
-        $r.Output | Should -Match "부트스트랩"
+        $r.Output | Should -Match "bootstrap"
     }
 
     # --dry-run 은 알아듣고 --bogus 만 거절해야 한다. 거절은 다운로드 전에 일어나므로
     # 이 테스트는 네트워크를 타지 않는다.
-    It "알 수 없는 옵션만 거절하고 긴 표기는 소비한다" {
+    It "rejects only the unknown option and consumes the long notation" {
         $r = Invoke-ScriptInline (Join-Path $script:RepoRoot "install.ps1") "--dry-run --bogus"
         $r.ExitCode | Should -Not -Be 0
         $r.Output | Should -Match "--bogus"
@@ -120,18 +120,18 @@ Describe "install.ps1 bootstrap" {
 
     # README 옵션 표의 -Harness 가 부트스트랩에서 '알 수 없는 옵션' 으로 죽던 회귀.
     # 값까지 소비해야 하므로 --bogus 만 거절되는지로 본다 (다운로드 전이라 네트워크 없음).
-    It "-Harness 와 --harness 를 값과 함께 소비한다" {
+    It "consumes -Harness and --harness together with their values" {
         foreach ($a in @("-Harness claude,codex --bogus", "--harness claude --bogus")) {
             $r = Invoke-ScriptInline (Join-Path $script:RepoRoot "install.ps1") $a
             $r.ExitCode | Should -Not -Be 0
-            $r.Output | Should -Match "(?m)알 수 없는 옵션: --bogus\r?$" -Because $a
+            $r.Output | Should -Match "(?m)Unknown option: --bogus\r?$" -Because $a
         }
     }
 
     # README 의 `irm | iex` 는 인자를 하나도 넘기지 않는다. 그 경로가 빈 인자를 '알 수 없는 옵션'
     # 으로 거절하던 회귀. 존재하지 않는 레포를 가리켜 다운로드 단계에서 멈추게 하므로 설치는
     # 일어나지 않고, 오프라인이어도 결론은 같다.
-    It "인자 없이 실행해도 옵션 검사를 통과한다" {
+    It "passes the option check when run without arguments" {
         $oldRepo, $oldTok, $oldUP, $oldTemp = $env:CLAUDE_SETUP_REPO, $env:GITHUB_TOKEN, $env:USERPROFILE, $env:TEMP
         $env:CLAUDE_SETUP_REPO = "thsvkd/does-not-exist-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
         $env:GITHUB_TOKEN = "invalid"
@@ -143,14 +143,14 @@ Describe "install.ps1 bootstrap" {
         } finally {
             $env:CLAUDE_SETUP_REPO, $env:GITHUB_TOKEN, $env:USERPROFILE, $env:TEMP = $oldRepo, $oldTok, $oldUP, $oldTemp
         }
-        $r.Output | Should -Not -Match "알 수 없는 옵션"
-        $r.Output | Should -Match "다운로드 실패"
+        $r.Output | Should -Not -Match "Unknown option"
+        $r.Output | Should -Match "Download failed"
     }
 }
 
 # S2: 기존 Pester 스위트는 -Help / -DryRun 만 밟고 실제 설치 경로를 한 번도 실행하지 않았다.
 # macOS 의 치명적 버그(패턴 A)가 정확히 이 빈칸에 숨어 있었던 전례가 있어 추가한다.
-Describe "실제 설치 경로 (S2)" {
+Describe "real install path (S2)" {
     BeforeEach {
         $script:sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-real-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $script:sandbox | Out-Null
@@ -185,7 +185,7 @@ Describe "실제 설치 경로 (S2)" {
         Remove-Item -Recurse -Force $script:sandbox -ErrorAction SilentlyContinue
     }
 
-    It "-Hooks 실제 설치가 훅 파일과 셰임, settings.json 을 만든다" {
+    It "a real -Hooks install creates the hook files, the shim and settings.json" {
         $r = Invoke-Script $script:Setup @("-Hooks")
         $r.ExitCode | Should -Be 0
         $hooksDir = Join-Path $env:USERPROFILE ".claude\hooks"
@@ -201,7 +201,7 @@ Describe "실제 설치 경로 (S2)" {
         $settings.env.GRAFT_TEST_SYNC_RUN | Should -Match '/hooks/graft_sync_hidden\.cjs$'
     }
 
-    It "멱등 재실행 후에도 중복 없이 영수증(added_allow)이 보존된다" {
+    It "the manifest (added_allow) survives an idempotent rerun without duplicates" {
         Invoke-Script $script:Setup @("-Hooks") | Out-Null
         $r2 = Invoke-Script $script:Setup @("-Hooks")
         $r2.ExitCode | Should -Be 0
@@ -213,7 +213,7 @@ Describe "실제 설치 경로 (S2)" {
         $manifest.default_mode_changed | Should -Be $true
     }
 
-    It "-Uninstall 이 설치 전 상태(설정 파일 없음)로 복원한다" {
+    It "-Uninstall restores the pre-install state (no settings file)" {
         Invoke-Script $script:Setup @("-Hooks") | Out-Null
         $r = Invoke-Script $script:Setup @("-Uninstall")
         $r.ExitCode | Should -Be 0
@@ -221,7 +221,7 @@ Describe "실제 설치 경로 (S2)" {
         Test-Path (Join-Path $env:USERPROFILE ".claude\settings.json") | Should -Be $false
     }
 
-    It "기존 settings.json 의 model/env 는 보존하고 defaultMode 만 auto 로 바꾼다" {
+    It "keeps the existing settings.json model/env and only switches defaultMode to auto" {
         New-Item -ItemType Directory -Force -Path (Join-Path $env:USERPROFILE ".claude") | Out-Null
         $seed = @{ env = @{ MY_VAR = "keep-me" }; model = "sonnet"; permissions = @{ defaultMode = "acceptEdits" } } | ConvertTo-Json -Depth 5
         Set-Content -Path (Join-Path $env:USERPROFILE ".claude\settings.json") -Value $seed -Encoding utf8
@@ -234,7 +234,7 @@ Describe "실제 설치 경로 (S2)" {
     }
 
     # OMC 설치는 실제 claude CLI 를 부르므로, 설치 결과(settings + 영수증)를 심어 두고 제거 경로만 검증한다.
-    It "-Uninstall -Hooks 는 omc_hud 영수증을 남기고, 이어서 -Uninstall -Omc 가 캐시 TTL 설정을 되돌린다" {
+    It "-Uninstall -Hooks leaves the omc_hud manifest, then -Uninstall -Omc reverts the cache TTL setting" {
         Invoke-Script $script:Setup @("-Hooks") | Out-Null
         $claudeDir = Join-Path $env:USERPROFILE ".claude"
         $settingsPath = Join-Path $claudeDir "settings.json"
@@ -259,7 +259,7 @@ Describe "실제 설치 경로 (S2)" {
         Test-Path $manifestPath | Should -Be $false
     }
 
-    It "-Omc -Uninstall -DryRun 은 아무것도 바꾸지 않는다" {
+    It "-Omc -Uninstall -DryRun changes nothing" {
         New-Item -ItemType Directory -Force -Path (Join-Path $env:USERPROFILE ".claude") | Out-Null
         $settingsPath = Join-Path $env:USERPROFILE ".claude\settings.json"
         $seed = '{"statusLine": {"type": "command", "command": "node \"$HOME/.claude/hud/omc-hud-ttl.mjs\" node x/omc-hud.mjs", "refreshInterval": 10}}'
@@ -270,7 +270,7 @@ Describe "실제 설치 경로 (S2)" {
         (Get-Content $settingsPath -Raw).Trim() | Should -Be $seed
     }
 
-    It "-Uninstall -Hooks 는 output_style 영수증을 남기고, 이어서 -Uninstall -OutputStyle 이 outputStyle 을 되돌린다" {
+    It "-Uninstall -Hooks leaves the output_style manifest, then -Uninstall -OutputStyle reverts outputStyle" {
         Invoke-Script $script:Setup @("-Hooks") | Out-Null
         $claudeDir = Join-Path $env:USERPROFILE ".claude"
         $settingsPath = Join-Path $claudeDir "settings.json"
@@ -291,7 +291,7 @@ Describe "실제 설치 경로 (S2)" {
         Test-Path $manifestPath | Should -Be $false
     }
 
-    It "-NoOnboard 기본 전체 설치는 mod 를 깔지 않는다" {
+    It "the default full install with -NoOnboard does not install mods" {
         $r = Invoke-Script $script:Setup @("-NoOnboard")
         $r.ExitCode | Should -Be 0
         $claudeDir = Join-Path $env:USERPROFILE ".claude"
@@ -299,7 +299,7 @@ Describe "실제 설치 경로 (S2)" {
         (Get-Content (Join-Path $claudeDir "settings.json") -Raw) | Should -Not -Match "CLAUDE_CODE_PLUGIN_DIRS"
     }
 
-    It "--mods 긴 표기로 설치하고 -Uninstall -Mods 로 mod 만 되돌린다" {
+    It "installs with the long --mods notation and reverts only the mods with -Uninstall -Mods" {
         $claudeDir = Join-Path $env:USERPROFILE ".claude"
         New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
         Set-Content -Path (Join-Path $claudeDir "settings.json") -Value '{"model": "opus"}' -Encoding utf8
@@ -312,7 +312,7 @@ Describe "실제 설치 경로 (S2)" {
         $after.PSObject.Properties.Name | Should -Not -Contain "env"
     }
 
-    Context "claude CLI 스텁" {
+    Context "claude CLI stub" {
         BeforeAll {
             # 실제 claude 를 부르지 않도록 PATH 앞에 기록만 하는 스텁을 둔다. Windows 는 claude.cmd,
             # Linux/macOS 의 pwsh 는 배치 파일을 실행하지 못하므로 같은 일을 하는 셸 스크립트를 함께 둔다.
@@ -342,7 +342,7 @@ Describe "실제 설치 경로 (S2)" {
         }
         AfterEach { $env:PATH = $script:oldPath }
 
-        It "-OutputStyle 은 fluent-korean 플러그인을 설치하고 outputStyle 만 지정한다" {
+        It "-OutputStyle installs the fluent-korean plugin and sets only outputStyle" {
             $r = Invoke-Script $script:Setup @("-OutputStyle")
             $r.ExitCode | Should -Be 0
             $calls = Get-Content $script:claudeLog -Raw
@@ -354,7 +354,7 @@ Describe "실제 설치 경로 (S2)" {
             $after.PSObject.Properties.Name | Should -Not -Contain "hooks"
         }
 
-        It "빈 홈에서 -Omc -Mods 설치 뒤 -Uninstall 은 settings.json 과 mod 를 남기지 않는다" {
+        It "after -Omc -Mods on an empty home, -Uninstall leaves no settings.json and no mods" {
             Set-ClaudeStub -ListLine "oh-my-claudecode@omc"
             # HUD 래퍼 템플릿을 복사할 플러그인 캐시를 흉내 낸다
             $lib = Join-Path $env:USERPROFILE ".claude\plugins\cache\omc\oh-my-claudecode\5.4.0\scripts\lib"
@@ -377,7 +377,7 @@ Describe "실제 설치 경로 (S2)" {
             Test-Path (Join-Path $claudeDir ".claude-code-setup.json") | Should -Be $false
         }
 
-        It "--output-style --dry-run 은 claude 설치도 settings 쓰기도 하지 않는다" {
+        It "--output-style --dry-run neither installs claude nor writes settings" {
             $r = Invoke-ScriptInline $script:Setup "--output-style --dry-run"
             $r.ExitCode | Should -Be 0
             $r.Output | Should -Match "\(dry-run\) claude plugin install fluent-korean@fluent-korean"
@@ -390,8 +390,8 @@ Describe "실제 설치 경로 (S2)" {
 # Windows PowerShell 5.1 은 BOM 없는 UTF-8 .ps1 을 OS ANSI 코드페이지([System.Text.Encoding]::Default)
 # 로 읽는다. DBCS 코드페이지(한국어 949, 일본어 932, 중국어 936 등) 에서는 UTF-8 멀티바이트
 # 시퀀스의 특정 바이트가 개행/따옴표까지 삼켜버려 스크립트 전체가 파싱조차 안 된다 — 실측 확인됨.
-Describe "Windows .ps1 인코딩 회귀 (BOM)" {
-    It "배포되는 .ps1 파일은 전부 UTF-8 BOM 으로 시작해야 한다" {
+Describe "Windows .ps1 encoding regression (BOM)" {
+    It "every shipped .ps1 file must start with a UTF-8 BOM" {
         $files = @(
             "scripts\setup.ps1", "scripts\setup_hooks.ps1", "scripts\setup_agentsmd.ps1",
             "scripts\lib\SetupCommon.ps1", "scripts\setup_output_style.ps1", "scripts\setup_mods.ps1", "tests\Setup.Tests.ps1"
@@ -400,26 +400,26 @@ Describe "Windows .ps1 인코딩 회귀 (BOM)" {
             $path = Join-Path $script:RepoRoot $f
             $bytes = [System.IO.File]::ReadAllBytes($path)
             $hasBom = ($bytes.Length -ge 3) -and ($bytes[0] -eq 0xEF) -and ($bytes[1] -eq 0xBB) -and ($bytes[2] -eq 0xBF)
-            $hasBom | Should -Be $true -Because "$f 에 BOM이 없으면 Windows PowerShell 5.1 + DBCS 로케일에서 파싱이 깨질 수 있음"
+            $hasBom | Should -Be $true -Because "$f without a BOM can fail to parse on Windows PowerShell 5.1 with a DBCS locale"
         }
     }
 
     # install.ps1 은 파일로 실행되지 않고 `irm | iex` 로 문자열이 된다. 5.1 의 irm 은 BOM 을
     # U+FEFF 문자로 남기고, 파서는 그걸 공백이 아닌 명령 이름으로 읽어 첫 줄 `<#` 주석부터
     # 무너진다 (실측). 디코딩은 raw.githubusercontent 의 charset=utf-8 헤더가 맡으므로 BOM 이 필요 없다.
-    It "install.ps1 은 BOM 없이 시작해야 한다 (irm | iex 경로)" {
+    It "install.ps1 must start without a BOM (irm | iex path)" {
         $bytes = [System.IO.File]::ReadAllBytes((Join-Path $script:RepoRoot "install.ps1"))
         $hasBom = ($bytes.Length -ge 3) -and ($bytes[0] -eq 0xEF) -and ($bytes[1] -eq 0xBB) -and ($bytes[2] -eq 0xBF)
-        $hasBom | Should -Be $false -Because "Windows PowerShell 5.1 에서 irm | iex 가 파싱 오류로 실패함"
+        $hasBom | Should -Be $false -Because "irm | iex fails with a parse error on Windows PowerShell 5.1"
     }
 
     # powershell.exe 는 Windows 에만 있다. 없는 곳에서 '실패'로 잡으면 진짜 실패가 묻힌다 —
     # 건너뛴 것은 통과가 아니라 '검증 안 됨'이며, Pester 요약에 Skipped 로 정직하게 남는다.
-    It "powershell.exe(Windows PowerShell 5.1) 로 setup.ps1 -Help 를 실행해도 정상 파싱/실행된다" -Skip:(-not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) {
+    It "setup.ps1 -Help parses and runs correctly under powershell.exe (Windows PowerShell 5.1)" -Skip:(-not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) {
         $out = powershell.exe -ExecutionPolicy Bypass -File $script:Setup -Help 2>&1 | Out-String
         $ec = $LASTEXITCODE
         $ec | Should -Be 0
-        $out | Should -Match "사용법"
+        $out | Should -Match "Usage"
     }
 }
 
@@ -428,8 +428,8 @@ Describe "Windows .ps1 인코딩 회귀 (BOM)" {
 # 명령의 0이 아닌 종료 코드가 예외로 승격되어 첫 설치가 통째로 실패한다 (실측 재현됨). 이 저장소는
 # 공유 send2trash 패키지를 설치/제거하며 동적으로 재현하는 대신, 방어 코드가 소스에 남아있는지
 # 정적으로 확인한다 (동적 재현은 Phase 2 수기 검증에서 이미 수행함 — docs/HANDOFF.md 참고).
-Describe "네이티브 명령 오류 승격 방어 회귀 (S1)" {
-    It "네이티브 명령을 LASTEXITCODE 로 판정하는 스크립트는 PSNativeCommandUseErrorActionPreference 를 명시적으로 끈다" {
+Describe "native command error escalation guard regression (S1)" {
+    It "scripts that judge native commands by LASTEXITCODE explicitly turn off PSNativeCommandUseErrorActionPreference" {
         $files = @(
             "scripts\setup.ps1", "scripts\setup_hooks.ps1", "install.ps1", "scripts\lib\SetupCommon.ps1"
         )
@@ -437,7 +437,7 @@ Describe "네이티브 명령 오류 승격 방어 회귀 (S1)" {
             $path = Join-Path $script:RepoRoot $f
             $content = Get-Content -Path $path -Raw
             $content | Should -Match '\$PSNativeCommandUseErrorActionPreference\s*=\s*\$false' `
-                -Because "$f 는 네이티브 명령 실패를 `$LASTEXITCODE 로 직접 판정하므로, PS 7.4+ 에서 그 실패가 예외로 승격되면 안 됨"
+                -Because "$f judges native command failures by `$LASTEXITCODE directly, so PS 7.4+ must not escalate them to exceptions"
         }
     }
 }
@@ -451,7 +451,7 @@ Describe "네이티브 명령 오류 승격 방어 회귀 (S1)" {
 # python 이 PATH 에 남아 있으면 리졸버가 py 보다 python 을 먼저 고르므로 스텁이 실행되지 않는다.
 # 그래서 python/python3 은 실패 스텁으로 가리고, py.cmd 만 -3 을 거부한 뒤 나머지 인자는 진짜
 # 인터프리터로 넘긴다 — try/catch 와 `py` 빈 Args 후보가 둘 다 실제로 밟힌다.
-Describe "온보딩 파이썬 탐지 (py -3 NativeCommandError 회귀)" {
+Describe "onboarding Python detection (py -3 NativeCommandError regression)" {
     BeforeEach {
         $script:realPython = (Get-Command python -CommandType Application -ErrorAction SilentlyContinue).Source
         $script:sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-py3-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
@@ -512,9 +512,9 @@ Describe "온보딩 파이썬 탐지 (py -3 NativeCommandError 회귀)" {
         Remove-Item -Recurse -Force $script:sandbox -ErrorAction SilentlyContinue
     }
 
-    It "powershell.exe 5.1 에서 py -3 이 Unknown option 이어도 빈 Args 로 넘어가 설치가 산다" -Skip:(-not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) {
+    It "on powershell.exe 5.1 the install survives py -3 being an Unknown option by falling through to empty Args" -Skip:(-not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) {
         if (-not $script:realPython) {
-            Set-ItResult -Skipped -Because "PATH 에 진짜 python 이 있어야 스텁 py 가 -3 이외를 위임할 수 있음"
+            Set-ItResult -Skipped -Because "a real python must be on PATH so the stub py can delegate everything except -3"
             return
         }
         $out = powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script:Setup 2>&1 | Out-String
@@ -522,16 +522,16 @@ Describe "온보딩 파이썬 탐지 (py -3 NativeCommandError 회귀)" {
         # .cmd 를 찾지 못해 실패할 수 있다. 이 케이스가 잠그는 건 그 셀프테스트가 아니라
         # 'py -3 NativeCommandError 로 setup.ps1 이 즉시 죽는가' 이므로, 훅 파일이 남았는지와
         # NativeCommandError 부재로 판정한다.
-        $out | Should -Not -Match "NativeCommandError" -Because "py -3 실패는 try/catch 로 삼키고 다음 후보로 넘어가야 함"
-        $out | Should -Not -Match "Python을 찾을 수 없습니다"
+        $out | Should -Not -Match "NativeCommandError" -Because "a py -3 failure must be swallowed by try/catch and move on to the next candidate"
+        $out | Should -Not -Match "Python not found"
         Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $true `
-            -Because "원래 크래시는 훅 설치 전에 죽었음. 파일이 남으면 온보딩 탐지가 산 것"
+            -Because "the original crash died before the hooks were installed; if the file remains, onboarding detection survived"
     }
 }
 
 # 온보딩(res/onboard.py)은 인자 없이 실행할 때만 뜬다. 여기서 지키려는 건 두 가지다:
 # 콘솔이 없을 때 아무것도 골라버리지 않을 것, 그리고 기존 플래그 호출이 멈추지 않을 것.
-Describe "온보딩 연결" {
+Describe "onboarding wiring" {
     BeforeEach {
         $script:sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-onboard-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $script:sandbox | Out-Null
@@ -543,39 +543,39 @@ Describe "온보딩 연결" {
         Remove-Item -Recurse -Force $script:sandbox -ErrorAction SilentlyContinue
     }
 
-    It "-Help 가 온보딩에서 고를 수 있는 항목을 안내한다" {
+    It "-Help lists what can be chosen in onboarding" {
         $r = Invoke-Script $script:Setup @("-Help")
         $r.ExitCode | Should -Be 0
-        $r.Output | Should -Match "온보딩"
+        $r.Output | Should -Match "onboarding"
         $r.Output | Should -Match "bypassPermissions"
     }
 
-    It "플래그를 주면 온보딩을 띄우지 않는다" {
+    It "passing a flag does not launch onboarding" {
         # 자동화/CI 가 쓰던 기존 호출이 프롬프트를 기다리며 멈추면 안 된다.
         $r = Invoke-Script $script:Setup @("-Hooks", "-DryRun")
         $r.ExitCode | Should -Be 0
-        $r.Output | Should -Not -Match "무엇을 설치할까요"
+        $r.Output | Should -Not -Match "What would you like to install"
     }
 
-    It "-NoOnboard 는 온보딩 없이 기본 동작으로 진행한다" {
+    It "-NoOnboard proceeds with the default behavior without onboarding" {
         $r = Invoke-Script $script:Setup @("-NoOnboard", "-DryRun")
         $r.ExitCode | Should -Be 0
-        $r.Output | Should -Not -Match "무엇을 설치할까요"
+        $r.Output | Should -Not -Match "What would you like to install"
         $r.Output | Should -Match "DRY RUN"
     }
 
-    It "onboard.py 는 콘솔이 없으면 아무 선택도 남기지 않고 2 로 끝난다" {
+    It "onboard.py leaves no selection and exits 2 when there is no console" {
         $onboard = Join-Path $script:RepoRoot "res\onboard.py"
         $answers = Join-Path $script:sandbox "answers.txt"
         $py = if (Get-Command python3 -ErrorAction SilentlyContinue) { "python3" } else { "python" }
         & $py -X utf8 $onboard --out $answers *> $null
-        $LASTEXITCODE | Should -Be 2 -Because "물어볼 수 없는 환경에서 뭔가를 고르면 사용자가 동의한 적 없는 설치가 된다"
+        $LASTEXITCODE | Should -Be 2 -Because "picking anything in an environment that cannot ask becomes an install the user never agreed to"
 
         $written = if (Test-Path $answers) { Get-Content $answers -Raw -ErrorAction SilentlyContinue } else { $null }
-        [string]::IsNullOrWhiteSpace($written) | Should -BeTrue -Because "선택을 못 받았으면 결과 파일도 비어 있어야 한다"
+        [string]::IsNullOrWhiteSpace($written) | Should -BeTrue -Because "if no selection was received, the result file must be empty too"
     }
 
-    It "온보딩이 도중에 깨지면 기본값으로 진행하지 않고 아무것도 설치하지 않는다" {
+    It "if onboarding breaks midway, it does not proceed with defaults and installs nothing" {
         # 2(물을 수 없음)만 기본값으로 진행한다. 1(프롬프트가 깨짐)·traceback 은 고르던 중이었다.
         $repo = Join-Path $script:sandbox "repo"
         New-Item -ItemType Directory -Force -Path $repo | Out-Null
@@ -589,13 +589,13 @@ Describe "온보딩 연결" {
             $r = Invoke-Script (Join-Path $repo "scripts/setup.ps1") @()
         } finally { Pop-Location; $env:HOME = $oldHome }
         $r.ExitCode | Should -Be 1
-        $r.Output | Should -Match "설치를 중단합니다"
+        $r.Output | Should -Match "Aborting installation"
         Join-Path $script:sandbox ".claude" | Should -Not -Exist
         Join-Path $script:sandbox "AGENTS.md" | Should -Not -Exist
     }
 }
 
-Describe "온보딩이 고른 값이 설치에 반영된다" {
+Describe "the values picked in onboarding are reflected in the install" {
     BeforeEach {
         $script:sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-mode-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $script:sandbox | Out-Null
@@ -607,25 +607,25 @@ Describe "온보딩이 고른 값이 설치에 반영된다" {
         Remove-Item -Recurse -Force $script:sandbox -ErrorAction SilentlyContinue
     }
 
-    It "-DefaultMode bypassPermissions 가 settings.json 계획에 반영된다" {
+    It "-DefaultMode bypassPermissions is reflected in the settings.json plan" {
         $r = Invoke-Script $script:SetupHooks @("-DryRun", "-DefaultMode", "bypassPermissions")
         $r.ExitCode | Should -Be 0
         $r.Output | Should -Match "permissions\.defaultMode: None -> 'bypassPermissions'"
     }
 
-    It "-DefaultMode 를 주지 않으면 조각의 기본값(auto)이 그대로 쓰인다" {
+    It "without -DefaultMode, the fragment default (auto) is used as is" {
         $r = Invoke-Script $script:SetupHooks @("-DryRun")
         $r.ExitCode | Should -Be 0
         $r.Output | Should -Match "permissions\.defaultMode: None -> 'auto'"
     }
 
-    It "알 수 없는 -DefaultMode 는 ValidateSet 이 거부한다" {
+    It "an unknown -DefaultMode is rejected by ValidateSet" {
         $r = Invoke-Script $script:SetupHooks @("-DryRun", "-DefaultMode", "bypass")
         $r.ExitCode | Should -Not -Be 0
     }
 }
 
-Describe "AGENTS.md 덮어쓰기 (-Force)" {
+Describe "AGENTS.md overwrite (-Force)" {
     BeforeEach {
         $script:proj = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-agents-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $script:proj | Out-Null
@@ -635,7 +635,7 @@ Describe "AGENTS.md 덮어쓰기 (-Force)" {
         Remove-Item -Recurse -Force $script:proj -ErrorAction SilentlyContinue
     }
 
-    It "-Force 없이는 기존 AGENTS.md 를 건드리지 않는다" {
+    It "without -Force the existing AGENTS.md is left alone" {
         $target = Join-Path $script:proj "AGENTS.md"
         Set-Content -Path $target -Value "사용자가 손댄 내용" -Encoding UTF8
         Push-Location $script:proj
@@ -643,20 +643,20 @@ Describe "AGENTS.md 덮어쓰기 (-Force)" {
         (Get-Content $target -Raw) | Should -Match "사용자가 손댄 내용"
     }
 
-    It "-Force 는 덮어쓰기 전에 원본을 백업한다" {
+    It "-Force backs up the original before overwriting" {
         $target = Join-Path $script:proj "AGENTS.md"
         Set-Content -Path $target -Value "사용자가 손댄 내용" -Encoding UTF8
         Push-Location $script:proj
         try { pwsh -NoProfile -File $script:AgentsMd -Force *> $null } finally { Pop-Location }
 
         $backups = @(Get-ChildItem -Path $script:proj -Filter "AGENTS.md.bak.*")
-        $backups.Count | Should -Be 1 -Because "사용자 콘텐츠를 덮어쓸 때는 되돌릴 방법을 남겨야 한다"
+        $backups.Count | Should -Be 1 -Because "overwriting user content must leave a way to undo it"
         (Get-Content $backups[0].FullName -Raw) | Should -Match "사용자가 손댄 내용"
         (Get-Content $target -Raw) | Should -Not -Match "사용자가 손댄 내용"
     }
 }
 
-Describe "프로젝트 지침 하네스 선택" {
+Describe "project instructions harness selection" {
     BeforeEach {
         $script:proj = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-harness-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $script:proj | Out-Null
@@ -665,59 +665,59 @@ Describe "프로젝트 지침 하네스 선택" {
         Remove-Item -Recurse -Force $script:proj -ErrorAction SilentlyContinue
     }
 
-    It "인자가 없으면 모든 하네스를 설치한다 — AGENTS.md 와 CLAUDE.md" {
+    It "with no arguments every harness is installed - AGENTS.md and CLAUDE.md" {
         (Invoke-AgentsMdIn $script:proj).ExitCode | Should -Be 0
         Test-Path (Join-Path $script:proj "AGENTS.md") | Should -Be $true
         Test-Path (Join-Path $script:proj "CLAUDE.md") | Should -Be $true
     }
 
-    It "-Harness codex 는 CLAUDE.md 를 만들지 않는다" {
+    It "-Harness codex does not create CLAUDE.md" {
         (Invoke-AgentsMdIn $script:proj @("-Harness", "codex")).ExitCode | Should -Be 0
         Test-Path (Join-Path $script:proj "AGENTS.md") | Should -Be $true
-        Test-Path (Join-Path $script:proj "CLAUDE.md") | Should -Be $false -Because "Codex 는 AGENTS.md 를 직접 읽는다"
+        Test-Path (Join-Path $script:proj "CLAUDE.md") | Should -Be $false -Because "Codex reads AGENTS.md directly"
     }
 
-    It "-Harness grok,opencode 는 CLAUDE.md 를 만들지 않는다" {
+    It "-Harness grok,opencode does not create CLAUDE.md" {
         (Invoke-AgentsMdIn $script:proj @("-Harness", "grok,opencode")).ExitCode | Should -Be 0
         Test-Path (Join-Path $script:proj "AGENTS.md") | Should -Be $true
         Test-Path (Join-Path $script:proj "CLAUDE.md") | Should -Be $false
     }
 
-    It "-Harness claude,codex 는 다중 선택으로 둘 다 설치한다" {
+    It "-Harness claude,codex is a multi-select that installs both" {
         (Invoke-AgentsMdIn $script:proj @("-Harness", "claude,codex")).ExitCode | Should -Be 0
         Test-Path (Join-Path $script:proj "AGENTS.md") | Should -Be $true
         Test-Path (Join-Path $script:proj "CLAUDE.md") | Should -Be $true
     }
 
-    It "-Harness all 은 -Harness claude,codex,grok,opencode 와 같다" {
+    It "-Harness all is the same as -Harness claude,codex,grok,opencode" {
         (Invoke-AgentsMdIn $script:proj @("-Harness", "all")).ExitCode | Should -Be 0
         Test-Path (Join-Path $script:proj "CLAUDE.md") | Should -Be $true
     }
 
-    It "CLAUDE.md 는 AGENTS.md 를 import 한다" {
+    It "CLAUDE.md imports AGENTS.md" {
         (Invoke-AgentsMdIn $script:proj @("-Harness", "claude")).ExitCode | Should -Be 0
         (Get-Content (Join-Path $script:proj "CLAUDE.md") -Raw) | Should -Match "@AGENTS\.md"
     }
 
-    It "알 수 없는 하네스는 아무것도 설치하지 않고 실패한다" {
+    It "an unknown harness installs nothing and fails" {
         (Invoke-AgentsMdIn $script:proj @("-Harness", "cursor")).ExitCode | Should -Not -Be 0
-        Test-Path (Join-Path $script:proj "AGENTS.md") | Should -Be $false -Because "판정할 수 없는 입력에는 멈춰야 한다"
+        Test-Path (Join-Path $script:proj "AGENTS.md") | Should -Be $false -Because "input that cannot be judged must stop the run"
     }
 
-    It "-DryRun 은 어떤 하네스를 골라도 파일을 만들지 않는다" {
+    It "-DryRun creates no files whichever harness is chosen" {
         (Invoke-AgentsMdIn $script:proj @("-Harness", "claude,codex", "-DryRun")).ExitCode | Should -Be 0
         Test-Path (Join-Path $script:proj "AGENTS.md") | Should -Be $false
         Test-Path (Join-Path $script:proj "CLAUDE.md") | Should -Be $false
     }
 
-    It "기존 CLAUDE.md 는 -Force 없이는 건드리지 않는다" {
+    It "an existing CLAUDE.md is left alone without -Force" {
         $target = Join-Path $script:proj "CLAUDE.md"
         Set-Content -Path $target -Value "사용자가 손댄 내용" -Encoding UTF8
         (Invoke-AgentsMdIn $script:proj @("-Harness", "claude")).ExitCode | Should -Be 0
         (Get-Content $target -Raw) | Should -Match "사용자가 손댄 내용"
     }
 
-    It "@AGENTS.md 를 import 하지 않는 기존 CLAUDE.md 는 경고한다" {
+    It "warns about an existing CLAUDE.md that does not import @AGENTS.md" {
         # 건너뛰기 자체는 옳다 — 사용자 콘텐츠다. 다만 그 파일이 AGENTS.md 를 불러오지
         # 않으면 Claude Code 는 방금 설치한 지침을 영영 읽지 않는데, 조용히 성공으로
         # 보고하면 사용자가 알 방법이 없다.
@@ -727,32 +727,32 @@ Describe "프로젝트 지침 하네스 선택" {
         $r = Invoke-AgentsMdIn $script:proj @("-Harness", "claude")
         $r.ExitCode | Should -Be 0
         $r.Output | Should -Match "@AGENTS\.md"
-        $r.Output | Should -Match "읽지 않습니다"
-        (Get-Content $target -Raw) | Should -Match "프로젝트 고유 규칙만 있음" -Because "경고는 하되 사용자 파일은 건드리지 않는다"
+        $r.Output | Should -Match "will not read"
+        (Get-Content $target -Raw) | Should -Match "프로젝트 고유 규칙만 있음" -Because "warn, but leave the user file untouched"
     }
 
-    It "이미 @AGENTS.md 를 import 하는 CLAUDE.md 에는 경고하지 않는다" {
+    It "does not warn about a CLAUDE.md that already imports @AGENTS.md" {
         $target = Join-Path $script:proj "CLAUDE.md"
         Set-Content -Path $target -Value "@AGENTS.md`n`n## 프로젝트 고유" -Encoding UTF8
 
         $r = Invoke-AgentsMdIn $script:proj @("-Harness", "claude")
         $r.ExitCode | Should -Be 0
-        $r.Output | Should -Not -Match "읽지 않습니다"
+        $r.Output | Should -Not -Match "will not read"
     }
 
-    It "-Force 는 CLAUDE.md 도 백업한 뒤 덮어쓴다" {
+    It "-Force also backs up CLAUDE.md before overwriting it" {
         $target = Join-Path $script:proj "CLAUDE.md"
         Set-Content -Path $target -Value "사용자가 손댄 내용" -Encoding UTF8
         (Invoke-AgentsMdIn $script:proj @("-Harness", "claude", "-Force")).ExitCode | Should -Be 0
 
         $backups = @(Get-ChildItem -Path $script:proj -Filter "CLAUDE.md.bak.*")
-        $backups.Count | Should -Be 1 -Because "AGENTS.md 와 같은 복구 보장을 받아야 한다"
+        $backups.Count | Should -Be 1 -Because "it must get the same recovery guarantee as AGENTS.md"
         (Get-Content $backups[0].FullName -Raw) | Should -Match "사용자가 손댄 내용"
         (Get-Content $target -Raw) | Should -Match "@AGENTS\.md"
     }
 
     # setup.sh 처럼 긴 표기 --harness 도 디스패처를 거쳐 워커까지 가야 한다.
-    It "setup.ps1 --agentsmd --harness codex 는 CLAUDE.md 를 만들지 않는다" {
+    It "setup.ps1 --agentsmd --harness codex does not create CLAUDE.md" {
         $oldUP = $env:USERPROFILE
         $env:USERPROFILE = $script:proj
         Push-Location $script:proj
@@ -767,7 +767,7 @@ Describe "프로젝트 지침 하네스 선택" {
 
 # 줄바꿈 키바인드 디스패처. 실제 프로필을 건드리지 않도록 HOME/APPDATA 와
 # CLAUDE_SETUP_* 경로를 샌드박스로 돌린다.
-Describe "키바인드 디스패처" {
+Describe "keybinding dispatcher" {
     BeforeEach {
         $script:sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-kb-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $script:sandbox | Out-Null
@@ -802,14 +802,14 @@ Describe "키바인드 디스패처" {
         Remove-Item -Recurse -Force $script:sandbox -ErrorAction SilentlyContinue
     }
 
-    It "-Help 에 -Keybinds 와 -Newline 이 보인다 (covers: Test-15)" {
+    It "-Help shows -Keybinds and -Newline (covers: Test-15)" {
         $r = Invoke-Script $script:Setup @("-Help")
         $r.ExitCode | Should -Be 0
         $r.Output | Should -Match "Keybinds"
         $r.Output | Should -Match "Newline"
     }
 
-    It "-Keybinds -DryRun 은 대상 파일을 쓰지 않고 계획에 경로가 보인다 (covers: Test-10)" {
+    It "-Keybinds -DryRun writes no target files and shows the paths in the plan (covers: Test-10)" {
         $beforeVs = Get-Content $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS -Raw
         $beforeWt = Get-Content $env:CLAUDE_SETUP_WT_SETTINGS -Raw
         $r = Invoke-Script $script:Setup @("-Keybinds", "-DryRun")
@@ -820,7 +820,7 @@ Describe "키바인드 디스패처" {
         $r.Output | Should -Match "keybindings.json"
     }
 
-    It "허용되지 않는 -Newline 은 exit 1 이고 파일을 건드리지 않는다 (covers: Test-8)" {
+    It "a disallowed -Newline exits 1 and leaves files untouched (covers: Test-8)" {
         $beforeVs = Get-Content $env:CLAUDE_SETUP_VSCODE_KEYBINDINGS -Raw
         $r = Invoke-Script $script:Setup @("-Keybinds", "-Newline", "foo")
         $r.ExitCode | Should -Be 1
@@ -829,7 +829,7 @@ Describe "키바인드 디스패처" {
         $r.Output | Should -Match "Newline|newline|shift-enter"
     }
 
-    It "-Keybinds 는 훅과 AGENTS.md 를 설치하지 않는다 (covers: Test-6)" {
+    It "-Keybinds does not install hooks or AGENTS.md (covers: Test-6)" {
         $r = Invoke-Script $script:Setup @("-Keybinds")
         $r.ExitCode | Should -Be 0
         Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $false
@@ -838,8 +838,8 @@ Describe "키바인드 디스패처" {
     }
 }
 
-Describe "Python 미설치 안내" {
-    It "Python 이 없으면 setup_hooks.ps1 이 실패하며 winget 설치 명령을 안내한다" -Skip:(-not $IsWindows) {
+Describe "Python-not-installed guidance" {
+    It "without Python, setup_hooks.ps1 fails and shows the winget install command" -Skip:(-not $IsWindows) {
         $oldPath = $env:PATH; $oldUP = $env:USERPROFILE
         $sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $sandbox | Out-Null
@@ -850,7 +850,7 @@ Describe "Python 미설치 안내" {
             $pwshExe = (Get-Process -Id $PID).Path
             $out = & $pwshExe -NoProfile -File $script:SetupHooks -DryRun 2>&1 | Out-String
             $LASTEXITCODE | Should -Be 1
-            $out | Should -Match "Python을 찾을 수 없습니다"
+            $out | Should -Match "Python not found"
             $out | Should -Match "winget install -e --id Python\.Python\.3"
         } finally {
             $env:PATH = $oldPath; $env:USERPROFILE = $oldUP

@@ -147,10 +147,10 @@ DRY_RUN=1
 
 | # | 수정 | 회귀 테스트 |
 | --- | --- | --- |
-| 1 | `default_ide_path(home, app, platform, appdata)` 로 분리하고 darwin 분기 추가. 플랫폼을 인자로 받아 env 주입 없이 단언 가능 | `test_기본_IDE경로는_세_OS를_각각_따른다` |
-| 2 | `apply_tmux` 의 else 폴백 제거 — 영수증에 없으면 건드리지 않는다. 전체 uninstall 에서 키바인드를 훅보다 **먼저** 돌리고, 훅 uninstall 은 매니페스트의 `keybinds` 섹션을 남긴다 | `test_사용자가_이미_가진_extended_keys는_전체_uninstall에도_남는다` + 짝이 되는 `test_우리가_넣은_extended_keys는_전체_uninstall로_사라진다` |
-| 3 | Codex EOF/섹션전환 분기에 개행 보정 추가 | `test_개행없이_끝나는_codex_toml도_깨지지_않는다` |
-| 4 | `strip_trailing_commas` 추가. 읽지 못한 대상은 `report_result` 가 목록으로 알리고 0이 아닌 코드로 종료 | `test_트레일링콤마_keybindings도_읽는다`, `test_읽지_못한_대상이_있으면_성공이라고_말하지_않는다` |
+| 1 | `default_ide_path(home, app, platform, appdata)` 로 분리하고 darwin 분기 추가. 플랫폼을 인자로 받아 env 주입 없이 단언 가능 | `test_default_ide_paths_follow_each_of_three_oses` |
+| 2 | `apply_tmux` 의 else 폴백 제거 — 영수증에 없으면 건드리지 않는다. 전체 uninstall 에서 키바인드를 훅보다 **먼저** 돌리고, 훅 uninstall 은 매니페스트의 `keybinds` 섹션을 남긴다 | `test_users_own_extended_keys_survive_full_uninstall` + 짝이 되는 `test_our_extended_keys_are_removed_by_full_uninstall` |
+| 3 | Codex EOF/섹션전환 분기에 개행 보정 추가 | `test_codex_toml_without_trailing_newline_is_not_broken` |
+| 4 | `strip_trailing_commas` 추가. 읽지 못한 대상은 `report_result` 가 목록으로 알리고 0이 아닌 코드로 종료 | `test_trailing_comma_keybindings_are_readable`, `test_does_not_claim_success_when_a_target_was_unreadable` |
 | 5 | `onboard.py` 가 `newline="\n"` 고정, `setup.sh` 도 값 끝의 CR 을 벗긴다 (한쪽만 고쳐도 안 깨지게) | 기존 pty 테스트가 WSL 에서 통과 |
 
 ### R3 실측 전 항목
@@ -158,8 +158,8 @@ DRY_RUN=1
 | # | 수정 | 회귀 테스트 |
 | --- | --- | --- |
 | 6 | `is_managed_wt` 가 `is_ssot_sequence(input)` 까지 본다 (VS Code 판정과 대칭). WT 픽스처에 외래 `sendInput` 을 넣고 보존을 단언 | `assert_newline_install_result` 강화 |
-| 7 | 고르지 않은 키 제거를 영수증 조건부로 (Claude·Codex). 기록이 없으면 사용자 것이므로 둔다 | `test_사용자가_직접_넣은_고르지_않은_키는_설치가_지우지_않는다` |
-| 8 | 우리 키만 빠져 비면 `insert_newline` 줄과 빈 `[tui.keymap.editor]` 테이블까지 제거 | `test_codex_uninstall은_빈_insert_newline을_남기지_않는다` |
+| 7 | 고르지 않은 키 제거를 영수증 조건부로 (Claude·Codex). 기록이 없으면 사용자 것이므로 둔다 | `test_install_does_not_remove_users_own_unchosen_key` |
+| 8 | 우리 키만 빠져 비면 `insert_newline` 줄과 빈 `[tui.keymap.editor]` 테이블까지 제거 | `test_codex_uninstall_leaves_no_empty_insert_newline` |
 | 9 | R3 문서의 uninstall 설명 정정 — VS Code/Cursor 는 시그니처 기준이라 원래 있던 항목도 제거된다 | — |
 
 ### 나중 항목 (전부 처리)
@@ -179,8 +179,8 @@ DRY_RUN=1
 
 백업·원자적 쓰기를 **요구사항으로 승격했다.** 결정 8 의 "훅과 같은 철학" 에는 원래 백업이
 열거되어 있지 않지만, 2번 결함이 보여준 대로 이 설치기는 사용자가 직접 관리하던 파일을 고친다.
-되돌릴 수단이 없는 쪽이 더 위험하다고 판단했다. `test_바꾸기_전_원본을_백업하고_임시파일을_남기지_않는다`,
-`test_재실행은_백업을_쌓지_않는다` 로 고정했다.
+되돌릴 수단이 없는 쪽이 더 위험하다고 판단했다. `test_backs_up_original_before_change_and_leaves_no_temp_file`,
+`test_rerun_does_not_pile_up_backups` 로 고정했다.
 
 ### 검토 중 뒤집힌 판정 하나
 

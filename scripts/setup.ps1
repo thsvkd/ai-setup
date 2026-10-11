@@ -53,42 +53,42 @@ $PSNativeCommandUseErrorActionPreference = $false
 
 function Show-Usage {
     Write-Host @"
-claude-code-setup — Claude Code 사용자 레벨 설정
+claude-code-setup — Claude Code user-level setup
 
-사용법: .\setup.ps1 [옵션]
-  (옵션 없음)   대화형 온보딩으로 설치 범위/권한 모드를 고른 뒤 실행
-  -Hooks        전역 가드 훅 + 권한만 설치 (~/.claude)
-  -AgentsMd     현재 폴더에 프로젝트 지침만 설치
-  -Harness L    지침을 설치할 하네스 (쉼표 구분: claude,codex,grok,opencode,all)
-                claude 를 고르면 CLAUDE.md 도 함께 설치된다. 기본값은 all.
-  -Skills       번들 스킬만 설치 (~/.claude/skills)
-  -Keybinds     줄바꿈 키바인딩만 설치 (VS Code/Cursor/Claude/Codex)
-  -Newline VAL  줄바꿈 키 (shift-enter | ctrl-enter). 기본 shift-enter
-  -Omc          oh-my-claudecode 플러그인 설치 + HUD 에 캐시 TTL 표시
-                (범위 지정이 없는 기본 설치에는 포함되지 않는다)
-  -OutputStyle  fluent-korean 플러그인 설치 + outputStyle 을 fluent-korean 으로 지정
-                (범위 지정이 없는 기본 설치에는 포함되지 않는다)
-  -Mods         Claude Code mod 설치 (~/.claude/mods, v2.1.290 이상)
-                · bash-diff-filter: Bash 변경 파일 표시에서 OMC HUD 캐시 파일을 뺀다
-                · cache-ttl-status: 프롬프트 캐시 잔여 시간을 프롬프트 아래 상태 줄에 띄운다
-                (범위 지정이 없는 기본 설치에는 포함되지 않는다)
-  -Uninstall    가드 훅 + 관리 키바인딩·스킬 + 캐시 TTL HUD + outputStyle + mod 설정 제거
-                (권한·사용자 항목·OMC/fluent-korean 플러그인은 보존)
-  -DryRun       아무것도 바꾸지 않고 변경 계획만 출력
-  -NoOnboard    대화형 온보딩을 띄우지 않고 기본값으로 실행
-  -Help         이 도움말
+Usage: .\setup.ps1 [options]
+  (no options)  pick install scope/permission mode in interactive onboarding, then run
+  -Hooks        install global guard hooks + permissions only (~/.claude)
+  -AgentsMd     install project instructions into the current folder only
+  -Harness L    harnesses to install instructions for (comma-separated: claude,codex,grok,opencode,all)
+                choosing claude also installs CLAUDE.md. Default is all.
+  -Skills       install bundled skills only (~/.claude/skills)
+  -Keybinds     install newline keybindings only (VS Code/Cursor/Claude/Codex)
+  -Newline VAL  newline key (shift-enter | ctrl-enter). Default shift-enter
+  -Omc          install the oh-my-claudecode plugin + show cache TTL in the HUD
+                (not included in the default install without a scope)
+  -OutputStyle  install the fluent-korean plugin + set outputStyle to fluent-korean
+                (not included in the default install without a scope)
+  -Mods         install Claude Code mods (~/.claude/mods, v2.1.290 or later)
+                · bash-diff-filter: hides OMC HUD cache files from the Bash changed-files display
+                · cache-ttl-status: shows the remaining prompt-cache time in a status line below the prompt
+                (not included in the default install without a scope)
+  -Uninstall    remove guard hooks + managed keybindings/skills + cache TTL HUD + outputStyle + mod settings
+                (permissions, user entries and the OMC/fluent-korean plugins are kept)
+  -DryRun       print the change plan only, without changing anything
+  -NoOnboard    run with defaults without interactive onboarding
+  -Help         this help
 
-온보딩에서 고를 수 있는 것:
-  · 설치 범위 (전체(번들 스킬 포함) / 가드 훅+권한만 / AGENTS.md만)
-  · 권한 모드 (auto / bypassPermissions)
-  · 줄바꿈 키 (Shift+Enter / Ctrl+Enter) — 범위=전체일 때만
-  · oh-my-claudecode 설치 여부 — 범위=전체/훅일 때만
-  · fluent-korean 출력 스타일 설치 여부 — 범위=전체/훅일 때만
-  · Claude Code mod 설치 여부 — 범위=전체/훅일 때만
-  · 기존 AGENTS.md 덮어쓰기 여부 (파일이 이미 있을 때만 물음)
-  · 지금 적용할지, 변경 계획(-DryRun)만 먼저 볼지
+What onboarding lets you choose:
+  · install scope (everything (incl. bundled skills) / guard hooks+permissions only / AGENTS.md only)
+  · permission mode (auto / bypassPermissions)
+  · newline key (Shift+Enter / Ctrl+Enter) — only when scope=everything
+  · whether to install oh-my-claudecode — only when scope=everything/hooks
+  · whether to install the fluent-korean output style — only when scope=everything/hooks
+  · whether to install Claude Code mods — only when scope=everything/hooks
+  · whether to overwrite an existing AGENTS.md (asked only when the file exists)
+  · whether to apply now or first view the change plan (-DryRun)
 
-setup.sh 와 같은 긴 표기도 그대로 받습니다:
+The same long options as setup.sh are accepted too:
   --hooks  --agentsmd  --harness L  --skills  --keybinds  --omc  --output-style  --mods  --newline VAL  --uninstall  --dry-run
   --no-onboard  --help
 "@
@@ -133,7 +133,7 @@ if ($Help) {
 }
 
 if ($unknownArgs.Count -gt 0) {
-    Write-Host "알 수 없는 옵션: $($unknownArgs -join ' ')" -ForegroundColor Red
+    Write-Host "Unknown option: $($unknownArgs -join ' ')" -ForegroundColor Red
     Write-Host ""
     Show-Usage
     exit 1
@@ -156,7 +156,7 @@ $newlineChord = $Newline
 $harnesses = $Harness
 
 if ($newlineGiven -and $newlineChord -notin @("shift-enter", "ctrl-enter")) {
-    Write-Host "-Newline (--newline) 값은 shift-enter 또는 ctrl-enter 여야 합니다 (받은 값: $newlineChord)." -ForegroundColor Red
+    Write-Host "-Newline (--newline) must be shift-enter or ctrl-enter (got: $newlineChord)." -ForegroundColor Red
     exit 1
 }
 
@@ -203,7 +203,7 @@ function Invoke-Onboarding {
 
         if ($status -eq 2) { return $null }   # 대화형 불가 — 예전 기본값 그대로
         if ($status -ne 0) {
-            if ($status -ne 130) { Write-Host "온보딩이 끝나지 않아 설치를 중단합니다 (exit $status)." -ForegroundColor Red }
+            if ($status -ne 130) { Write-Host "Onboarding did not finish. Aborting installation (exit $status)." -ForegroundColor Red }
             exit $status
         }
 
@@ -288,7 +288,7 @@ filter Format-SetupOutput {
         # Windows PowerShell 5.1(.NET Framework)의 StartsWith 는 문화권 비교라 이모지를 무시할 수 있다.
         if ($body.StartsWith('🔧 ', $ord) -or $body.StartsWith('🧹 ', $ord)) {
             $title = $body.Substring($body.IndexOf(' ') + 1).Replace('...', '')
-            if ($title.EndsWith(' 시작', $ord)) { $title = $title.Substring(0, $title.Length - 3) }
+            if ($title.StartsWith('Starting ', $ord)) { $title = $title.Substring(9) }
             Write-UiBar
             Write-Host $G.Section -ForegroundColor Green -NoNewline
             Write-Host "  $title"
@@ -325,15 +325,15 @@ filter Format-SetupOutput {
 
 function Exit-Setup([int]$Code) {
     # 설치 출력은 온보딩과 같은 모양의 블록 하나로 묶는다. 끝줄은 종료 코드를 보고 찍는다.
-    $what = if ($Uninstall) { "제거" } else { "설치" }
+    $what = if ($Uninstall) { "Uninstall" } else { "Install" }
     Write-UiBar
     Write-Host $G.End -ForegroundColor DarkGray -NoNewline
     if ($Code -ne 0) {
-        Write-Host "  $what 실패 (exit $Code) — 위 메시지를 확인하세요." -ForegroundColor Red
+        Write-Host "  $what failed (exit $Code) — check the messages above." -ForegroundColor Red
     } elseif ($dryRun) {
-        Write-Host "  DRY RUN 완료 — 아무것도 바꾸지 않았습니다."
+        Write-Host "  DRY RUN complete — nothing was changed."
     } else {
-        Write-Host "  $what 완료"
+        Write-Host "  $what complete"
     }
     Write-Host ""
     exit $Code

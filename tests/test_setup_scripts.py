@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32" or shutil.which("bash") is None,
-    reason="POSIX 셸 스크립트 테스트 (bash 필요)",
+    reason="POSIX shell script tests (bash required)",
 )
 
 
@@ -123,8 +123,8 @@ def test_rerun_preserves_uninstall_receipt(sandbox_home, stub_bin):
         assert proc.returncode == 0, proc.stderr
 
     receipt = manifest(sandbox_home)
-    assert "Bash" in receipt["added_allow"], "재실행이 added_allow 영수증을 지웠습니다"
-    assert receipt["default_mode_before"] == "acceptEdits", "재실행이 defaultMode 원본을 지웠습니다"
+    assert "Bash" in receipt["added_allow"], "the rerun wiped the added_allow manifest"
+    assert receipt["default_mode_before"] == "acceptEdits", "the rerun wiped the original defaultMode"
     assert receipt["default_mode_changed"] is True
 
 
@@ -175,7 +175,7 @@ def curl_stub(tmp_path, stub_bin):
 def test_install_sh_help_exits_zero(sandbox_home, stub_bin):
     proc = run_script(["sh", str(ROOT / "install.sh"), "--help"], sandbox_home, stub_bin)
     assert proc.returncode == 0
-    assert "부트스트랩" in proc.stdout
+    assert "bootstrap" in proc.stdout
 
 
 def test_install_sh_dry_run_exits_zero(sandbox_home, curl_stub):
@@ -243,21 +243,21 @@ def install_with(sandbox_home, bin_dir, token=None):
 def test_install_sh_diagnoses_expired_token(sandbox_home, stub_bin):
     proc = install_with(sandbox_home, failing_curl(stub_bin, 401), token="ghp_dead")
     assert proc.returncode != 0
-    assert "만료" in proc.stderr
+    assert "expired" in proc.stderr
     assert "unset GITHUB_TOKEN" in proc.stderr      # gh auth login 이 거부되는 함정까지 안내
 
 
 def test_install_sh_diagnoses_missing_token(sandbox_home, stub_bin):
     proc = install_with(sandbox_home, failing_curl(stub_bin, 401), token=None)
     assert proc.returncode != 0
-    assert "토큰을 찾지 못했습니다" in proc.stderr
+    assert "No token found" in proc.stderr
     assert "gh auth login" in proc.stderr
 
 
 def test_install_sh_diagnoses_insufficient_scope(sandbox_home, stub_bin):
     proc = install_with(sandbox_home, failing_curl(stub_bin, 403), token="ghp_weak")
     assert proc.returncode != 0
-    assert "권한이 없습니다" in proc.stderr
+    assert "has no permission for this repo" in proc.stderr
     assert "Contents:Read" in proc.stderr
 
 

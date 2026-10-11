@@ -26,41 +26,41 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 print_usage() {
     cat <<'EOF'
-claude-code-setup — Claude Code 사용자 레벨 설정
+claude-code-setup — Claude Code user-level setup
 
-사용법: bash setup.sh [옵션]
-  (옵션 없음)   대화형 온보딩으로 설치 범위/권한 모드를 고른 뒤 실행
-  --hooks       전역 가드 훅 + 권한만 설치 (~/.claude)
-  --agentsmd    현재 폴더에 프로젝트 지침만 설치
-  --harness L   지침을 설치할 하네스 (쉼표 구분: claude,codex,grok,opencode,all)
-                claude 를 고르면 CLAUDE.md 도 함께 설치된다. 기본값은 all.
-  --skills      번들 스킬만 설치 (~/.claude/skills)
-  --keybinds    줄바꿈 키바인딩만 설치 (VS Code/Cursor/Claude/Codex/tmux)
-  --newline VAL 줄바꿈 키 (shift-enter | ctrl-enter). 기본 shift-enter
-  --omc         oh-my-claudecode 플러그인 설치 + HUD 에 캐시 TTL 표시
-                (범위 지정이 없는 기본 설치에는 포함되지 않는다)
+Usage: bash setup.sh [options]
+  (no options)  pick install scope/permission mode in interactive onboarding, then run
+  --hooks       install global guard hooks + permissions only (~/.claude)
+  --agentsmd    install project instructions into the current folder only
+  --harness L   harnesses to install instructions for (comma-separated: claude,codex,grok,opencode,all)
+                choosing claude also installs CLAUDE.md. Default is all.
+  --skills      install bundled skills only (~/.claude/skills)
+  --keybinds    install newline keybindings only (VS Code/Cursor/Claude/Codex/tmux)
+  --newline VAL newline key (shift-enter | ctrl-enter). Default shift-enter
+  --omc         install the oh-my-claudecode plugin + show cache TTL in the HUD
+                (not included in the default install without a scope)
   --output-style
-                fluent-korean 플러그인 설치 + outputStyle 을 fluent-korean 으로 지정
-                (범위 지정이 없는 기본 설치에는 포함되지 않는다)
-  --mods        Claude Code mod 설치 (~/.claude/mods, v2.1.290 이상)
-                · bash-diff-filter: Bash 변경 파일 표시에서 OMC HUD 캐시 파일을 뺀다
-                · cache-ttl-status: 프롬프트 캐시 잔여 시간을 프롬프트 아래 상태 줄에 띄운다
-                (범위 지정이 없는 기본 설치에는 포함되지 않는다)
-  --uninstall   가드 훅 + 관리 키바인딩·스킬 + 캐시 TTL HUD + outputStyle + mod 설정 제거
-                (권한·사용자 항목·OMC/fluent-korean 플러그인은 보존)
-  --dry-run     아무것도 바꾸지 않고 변경 계획만 출력
-  --no-onboard  대화형 온보딩을 띄우지 않고 기본값으로 실행
-  --help, -h    이 도움말
+                install the fluent-korean plugin + set outputStyle to fluent-korean
+                (not included in the default install without a scope)
+  --mods        install Claude Code mods (~/.claude/mods, v2.1.290 or later)
+                · bash-diff-filter: hides OMC HUD cache files from the Bash changed-files display
+                · cache-ttl-status: shows the remaining prompt-cache time in a status line below the prompt
+                (not included in the default install without a scope)
+  --uninstall   remove guard hooks + managed keybindings/skills + cache TTL HUD + outputStyle + mod settings
+                (permissions, user entries and the OMC/fluent-korean plugins are kept)
+  --dry-run     print the change plan only, without changing anything
+  --no-onboard  run with defaults without interactive onboarding
+  --help, -h    this help
 
-온보딩에서 고를 수 있는 것:
-  · 설치 범위 (전체(번들 스킬 포함) / 가드 훅+권한만 / AGENTS.md만)
-  · 권한 모드 (auto / bypassPermissions)
-  · 줄바꿈 키 (Shift+Enter / Ctrl+Enter) — 범위=전체일 때만
-  · oh-my-claudecode 설치 여부 — 범위=전체/훅일 때만
-  · fluent-korean 출력 스타일 설치 여부 — 범위=전체/훅일 때만
-  · Claude Code mod 설치 여부 — 범위=전체/훅일 때만
-  · 기존 AGENTS.md 덮어쓰기 여부 (파일이 이미 있을 때만 물음)
-  · 지금 적용할지, 변경 계획(--dry-run)만 먼저 볼지
+What onboarding lets you choose:
+  · install scope (everything (incl. bundled skills) / guard hooks+permissions only / AGENTS.md only)
+  · permission mode (auto / bypassPermissions)
+  · newline key (Shift+Enter / Ctrl+Enter) — only when scope=everything
+  · whether to install oh-my-claudecode — only when scope=everything/hooks
+  · whether to install the fluent-korean output style — only when scope=everything/hooks
+  · whether to install Claude Code mods — only when scope=everything/hooks
+  · whether to overwrite an existing AGENTS.md (asked only when the file exists)
+  · whether to apply now or first view the change plan (--dry-run)
 EOF
 }
 
@@ -93,14 +93,14 @@ while [[ $# -gt 0 ]]; do
         --mods) RUN_MODS=1; HAD_ARGS=1; shift ;;
         --harness)
             if [[ -z "${2:-}" ]]; then
-                echo "--harness 값이 필요합니다 (claude|codex|grok|opencode|all)" >&2
+                echo "--harness requires a value (claude|codex|grok|opencode|all)" >&2
                 exit 1
             fi
             HARNESSES="$2"; HAD_ARGS=1; shift 2 ;;
         --harness=*) HARNESSES="${1#*=}"; HAD_ARGS=1; shift ;;
         --newline)
             if [[ -z "${2:-}" ]]; then
-                echo "--newline 값은 shift-enter 또는 ctrl-enter 여야 합니다." >&2
+                echo "--newline must be shift-enter or ctrl-enter." >&2
                 exit 1
             fi
             NEWLINE_CHORD="$2"; NEWLINE_GIVEN=1; HAD_ARGS=1; shift 2 ;;
@@ -109,7 +109,7 @@ while [[ $# -gt 0 ]]; do
         --dry-run) DRY_RUN=1; HAD_ARGS=1; shift ;;
         --no-onboard) NO_ONBOARD=1; HAD_ARGS=1; shift ;;
         --help|-h) print_usage; exit 0 ;;
-        *) echo "알 수 없는 옵션: $1" >&2; echo ""; print_usage >&2; exit 1 ;;
+        *) echo "Unknown option: $1" >&2; echo ""; print_usage >&2; exit 1 ;;
     esac
 done
 
@@ -119,7 +119,7 @@ if [[ "$NEWLINE_GIVEN" -eq 1 ]]; then
     case "$NEWLINE_CHORD" in
         shift-enter|ctrl-enter) ;;
         *)
-            echo "--newline 값은 shift-enter 또는 ctrl-enter 여야 합니다 (받은 값: $NEWLINE_CHORD)." >&2
+            echo "--newline must be shift-enter or ctrl-enter (got: $NEWLINE_CHORD)." >&2
             exit 1 ;;
     esac
 fi
@@ -177,7 +177,7 @@ ui_format() {
             "🔧 "*|"🧹 "*)
                 body="${body#* }"
                 body="${body//.../}"
-                body="${body% 시작}"
+                body="${body#Starting }"
                 printf '%s\n%s  %s\n' "$(ui_paint 90 "$G_BAR")" "$(ui_paint 32 "$G_SECTION")" "$(ui_paint 1 "$body")"
                 continue ;;
             "── "*)
@@ -239,7 +239,7 @@ run_onboarding() {
     fi
     if [[ "$status" -ne 0 ]]; then
         rm -f "$answers"
-        [[ "$status" -eq 130 ]] || echo "온보딩이 끝나지 않아 설치를 중단합니다 (exit $status)." >&2
+        [[ "$status" -eq 130 ]] || echo "Onboarding did not finish. Aborting installation (exit $status)." >&2
         exit "$status"
     fi
 
@@ -307,15 +307,15 @@ NEWLINE_FLAG=()
 # 워커 실패에 끊겨도) 종료 코드를 보고 찍는다.
 ui_close() {
     local rc=$?
-    local what="설치"
-    [[ "$UNINSTALL" -eq 1 ]] && what="제거"
+    local what="Install"
+    [[ "$UNINSTALL" -eq 1 ]] && what="Uninstall"
     printf '%s\n' "$(ui_paint 90 "$G_BAR")"
     if [[ "$rc" -ne 0 ]]; then
-        printf '%s  %s\n\n' "$(ui_paint 90 "$G_END")" "$(ui_paint 31 "$what 실패 (exit $rc) — 위 메시지를 확인하세요.")"
+        printf '%s  %s\n\n' "$(ui_paint 90 "$G_END")" "$(ui_paint 31 "$what failed (exit $rc) — check the messages above.")"
     elif [[ "$DRY_RUN" -eq 1 ]]; then
-        printf '%s  %s\n\n' "$(ui_paint 90 "$G_END")" "DRY RUN 완료 — 아무것도 바꾸지 않았습니다."
+        printf '%s  %s\n\n' "$(ui_paint 90 "$G_END")" "DRY RUN complete — nothing was changed."
     else
-        printf '%s  %s\n\n' "$(ui_paint 90 "$G_END")" "$what 완료"
+        printf '%s  %s\n\n' "$(ui_paint 90 "$G_END")" "$what complete"
     fi
 }
 printf '\n%s  %s\n' "$(ui_paint 90 "$G_START")" "$(ui_paint 1 "claude-code-setup")"

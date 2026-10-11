@@ -20,12 +20,12 @@ FLAGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run|--uninstall) FLAGS+=("$1"); shift ;;
-        *) echo "알 수 없는 옵션: $1" >&2; exit 1 ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
 
 if ! PY="$(resolve_python_command)"; then
-    echo "❌ Python 3을 찾을 수 없습니다." >&2
+    echo "❌ Python 3 not found." >&2
     print_python_install_hint
     exit 1
 fi

@@ -60,10 +60,10 @@ SCOPE_AGENTSMD = "agentsmd"
 # Claude Code reads CLAUDE.md, which imports it. The worker owns that mapping --
 # here we only collect the selection.
 HARNESS_CHOICES = (
-    ("claude", "Claude Code", "AGENTS.md + CLAUDE.md, @AGENTS.md 로 불러옴"),
-    ("codex", "Codex", "AGENTS.md 를 직접 읽음"),
-    ("grok", "Grok", "AGENTS.md 를 직접 읽음"),
-    ("opencode", "OpenCode", "AGENTS.md 를 직접 읽음"),
+    ("claude", "Claude Code", "AGENTS.md + CLAUDE.md, imported via @AGENTS.md"),
+    ("codex", "Codex", "reads AGENTS.md directly"),
+    ("grok", "Grok", "reads AGENTS.md directly"),
+    ("opencode", "OpenCode", "reads AGENTS.md directly"),
 )
 
 
@@ -103,8 +103,8 @@ def attach_terminal():
     # Git Bash(mintty) 는 Windows 프로그램에 콘솔 대신 파이프를 준다. 여기서 CONOUT$ 를 열면
     # 보이지 않는 숨은 콘솔에 프롬프트를 그리고 키를 기다려, 설치가 멈춘 것처럼 보인다.
     if os.name == "nt" and os.environ.get("MSYSTEM") and not sys.stdout.isatty():
-        print("  Git Bash 에서는 대화형 온보딩을 띄울 수 없어 기본값으로 진행합니다. "
-              "PowerShell 에서 실행하거나 --no-onboard 와 범위 플래그를 쓰세요.", file=sys.stderr)
+        print("  Interactive onboarding is unavailable in Git Bash; continuing with defaults. "
+              "Run from PowerShell, or use --no-onboard with a scope flag.", file=sys.stderr)
         return False
 
     try:
@@ -144,14 +144,14 @@ def attach_terminal():
 
 def ask_all(tui, project_dir):
     """선택 결과 dict 를 반환. 사용자가 취소하면 None."""
-    tui.intro("claude-code-setup — Claude Code 안전 설정")
+    tui.intro("claude-code-setup — Claude Code safety setup")
 
     scope = tui.select(
-        "무엇을 설치할까요?",
+        "What would you like to install?",
         [
-            (SCOPE_ALL, "전체", "가드 훅/권한(전역) + AGENTS.md(현재 폴더) + 번들 스킬"),
-            (SCOPE_HOOKS, "가드 훅 + 권한만", "~/.claude, 모든 프로젝트에 적용"),
-            (SCOPE_AGENTSMD, "AGENTS.md 만", "현재 폴더"),
+            (SCOPE_ALL, "Everything", "guard hooks/permissions (global) + AGENTS.md (current folder) + bundled skills"),
+            (SCOPE_HOOKS, "Guard hooks + permissions only", "~/.claude, applies to all projects"),
+            (SCOPE_AGENTSMD, "AGENTS.md only", "current folder"),
         ],
     )
     if scope is None:
@@ -166,11 +166,11 @@ def ask_all(tui, project_dir):
 
     if scope in (SCOPE_ALL, SCOPE_HOOKS):
         mode = tui.select(
-            "권한 모드는 어떻게 할까요?",
+            "Which permission mode?",
             [
-                ("auto", "auto", "안전한 작업은 자동 허용, 위험한 것만 확인 · 권장"),
+                ("auto", "auto", "safe actions auto-approved, only risky ones ask · recommended"),
                 ("bypassPermissions", "bypassPermissions",
-                 "권한 확인을 모두 생략, 가드 훅은 그대로 동작"),
+                 "skip all permission prompts, guard hooks still run"),
             ],
         )
         if mode is None:
@@ -179,18 +179,18 @@ def ask_all(tui, project_dir):
 
         if mode == "bypassPermissions":
             tui.warn([
-                "bypassPermissions 는 Claude Code 의 권한 확인을 전부 건너뜁니다.",
-                "이 레포의 가드 훅(rm 휴지통 치환, git 백업 등)은 그대로 동작하지만,",
-                "훅이 판단하지 않는 명령은 확인 없이 실행됩니다.",
+                "bypassPermissions skips all of Claude Code's permission prompts.",
+                "This repo's guard hooks (rm to trash, git backup, etc.) still run,",
+                "but commands the hooks do not judge run without confirmation.",
             ])
 
     # 줄바꿈 키는 전체 설치에만 포함된다. 훅/AGENTS.md 단독 범위에서는 묻지 않는다.
     if scope == SCOPE_ALL:
         chord = tui.select(
-            "줄바꿈 키는 어떤 조합으로 할까요?",
+            "Which key combination for a newline?",
             [
-                ("shift-enter", "Shift+Enter", "줄을 넣고 전송하지 않음 · 기본"),
-                ("ctrl-enter", "Ctrl+Enter", "줄을 넣고 전송하지 않음"),
+                ("shift-enter", "Shift+Enter", "inserts a newline without sending · default"),
+                ("ctrl-enter", "Ctrl+Enter", "inserts a newline without sending"),
             ],
         )
         if chord is None:
@@ -203,7 +203,7 @@ def ask_all(tui, project_dir):
         # exactly one. Selecting none would install nothing, so it is rejected
         # rather than silently treated as "all".
         harnesses = tui.multiselect(
-            "어떤 하네스에 지침을 설치할까요?",
+            "Which harnesses should get the instructions?",
             HARNESS_CHOICES,
             initial_values=[name for name, _, _ in HARNESS_CHOICES],
         )
@@ -223,7 +223,7 @@ def ask_all(tui, project_dir):
             existing = [p for p in existing if not p.endswith("CLAUDE.md")]
         if existing:
             overwrite = tui.confirm(
-                "%s 가 이미 있습니다. 덮어쓸까요?" % ", ".join(existing),
+                "%s already exists. Overwrite?" % ", ".join(existing),
                 default=False,
             )
             if overwrite is None:
@@ -233,7 +233,7 @@ def ask_all(tui, project_dir):
     # OMC 는 전역(~/.claude) 설치라 AGENTS.md 단독 범위에서는 묻지 않는다.
     if scope in (SCOPE_ALL, SCOPE_HOOKS):
         omc = tui.confirm(
-            "oh-my-claudecode(OMC) 플러그인도 설치할까요? (HUD 에 프롬프트 캐시 TTL 표시 포함)",
+            "Also install the oh-my-claudecode (OMC) plugin? (includes the prompt cache TTL in the HUD)",
             default=False,
         )
         if omc is None:
@@ -241,7 +241,7 @@ def ask_all(tui, project_dir):
         answers["OMC"] = "1" if omc else "0"
 
         fluent = tui.confirm(
-            "출력 스타일을 fluent-korean 으로 지정할까요? (플러그인 설치 포함)",
+            "Set the output style to fluent-korean? (includes installing the plugin)",
             default=False,
         )
         if fluent is None:
@@ -249,7 +249,7 @@ def ask_all(tui, project_dir):
         answers["OUTPUT_STYLE"] = "1" if fluent else "0"
 
         mods = tui.confirm(
-            "Claude Code mod 도 설치할까요? (Bash 변경 표시에서 HUD 캐시 제외, 캐시 TTL 상태 줄 — v2.1.290 이상)",
+            "Also install the Claude Code mod? (excludes the HUD cache from the Bash change display, cache TTL status line — v2.1.290 or later)",
             default=False,
         )
         if mods is None:
@@ -257,17 +257,17 @@ def ask_all(tui, project_dir):
         answers["MODS"] = "1" if mods else "0"
 
     plan = tui.select(
-        "지금 바로 적용할까요?",
+        "Apply now?",
         [
-            ("apply", "적용한다", ""),
-            ("dry", "먼저 변경 계획만 본다", "--dry-run, 아무것도 바꾸지 않음"),
+            ("apply", "Apply", ""),
+            ("dry", "Preview the plan first", "--dry-run, changes nothing"),
         ],
     )
     if plan is None:
         return None
     answers["DRY_RUN"] = "1" if plan == "dry" else "0"
 
-    tui.outro("변경 계획을 보여드립니다." if plan == "dry" else "설치를 시작합니다.")
+    tui.outro("Showing the change plan." if plan == "dry" else "Starting installation.")
     return answers
 
 
@@ -300,7 +300,7 @@ def main(argv) -> int:
         # 아무것도 보지 못했으므로 '물을 수 없음'이다.
         tui.prepare_console()
     except Exception as exc:
-        print("  대화형 온보딩을 띄울 수 없어 기본값으로 진행합니다 (%s)." % exc, file=sys.stderr)
+        print("  Interactive onboarding is unavailable; continuing with defaults (%s)." % exc, file=sys.stderr)
         return EXIT_NON_INTERACTIVE
 
     try:
@@ -311,14 +311,14 @@ def main(argv) -> int:
         # 프롬프트가 깨졌다(예: VT 를 못 켜는 콘솔). 사용자는 고르던 중이었으므로 고르지도 않은
         # 기본값으로 설치하지 않고 전체를 멈춘다.
         try:
-            print("\n  대화형 온보딩이 중단되어 아무것도 설치하지 않았습니다 (%s).\n"
-                  "  --no-onboard 와 범위 플래그로 다시 실행하세요." % exc)
+            print("\n  Interactive onboarding was interrupted; nothing was installed (%s).\n"
+                  "  Re-run with --no-onboard and a scope flag." % exc)
         except Exception:
             pass    # 터미널이 끊겨 안내조차 못 찍는 경우에도 종료 코드는 지킨다.
         return EXIT_FAILED
 
     if answers is None:
-        tui.cancel("취소했습니다. 아무것도 설치하지 않았습니다.")
+        tui.cancel("Cancelled. Nothing was installed.")
         return EXIT_CANCELLED
 
     write_answers(out_path, answers)

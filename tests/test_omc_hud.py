@@ -18,7 +18,7 @@ APPLY = ROOT / "res" / "omc" / "apply.py"
 TTL = ROOT / "res" / "omc" / "omc-hud-ttl.mjs"
 OMC_CMD = "sh ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hud/omc-hud-cache.sh ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hud/omc-hud.mjs"
 
-needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node 필요")
+needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node required")
 
 
 @pytest.fixture
@@ -46,7 +46,7 @@ def write_settings(home, data):
     (home / ".claude" / "settings.json").write_text(json.dumps(data), encoding="utf-8")
 
 
-def test_기존_OMC_statusLine_앞에_TTL_래퍼를_끼우고_uninstall로_원복한다(home):
+def test_wraps_existing_omc_status_line_with_ttl_wrapper_and_uninstall_restores(home):
     before = {"model": "opus", "statusLine": {"type": "command", "command": OMC_CMD}}
     write_settings(home, before)
 
@@ -69,7 +69,7 @@ def test_기존_OMC_statusLine_앞에_TTL_래퍼를_끼우고_uninstall로_원�
     assert not (home / ".claude" / "hud" / "omc-hud-ttl.mjs").exists()
 
 
-def test_사용자가_정한_refreshInterval은_uninstall이_지우지_않는다(home):
+def test_uninstall_keeps_refresh_interval_set_by_user(home):
     write_settings(home, {"statusLine": {"type": "command", "command": OMC_CMD, "refreshInterval": 3}})
     assert apply(home).returncode == 0
     assert settings(home)["statusLine"]["refreshInterval"] == 3
@@ -77,7 +77,7 @@ def test_사용자가_정한_refreshInterval은_uninstall이_지우지_않는다
     assert settings(home)["statusLine"] == {"type": "command", "command": OMC_CMD, "refreshInterval": 3}
 
 
-def test_statusLine이_없으면_OMC_HUD를_복사하고_설정한다(home):
+def test_copies_and_configures_omc_hud_when_status_line_is_absent(home):
     assert apply(home).returncode == 0
     hud = home / ".claude" / "hud"
     assert (hud / "omc-hud.mjs").read_text(encoding="utf-8") == "// omc hud template\n"
@@ -85,7 +85,7 @@ def test_statusLine이_없으면_OMC_HUD를_복사하고_설정한다(home):
     assert settings(home)["statusLine"]["command"].endswith('/omc-hud.mjs"')
 
 
-def test_OMC가_아닌_statusLine은_건드리지_않는다(home):
+def test_non_omc_status_line_is_left_alone(home):
     mine = {"statusLine": {"type": "command", "command": "~/my-status.sh"}}
     write_settings(home, mine)
     proc = apply(home)
@@ -94,7 +94,7 @@ def test_OMC가_아닌_statusLine은_건드리지_않는다(home):
     assert not (home / ".claude" / "hud" / "omc-hud-ttl.mjs").exists()
 
 
-def test_파싱할_수_없는_settings는_멈추고_쓰지_않는다(home):
+def test_unparseable_settings_stops_without_writing(home):
     path = home / ".claude" / "settings.json"
     path.write_text("{ broken", encoding="utf-8")
     proc = apply(home)
@@ -102,7 +102,7 @@ def test_파싱할_수_없는_settings는_멈추고_쓰지_않는다(home):
     assert path.read_text(encoding="utf-8") == "{ broken"
 
 
-def test_dry_run은_아무것도_쓰지_않는다(home):
+def test_dry_run_writes_nothing(home):
     write_settings(home, {"statusLine": {"type": "command", "command": OMC_CMD}})
     before = (home / ".claude" / "settings.json").read_text(encoding="utf-8")
     proc = apply(home, "--dry-run")
@@ -113,7 +113,7 @@ def test_dry_run은_아무것도_쓰지_않는다(home):
     assert not (home / ".claude" / ".claude-code-setup.json").exists()
 
 
-def test_영수증은_다른_섹션을_보존한다(home):
+def test_manifest_preserves_other_sections(home):
     manifest = home / ".claude" / ".claude-code-setup.json"
     manifest.write_text(json.dumps({"keybinds": {"x": 1}}), encoding="utf-8")
     write_settings(home, {"statusLine": {"type": "command", "command": OMC_CMD}})
@@ -138,7 +138,7 @@ HUD = "[OMC] | thinking | session:\x1b[32m45m\x1b[0m\nctx:[#---]8%"
 
 
 @needs_node
-def test_남은_TTL을_분으로_보여준다():
+def test_shows_remaining_ttl_in_minutes():
     out = run_ttl({"prompt_cache": {"warm": True, "expires_at": time.time() + 30 * 60 + 5}}, HUD)
     assert "session:" not in out
     assert "cache:\x1b[32m30m\x1b[0m" in out
@@ -146,25 +146,25 @@ def test_남은_TTL을_분으로_보여준다():
 
 
 @needs_node
-def test_2분_이하는_노랑_1분_미만은_초로_보여준다():
+def test_two_minutes_or_less_is_yellow_under_one_minute_shows_seconds():
     out = run_ttl({"prompt_cache": {"warm": True, "expires_at": time.time() + 45}}, HUD)
     assert "cache:\x1b[33m44s\x1b[0m" in out or "cache:\x1b[33m45s\x1b[0m" in out
 
 
 @needs_node
-def test_만료되면_cold로_보여준다():
+def test_shows_cold_when_expired():
     out = run_ttl({"prompt_cache": {"warm": True, "expires_at": time.time() - 10}}, HUD)
     assert "cache:\x1b[31mcold\x1b[0m" in out
 
 
 @needs_node
-def test_캐시_정보가_없으면_session_표시를_그대로_둔다():
+def test_keeps_session_display_when_no_cache_info():
     """구버전 Claude Code 처럼 prompt_cache 가 없으면 쓸모 있는 세션 시간을 지우지 않는다."""
     assert run_ttl({}, HUD) == HUD + "\n"
 
 
 @needs_node
-def test_안쪽_명령의_실패는_stderr로_전달하고_종료코드는_0이다():
+def test_inner_command_failure_goes_to_stderr_and_exit_code_is_0():
     """OMC find-node.sh 처럼 statusLine 을 0 이 아닌 코드로 끝내지 않는다."""
     proc = subprocess.run(
         ["node", str(TTL), sys.executable, "-c", "import sys; sys.stderr.write('boom'); sys.exit(3)"],
@@ -174,7 +174,7 @@ def test_안쪽_명령의_실패는_stderr로_전달하고_종료코드는_0이�
     assert "boom" in proc.stderr
 
 
-def test_statusLine이_없던_설치는_uninstall이_만든_것을_모두_치운다(home):
+def test_uninstall_removes_everything_when_install_had_no_status_line(home):
     assert apply(home).returncode == 0
     assert apply(home, "--uninstall").returncode == 0
     assert not (home / ".claude" / "settings.json").exists()
@@ -183,7 +183,7 @@ def test_statusLine이_없던_설치는_uninstall이_만든_것을_모두_치운
     assert not (home / ".claude" / ".claude-code-setup.json").exists()
 
 
-def test_OMC가_다시_쓴_HUD_파일은_uninstall이_지우지_않는다(home):
+def test_uninstall_keeps_hud_file_rewritten_by_omc(home):
     """omc-setup 이 HUD 파일과 statusLine 을 다시 쓰면 그 파일은 더 이상 우리 것이 아니다."""
     assert apply(home).returncode == 0
     hud = home / ".claude" / "hud"
@@ -197,7 +197,7 @@ def test_OMC가_다시_쓴_HUD_파일은_uninstall이_지우지_않는다(home):
     assert settings(home)["statusLine"]["command"] == OMC_CMD
 
 
-def test_HUD_파일_하나만_바뀌면_둘_다_남기고_재설치는_빠진_것만_채운다(home):
+def test_when_only_one_hud_file_changed_both_stay_and_reinstall_fills_only_missing(home):
     assert apply(home).returncode == 0
     hud = home / ".claude" / "hud"
     (hud / "omc-hud.mjs").write_text("// hud setup rewrote me\n", encoding="utf-8")
@@ -210,7 +210,7 @@ def test_HUD_파일_하나만_바뀌면_둘_다_남기고_재설치는_빠진_�
     assert (hud / "omc-hud.mjs").read_text(encoding="utf-8") == "// hud setup rewrote me\n"
 
 
-def test_벗겨낼_수_없는_래퍼가_있으면_install과_uninstall_모두_멈춘다(home):
+def test_unstrippable_wrapper_stops_both_install_and_uninstall(home):
     command = 'FOO=1 node "$HOME/.claude/hud/omc-hud-ttl.mjs" ' + OMC_CMD
     write_settings(home, {"statusLine": {"type": "command", "command": command}})
     ttl = home / ".claude" / "hud" / "omc-hud-ttl.mjs"
@@ -224,7 +224,7 @@ def test_벗겨낼_수_없는_래퍼가_있으면_install과_uninstall_모두_�
     assert settings(home)["statusLine"]["command"] == command
 
 
-def test_1차_수정본_영수증_형식도_읽는다(home):
+def test_first_revision_manifest_format_is_readable(home):
     manifest = home / ".claude" / ".claude-code-setup.json"
     manifest.write_text(json.dumps({"omc_hud": {"hud_copied": True}}), encoding="utf-8")
     assert apply(home).returncode == 0
@@ -233,7 +233,7 @@ def test_1차_수정본_영수증_형식도_읽는다(home):
     assert not (home / ".claude" / "hud").exists()
 
 
-def test_이중으로_감싼_래퍼는_재설치가_한_겹으로_정리한다(home):
+def test_double_wrapped_wrapper_is_collapsed_to_one_layer_on_reinstall(home):
     wrapped = 'node "$HOME/.claude/hud/omc-hud-ttl.mjs" '
     write_settings(home, {"statusLine": {"type": "command", "command": wrapped * 2 + OMC_CMD}})
     assert apply(home).returncode == 0
@@ -242,7 +242,7 @@ def test_이중으로_감싼_래퍼는_재설치가_한_겹으로_정리한다(h
     assert settings(home)["statusLine"]["command"] == OMC_CMD
 
 
-def test_이미_있는_config_dir은_덮어쓰지_않는다(home):
+def test_existing_config_dir_is_not_overwritten(home):
     lib = home / ".claude" / "hud" / "lib"
     lib.mkdir(parents=True)
     (lib / "config-dir.mjs").write_text("// mine\n", encoding="utf-8")
@@ -251,7 +251,7 @@ def test_이미_있는_config_dir은_덮어쓰지_않는다(home):
     assert (lib / "config-dir.mjs").read_text(encoding="utf-8") == "// mine\n"
 
 
-def test_이전_버전_접두는_재설치하면_현재_표기로_바뀐다(home):
+def test_old_version_prefix_becomes_current_notation_on_reinstall(home):
     old = 'node "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hud/omc-hud-ttl.mjs" ' + OMC_CMD
     write_settings(home, {"statusLine": {"type": "command", "command": old, "refreshInterval": 10}})
     assert apply(home).returncode == 0
@@ -260,7 +260,7 @@ def test_이전_버전_접두는_재설치하면_현재_표기로_바뀐다(home
     assert command.endswith('/omc-hud-ttl.mjs" ' + OMC_CMD) and command.count("omc-hud-ttl.mjs") == 1
 
 
-def test_BOM이_붙은_매니페스트도_읽는다(home):
+def test_manifest_with_bom_is_readable(home):
     """Windows PowerShell 5.1 의 Set-Content -Encoding UTF8 은 BOM 을 붙여 쓴다."""
     write_settings(home, {"statusLine": {"type": "command", "command": OMC_CMD}})
     assert apply(home).returncode == 0
@@ -270,21 +270,21 @@ def test_BOM이_붙은_매니페스트도_읽는다(home):
     assert settings(home)["statusLine"] == {"type": "command", "command": OMC_CMD}
 
 
-def test_래퍼_앞의_사용자_텍스트는_uninstall이_지우지_않는다(home):
+def test_uninstall_keeps_user_text_before_wrapper(home):
     command = 'cd /tmp && node "$HOME/.claude/hud/omc-hud-ttl.mjs" ' + OMC_CMD
     write_settings(home, {"statusLine": {"type": "command", "command": command}})
     assert apply(home, "--uninstall").returncode == 1
     assert settings(home)["statusLine"]["command"] == command
 
 
-def test_문자열이_아닌_command는_멈춘다(home):
+def test_non_string_command_stops(home):
     write_settings(home, {"statusLine": {"type": "command", "command": 123}})
     assert apply(home).returncode == 1
     assert apply(home, "--uninstall").returncode == 0
     assert settings(home)["statusLine"]["command"] == 123
 
 
-def test_설치_뒤_사용자가_바꾼_refreshInterval은_uninstall이_남긴다(home):
+def test_uninstall_keeps_refresh_interval_user_changed_after_install(home):
     write_settings(home, {"statusLine": {"type": "command", "command": OMC_CMD}})
     assert apply(home).returncode == 0
     data = settings(home)
@@ -294,13 +294,13 @@ def test_설치_뒤_사용자가_바꾼_refreshInterval은_uninstall이_남긴�
     assert settings(home)["statusLine"] == {"type": "command", "command": OMC_CMD, "refreshInterval": 2}
 
 
-def test_OMC가_아닌_statusLine이면_hud_파일도_만들지_않는다(home):
+def test_non_omc_status_line_creates_no_hud_files_either(home):
     write_settings(home, {"statusLine": {"type": "command", "command": "~/my-status.sh"}})
     assert apply(home).returncode == 0
     assert not (home / ".claude" / "hud").exists()
 
 
-def test_깨진_매니페스트는_덮어쓰지_않고_멈춘다(home):
+def test_broken_manifest_stops_without_overwriting(home):
     write_settings(home, {"statusLine": {"type": "command", "command": OMC_CMD}})
     manifest = home / ".claude" / ".claude-code-setup.json"
     manifest.write_text('{ "hook_files": [', encoding="utf-8")
@@ -309,7 +309,7 @@ def test_깨진_매니페스트는_덮어쓰지_않고_멈춘다(home):
     assert "omc-hud-ttl" not in settings(home)["statusLine"]["command"]
 
 
-def test_재실행은_settings를_다시_쓰지_않아_백업이_쌓이지_않는다(home):
+def test_rerun_does_not_rewrite_settings_so_backups_do_not_pile_up(home):
     write_settings(home, {"statusLine": {"type": "command", "command": OMC_CMD}})
     assert apply(home).returncode == 0
     backups = set((home / ".claude").glob("settings.json.bak.*"))
@@ -317,8 +317,8 @@ def test_재실행은_settings를_다시_쓰지_않아_백업이_쌓이지_않�
     assert set((home / ".claude").glob("settings.json.bak.*")) == backups
 
 
-@pytest.mark.skipif(os.name == "nt", reason="find-node.sh 는 POSIX 전용")
-def test_OMC의_find_node가_있으면_그것으로_node를_찾는다(home):
+@pytest.mark.skipif(os.name == "nt", reason="find-node.sh is POSIX only")
+def test_uses_omc_find_node_to_locate_node_when_present(home):
     """PATH 에 node 가 없는 셸에서도 OMC HUD 가 뜨던 곳이면 래퍼도 떠야 한다."""
     (home / ".claude" / "hud").mkdir()
     (home / ".claude" / "hud" / "find-node.sh").write_text("#!/bin/sh\n", encoding="utf-8")
@@ -334,7 +334,7 @@ def test_OMC의_find_node가_있으면_그것으로_node를_찾는다(home):
 
 
 posix_only = pytest.mark.skipif(
-    sys.platform == "win32" or shutil.which("bash") is None, reason="POSIX 셸 스크립트 테스트 (bash 필요)",
+    sys.platform == "win32" or shutil.which("bash") is None, reason="POSIX shell script test (bash required)",
 )
 
 
@@ -359,7 +359,7 @@ def run_setup(args, home, bin_dir):
 
 
 @posix_only
-def test_setup_omc는_플러그인을_설치하고_HUD를_설정한다(tmp_path, home):
+def test_setup_omc_installs_plugin_and_configures_hud(tmp_path, home):
     bin_dir, log = stub_claude(tmp_path, installed=False)
     proc = run_setup(["--omc"], home, bin_dir)
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -372,7 +372,7 @@ def test_setup_omc는_플러그인을_설치하고_HUD를_설정한다(tmp_path,
 
 
 @posix_only
-def test_setup_omc_dry_run은_claude를_실행하지_않는다(tmp_path, home):
+def test_setup_omc_dry_run_does_not_run_claude(tmp_path, home):
     bin_dir, log = stub_claude(tmp_path, installed=False)
     proc = run_setup(["--omc", "--dry-run"], home, bin_dir)
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -382,7 +382,7 @@ def test_setup_omc_dry_run은_claude를_실행하지_않는다(tmp_path, home):
 
 
 @posix_only
-def test_훅만_먼저_제거해도_OMC_영수증이_남아_나중에_refreshInterval을_되돌린다(tmp_path, home):
+def test_removing_hooks_first_keeps_omc_manifest_so_refresh_interval_is_restored_later(tmp_path, home):
     bin_dir, _ = stub_claude(tmp_path, installed=True)
     write_settings(home, {"statusLine": {"type": "command", "command": OMC_CMD}})
     assert run_setup(["--omc"], home, bin_dir).returncode == 0
@@ -394,7 +394,7 @@ def test_훅만_먼저_제거해도_OMC_영수증이_남아_나중에_refreshInt
 
 
 @posix_only
-def test_setup_uninstall은_TTL_HUD도_되돌린다(tmp_path, home):
+def test_setup_uninstall_also_restores_ttl_hud(tmp_path, home):
     bin_dir, _ = stub_claude(tmp_path, installed=True)
     write_settings(home, {"statusLine": {"type": "command", "command": OMC_CMD}})
     assert run_setup(["--omc"], home, bin_dir).returncode == 0

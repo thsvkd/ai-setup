@@ -54,25 +54,25 @@ $RealSettingsPath = Join-Path $RealClaudeDir "settings.json"
 
 # --- uninstall 은 설치 로직을 타지 않고 실제 ~/.claude 를 대상으로 즉시 처리한다 ---
 if ($Uninstall) {
-    Write-Host "🧹 Claude Code 가드 훅 제거..." -ForegroundColor Cyan
-    if ($DryRun) { Write-Host "  🧪 DRY RUN 모드 — 실제 파일은 전혀 제거되지 않습니다." -ForegroundColor Magenta }
+    Write-Host "🧹 Removing Claude Code guard hooks..." -ForegroundColor Cyan
+    if ($DryRun) { Write-Host "  🧪 DRY RUN mode — no real files will be removed." -ForegroundColor Magenta }
     $py = Resolve-PythonCommand
-    if (-not $py) { Write-Host "❌ Python을 찾을 수 없습니다." -ForegroundColor Red; Write-PythonInstallHint; exit 1 }
+    if (-not $py) { Write-Host "❌ Python not found." -ForegroundColor Red; Write-PythonInstallHint; exit 1 }
     Write-Host ""
     Uninstall-Hooks -ClaudeDir $RealClaudeDir -HooksDir $RealHooksDir -SettingsPath $RealSettingsPath `
         -DryRun:$DryRun -MergeScriptPath (Join-Path $ResDir "hooks\merge_and_diff.py") -PyExe $py.Exe -PyArgs $py.Args
     Write-Host ""
     if ($DryRun) {
-        Write-Host "🧪 DRY RUN 완료 — 실제로 제거하려면 -DryRun 없이 다시 실행하세요." -ForegroundColor Magenta
+        Write-Host "🧪 DRY RUN complete — to actually remove, run again without -DryRun." -ForegroundColor Magenta
     } else {
-        Write-Host "✅ 제거 완료 — 설치가 건드린 부분만 정밀하게 되돌렸습니다 (사용자가 원래 갖고 있던 설정은 보존)." -ForegroundColor Green
+        Write-Host "✅ Uninstall complete — reverted precisely what the install touched (your original settings are kept)." -ForegroundColor Green
     }
     exit 0
 }
 
-Write-Host "🔧 Claude Code 사용자 레벨 훅/권한 설정 시작..." -ForegroundColor Cyan
+Write-Host "🔧 Starting Claude Code user-level hook/permissions setup..." -ForegroundColor Cyan
 if ($DryRun) {
-    Write-Host "  🧪 DRY RUN 모드 — 실제 파일은 전혀 변경/설치되지 않습니다." -ForegroundColor Magenta
+    Write-Host "  🧪 DRY RUN mode — no real files will be changed or installed." -ForegroundColor Magenta
 }
 
 $installHome = Resolve-InstallHome -DryRun:$DryRun -RealHome $RealUserHome -SeedFiles @("settings.json")
@@ -87,39 +87,39 @@ try {
 $py = Resolve-PythonCommand
 if (-not $py) {
     $pythonMissing = $true
-    throw "Python을 찾을 수 없습니다."
+    throw "Python not found."
 }
 $pyInvoke = (@($py.Exe) + $py.Args) -join " "
-Write-Host "  🐍 Python 실행 명령: $pyInvoke" -ForegroundColor DarkGray
+Write-Host "  🐍 Python command: $pyInvoke" -ForegroundColor DarkGray
 
 # --- 2. send2trash 설치 확인 (Windows 전용 의존성) ---
 Write-Host ""
-Write-Host "[1/4] send2trash 설치 확인..." -ForegroundColor Yellow
+Write-Host "[1/4] Checking send2trash install..." -ForegroundColor Yellow
 
 & $py.Exe @($py.Args) -c "import send2trash" *> $null
 $hasSend2Trash = ($LASTEXITCODE -eq 0)
 
 if ($hasSend2Trash) {
-    Write-Host "  ✅ send2trash 이미 설치됨" -ForegroundColor Green
+    Write-Host "  ✅ send2trash already installed" -ForegroundColor Green
 } elseif ($DryRun) {
-    Write-Host "  ℹ️ send2trash 미설치 상태입니다. (dry-run 이라 설치는 시도하지 않음)" -ForegroundColor DarkGray
+    Write-Host "  ℹ️ send2trash is not installed. (dry-run, so not attempting install)" -ForegroundColor DarkGray
 } else {
-    Write-Host "  📦 send2trash 설치 중..."
+    Write-Host "  📦 Installing send2trash..."
     & $py.Exe @($py.Args) -m pip install --quiet --disable-pip-version-check send2trash
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "  ✅ send2trash 설치 완료" -ForegroundColor Green
+        Write-Host "  ✅ send2trash installed" -ForegroundColor Green
         $hasSend2Trash = $true
     } else {
-        Write-Host "  ⚠️ send2trash 설치 실패 — 수동 설치 필요: $pyInvoke -m pip install send2trash" -ForegroundColor Red
-        Write-Host "     (설치 전까지 Git Bash 의 rm 은 경고만 남기고 '실제로' 삭제됩니다 — 되돌릴 수 없습니다)" -ForegroundColor Yellow
+        Write-Host "  ⚠️ send2trash install failed — install manually: $pyInvoke -m pip install send2trash" -ForegroundColor Red
+        Write-Host "     (until installed, Git Bash rm only leaves a warning and 'really' deletes — this cannot be undone)" -ForegroundColor Yellow
         $hasSend2Trash = $false
     }
 }
 
 # --- 3. 훅 파일 설치 (res/hooks/*.py 를 WorkHome 기준 hooksDir로 복사) ---
 Write-Host ""
-$hookMsg = "[2/4] PreToolUse Hook 설치"
-if ($DryRun) { $hookMsg += " (임시 사본에만 — 실제 위치엔 안 씀)" }
+$hookMsg = "[2/4] PreToolUse Hook install"
+if ($DryRun) { $hookMsg += " (temporary copy only — not written to the real location)" }
 Write-Host "$hookMsg..." -ForegroundColor Yellow
 
 Install-HookFiles -HooksDir $hooksDir -Files @(
@@ -133,13 +133,13 @@ Install-HookFiles -HooksDir $hooksDir -Files @(
 $retired = Join-Path $hooksDir "secrets_guard.py"
 if (-not $DryRun -and (Test-Path $retired)) {
     Microsoft.PowerShell.Management\Remove-Item -Force $retired
-    Write-Host "  🗑️  구버전 훅 제거: secrets_guard.py (더 이상 배포하지 않습니다)" -ForegroundColor DarkGray
+    Write-Host "  🗑️  Removed legacy hook: secrets_guard.py (no longer shipped)" -ForegroundColor DarkGray
 }
-Write-Host "  ✅ Hook 파일 준비 완료: danger_guard.py, send_to_trash.py, shims/rm, shims/RmShim.psm1, graft_sync_hidden.cjs" -ForegroundColor Green
+Write-Host "  ✅ Hook files ready: danger_guard.py, send_to_trash.py, shims/rm, shims/RmShim.psm1, graft_sync_hidden.cjs" -ForegroundColor Green
 
 # --- 4. settings.json 병합 계획 수립 및 실행 ---
 Write-Host ""
-Write-Host "[3/4] settings.json 병합 계획 수립 및 실행..." -ForegroundColor Yellow
+Write-Host "[3/4] Planning and running the settings.json merge..." -ForegroundColor Yellow
 
 $mergeExit = Invoke-SettingsMerge `
     -FragmentPath (Join-Path $ResDir "settings.json") `
@@ -153,37 +153,37 @@ $mergeExit = Invoke-SettingsMerge `
     -HookFilesCsv "danger_guard.py,send_to_trash.py,shims/rm,shims/RmShim.psm1,graft_sync_hidden.cjs" `
     -DefaultMode $DefaultMode
 if ($mergeExit -ne 0) {
-    throw "병합 검증 실패 — 예상치 못한 최상위 키 변경이 감지되었습니다. 수동 확인이 필요합니다."
+    throw "Merge verification failed — unexpected top-level key changes detected. Manual review required."
 }
 
 # --- 5. 셀프테스트 ---
 Write-Host ""
-Write-Host "[4/4] 셀프테스트 실행..." -ForegroundColor Yellow
+Write-Host "[4/4] Running self-test..." -ForegroundColor Yellow
 
 # git 관련 판정(스냅샷 백업, 기본 브랜치 force push 확인)은 여기서 돌리지 않는다. 둘 다 cwd 가
 # git 저장소인지에 따라 결과가 달라지는데, 설치는 저장소 밖에서도 실행된다. 스냅샷은 cwd
 # 저장소에 실제로 백업 ref 를 만들어 dry-run 도 깨뜨린다. 두 경로 모두
 # tests/test_git_snapshot.py 가 임시 저장소를 만들어 검증한다.
 $selfTestFailures = Invoke-HookSelfTest -HookPath (Join-Path $hooksDir "danger_guard.py") -PyExe $py.Exe -PyArgs $py.Args -Cases @(
-    @{ Label = "rm -rf temp/ → 통과(무판단) 기대 — 셰임 PATH 는 SessionStart 가 설정"; Json = '{"tool_name":"Bash","tool_input":{"command":"rm -rf temp/"}}' },
+    @{ Label = "rm -rf temp/ → expect pass (no decision) — SessionStart sets the shim PATH"; Json = '{"tool_name":"Bash","tool_input":{"command":"rm -rf temp/"}}' },
     # PowerShell 툴로도 반드시 한 번 돌린다. Bash 케이스는 선행 줄을 내지 않으므로, 이게 없으면
     # Windows 설치본에서 실제로 쓰일 Import-Module 선행 줄이 한 번도 생성되지 않은 채 통과한다.
-    @{ Label = "PowerShell + Remove-Item → RmShim Import 선행 기대"; Json = '{"tool_name":"PowerShell","tool_input":{"command":"Remove-Item -Recurse -Force .\\build"}}' },
-    @{ Label = "rm -rf ~ → deny 기대 (홈 디렉터리 전체)"; Json = '{"tool_name":"Bash","tool_input":{"command":"rm -rf ~"}}' },
-    @{ Label = "Remove-Item -Recurse -Force C:\ → deny 기대"; Json = '{"tool_name":"PowerShell","tool_input":{"command":"Remove-Item -Recurse -Force C:\\"}}' },
-    @{ Label = "ls -la → 통과(무판단) 기대";          Json = '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' }
+    @{ Label = "PowerShell + Remove-Item → expect RmShim Import prefix"; Json = '{"tool_name":"PowerShell","tool_input":{"command":"Remove-Item -Recurse -Force .\\build"}}' },
+    @{ Label = "rm -rf ~ → expect deny (entire home directory)"; Json = '{"tool_name":"Bash","tool_input":{"command":"rm -rf ~"}}' },
+    @{ Label = "Remove-Item -Recurse -Force C:\ → expect deny"; Json = '{"tool_name":"PowerShell","tool_input":{"command":"Remove-Item -Recurse -Force C:\\"}}' },
+    @{ Label = "ls -la → expect pass (no decision)";          Json = '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' }
 )
 
 # 셀프테스트가 판정을 못 내면 가드가 설치는 됐어도 실제로는 동작하지 않는 상태다. 훅이
 # 유일한 방어선이므로(permissions 에 git deny 규칙을 두지 않는다) 조용히 넘기지 않는다.
 if ($selfTestFailures -gt 0) {
-    throw "셀프테스트 $selfTestFailures 건 실패 — 가드 훅이 정상 동작하지 않습니다. 위 실패 항목을 확인하세요."
+    throw "Self-test: $selfTestFailures failed — the guard hook is not working correctly. Check the failed items above."
 }
 
 # --- 6. 리포트 ---
 $depWarning = $null
 if (-not $hasSend2Trash) {
-    $depWarning = "send2trash 가 설치되지 않아, Git Bash 의 rm 은 경고만 남기고 실제로 삭제됩니다 (복구 불가)."
+    $depWarning = "send2trash is not installed, so Git Bash rm only leaves a warning and really deletes (unrecoverable)."
 }
 Write-SetupReport -DryRun:$DryRun -InstalledFiles @(
     (Join-Path $RealHooksDir "danger_guard.py"),

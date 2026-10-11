@@ -21,6 +21,7 @@
 프로세스에서는 이 모듈 전체를 skip 한다.
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -90,12 +91,12 @@ def _resolve_bash():
 BASH = _resolve_bash()
 
 requires_bash = pytest.mark.skipif(
-    BASH is None, reason="환경 변수를 전달받는 bash 를 찾지 못함 (Windows: Git Bash 필요)"
+    BASH is None, reason="no bash that receives environment variables was found (Windows: Git Bash required)"
 )
 
 pytestmark = pytest.mark.skipif(
     os.environ.get(CHILD_ENV_FLAG) == "1",
-    reason="러너가 띄운 안쪽 pytest — 재귀 방지를 위해 건너뛴다",
+    reason="inner pytest spawned by the runner - skipped to prevent recursion",
 )
 
 
@@ -127,7 +128,7 @@ def test_test_sh_syntax_is_valid():
 def test_help_exits_zero_without_running_anything():
     proc = run_test_sh("--help")
     assert proc.returncode == 0
-    assert "사용법" in proc.stdout
+    assert "Usage" in proc.stdout
 
 
 @requires_bash
@@ -136,7 +137,7 @@ def test_failing_suite_makes_the_runner_fail():
     -k 가 아무것도 매칭하지 않으므로 안쪽 pytest 는 수집만 하고 테스트를 실행하지 않는다."""
     proc = run_test_sh("--python-only", "-k", "__no_such_test_name__")
     assert proc.returncode == 1, proc.stdout[-2000:]
-    assert "실패" in proc.stdout
+    assert re.search(r"pytest\s+failed", proc.stdout), proc.stdout[-2000:]
 
 
 @requires_bash
@@ -152,7 +153,7 @@ def test_nothing_runnable_is_not_success(tmp_path):
     # pytest 가 돌아버려서, 정작 재현하려는 '아무 러너도 못 찾은 상황' 이 만들어지지 않는다.
     proc = run_test_sh(env_overrides={"PATH": str(empty_bin), "CLAUDE_TEST_PYTHON": ""})
     assert proc.returncode == 1, proc.stdout[-2000:]
-    assert "실행된 스위트가 없습니다" in proc.stdout
+    assert "No suites ran" in proc.stdout
 
 
 @requires_bash
@@ -170,8 +171,8 @@ def test_unusable_explicit_interpreter_fails_instead_of_skipping():
     --strict 없이 돌리는 CI 에서 통과로 읽힌다."""
     proc = run_test_sh("--python-only", env_overrides={"CLAUDE_TEST_PYTHON": "/no/such/python"})
     assert proc.returncode == 1, proc.stdout[-2000:]
-    assert "실패" in proc.stdout
-    assert "건너뜀" not in proc.stdout
+    assert re.search(r"pytest\s+failed", proc.stdout), proc.stdout[-2000:]
+    assert "skipped" not in proc.stdout
 
 
 @requires_bash
@@ -186,13 +187,13 @@ def test_auto_discovery_finds_pytest_when_not_pinned():
     proc = run_test_sh("--python-only", "-k", "test_root_delete_denied",
                        env_overrides={"CLAUDE_TEST_PYTHON": ""})
     assert proc.returncode == 0, proc.stdout[-2000:]
-    assert "인터프리터:" in proc.stdout, proc.stdout[-2000:]
+    assert "Interpreter:" in proc.stdout, proc.stdout[-2000:]
 
 
 PWSH = shutil.which("pwsh") or shutil.which("powershell")
 
 
-@pytest.mark.skipif(PWSH is None, reason="pwsh/powershell 을 찾지 못함")
+@pytest.mark.skipif(PWSH is None, reason="pwsh/powershell not found")
 def test_test_ps1_parses():
     """PowerShell 스크립트는 파서에 한 번이라도 통과시켜야 한다 — 문법 오류가 있으면 Windows
     에서 실행 즉시 죽는데, POSIX 개발 환경에서는 그 사실이 드러나지 않는다."""
@@ -207,7 +208,7 @@ def test_test_ps1_parses():
     assert proc.returncode == 0, proc.stderr
 
 
-def test_pester_실패가_러너의_종료코드에_반영된다():
+def test_pester_failure_is_reflected_in_runner_exit_code():
     """Invoke-Pester 는 테스트가 실패해도 종료 코드 0 을 낸다 (Pester 5 엔 -EnableExit 도 없다).
 
     그래서 러너가 결과 객체의 FailedCount 를 직접 종료 코드로 만들지 않으면, 깨진 Pester
@@ -221,15 +222,15 @@ def test_pester_실패가_러너의_종료코드에_반영된다():
         if "Invoke-Pester" not in source:
             continue
         assert "FailedCount" in source, (
-            f"{runner.name} 이 Invoke-Pester 결과를 FailedCount 로 판정하지 않는다 — "
-            "Pester 실패가 통과로 보고된다"
+            f"{runner.name} does not judge the Invoke-Pester result by FailedCount - "
+            "Pester failures get reported as passes"
         )
         assert "-PassThru" in source, (
-            f"{runner.name} 은 -PassThru 로 결과 객체를 받아야 FailedCount 를 볼 수 있다"
+            f"{runner.name} must receive the result object with -PassThru to see FailedCount"
         )
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows 에서만 실제 실행 검증")
+@pytest.mark.skipif(sys.platform != "win32", reason="real execution is verified on Windows only")
 def test_test_ps1_help_exits_zero():
     proc = subprocess.run(
         [PWSH or "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
@@ -237,10 +238,10 @@ def test_test_ps1_help_exits_zero():
         capture_output=True, text=True, encoding="utf-8",
     )
     assert proc.returncode == 0, proc.stderr
-    assert "사용법" in (proc.stdout or "")
+    assert "Usage" in (proc.stdout or "")
 
 
-@pytest.mark.skipif(PWSH is None, reason="pwsh/powershell 을 찾지 못함")
+@pytest.mark.skipif(PWSH is None, reason="pwsh/powershell not found")
 def test_ps_unusable_explicit_interpreter_fails_instead_of_skipping():
     """PowerShell 러너도 bash 러너와 같은 계약을 지켜야 한다 — 지정한 인터프리터를 못 쓰면
     '건너뜀' 이 아니라 실패.
@@ -258,7 +259,7 @@ def test_ps_unusable_explicit_interpreter_fails_instead_of_skipping():
         cwd=REPO_ROOT, env=env, capture_output=True, text=True, encoding="utf-8",
     )
     assert proc.returncode == 1, (proc.stdout or "") + (proc.stderr or "")
-    assert "실패" in (proc.stdout or "")
+    assert re.search(r"pytest\s+failed", proc.stdout or ""), proc.stdout
 
 
 # --- 배포되는 셸 스크립트의 실행 권한 ---
@@ -285,6 +286,6 @@ def test_shell_scripts_are_executable():
         if mode != "100755":
             not_executable.append(f"{path} ({mode})")
     assert not not_executable, (
-        "실행 권한이 없는 셸 스크립트: " + ", ".join(not_executable) +
+        "shell scripts without the executable bit: " + ", ".join(not_executable) +
         "  → git update-index --chmod=+x <path>"
     )

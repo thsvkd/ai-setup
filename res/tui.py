@@ -358,7 +358,7 @@ def select_lines(state, message, options, cursor):
         else:
             row = [("cyan", BAR + "  "), ("dim", RADIO_OFF + " " + label)]
         lines.append(row)
-    lines.append([("cyan", BAR_END), ("dim", "  ↑↓ 이동 · Enter 선택")])
+    lines.append([("cyan", BAR_END), ("dim", "  ↑↓ move · Enter select")])
     return lines
 
 
@@ -386,7 +386,7 @@ def multiselect(message, options, initial_values=(), required=True):
     def render(state):
         if state != "active":
             chosen = [label for value, label, _ in options if value in picked]
-            return _done(state, message, ", ".join(chosen) or "(없음)")
+            return _done(state, message, ", ".join(chosen) or "(none)")
         bar = "yellow" if error[0] else "cyan"
         lines = _header("error" if error[0] else "active", message)
         for i, (value, label, hint) in enumerate(options):
@@ -400,7 +400,7 @@ def multiselect(message, options, initial_values=(), required=True):
         if error[0]:
             lines.append([("yellow", BAR_END + "  " + error[0])])
         else:
-            lines.append([(bar, BAR_END), ("dim", "  ↑↓ 이동 · Space 선택/해제 · a 전체 · Enter 확정")])
+            lines.append([(bar, BAR_END), ("dim", "  ↑↓ move · Space toggle · a all · Enter confirm")])
         return lines
 
     def handle(key):
@@ -421,7 +421,7 @@ def multiselect(message, options, initial_values=(), required=True):
             return "cancel"
         elif key == "enter":
             if required and not picked:
-                error[0] = "최소 하나는 선택해야 합니다."
+                error[0] = "Select at least one."
                 return None
             return "submit"
         return None
@@ -438,12 +438,12 @@ def confirm(message, default=False):
 
     def render(state):
         if state != "active":
-            return _done(state, message, "예" if yes[0] else "아니오")
-        on = [("green", RADIO_ON), ("", " 예")] if yes[0] else [("dim", RADIO_OFF + " 예")]
-        off = [("dim", RADIO_OFF + " 아니오")] if yes[0] else [("green", RADIO_ON), ("", " 아니오")]
+            return _done(state, message, "Yes" if yes[0] else "No")
+        on = [("green", RADIO_ON), ("", " Yes")] if yes[0] else [("dim", RADIO_OFF + " Yes")]
+        off = [("dim", RADIO_OFF + " No")] if yes[0] else [("green", RADIO_ON), ("", " No")]
         lines = _header(state, message)
         lines.append([("cyan", BAR + "  ")] + on + [("dim", " / ")] + off)
-        lines.append([("cyan", BAR_END), ("dim", "  ←→ 이동 · y/n · Enter 확정")])
+        lines.append([("cyan", BAR_END), ("dim", "  ←→ move · y/n · Enter confirm")])
         return lines
 
     def handle(key):

@@ -96,42 +96,42 @@ function Show-DownloadFailureDiagnosis {
         [Parameter(Mandatory)][string]$Tarball
     )
     Write-Host ""
-    Write-Host "❌ 다운로드 실패: $Tarball" -ForegroundColor Red
+    Write-Host "❌ Download failed: $Tarball" -ForegroundColor Red
     Write-Host ""
 
     if (-not $Token) {
-        Write-Host "  토큰을 찾지 못했습니다. 비공개(private) 레포라면 인증이 필요합니다:" -ForegroundColor Yellow
+        Write-Host "  No token found. A private repo requires authentication:" -ForegroundColor Yellow
         Write-Host "    gh auth login -h github.com"
-        Write-Host "  로그인해 두면 이 스크립트가 gh 에서 토큰을 알아서 읽어옵니다."
+        Write-Host "  Once logged in, this script reads the token from gh automatically."
         return
     }
 
-    Write-Host "  토큰이 있는데도 실패했습니다. 비공개 레포는 인증 실패를 401 이 아니라 404 로" -ForegroundColor Yellow
-    Write-Host "  돌려주므로, '파일이 없다'처럼 보여도 원인은 대개 토큰입니다."
+    Write-Host "  Failed even with a token. Private repos report auth failures as 404, not 401," -ForegroundColor Yellow
+    Write-Host "  so even when it looks like 'file not found', the cause is usually the token."
     Write-Host ""
     $status = Get-GitHubApiStatus -Url "https://api.github.com/repos/$Repo" -Token $Token
     switch ($status) {
         401 {
-            Write-Host "  진단: 토큰이 만료/폐기되었습니다 (GitHub API 가 401 Bad credentials)." -ForegroundColor Yellow
+            Write-Host "  Diagnosis: the token is expired/revoked (GitHub API returned 401 Bad credentials)." -ForegroundColor Yellow
             Write-Host "    Remove-Item Env:GITHUB_TOKEN, Env:GH_TOKEN -ErrorAction SilentlyContinue"
             Write-Host "    gh auth login -h github.com"
-            Write-Host "  ※ GITHUB_TOKEN 이 설정돼 있으면 gh auth login 이 거부됩니다. 먼저 지우세요."
+            Write-Host "  ※ gh auth login refuses to run while GITHUB_TOKEN is set. Remove it first."
         }
         403 {
-            Write-Host "  진단: 토큰은 유효하지만 이 레포에 접근할 권한이 없습니다 (403)." -ForegroundColor Yellow
-            Write-Host "    classic PAT 는 repo 스코프, fine-grained PAT 는 Contents:Read 가 필요합니다."
+            Write-Host "  Diagnosis: the token is valid but has no permission for this repo (403)." -ForegroundColor Yellow
+            Write-Host "    A classic PAT needs the repo scope; a fine-grained PAT needs Contents:Read."
         }
         404 {
-            Write-Host "  진단: 토큰은 인증되지만 '$Repo' 를 볼 수 없습니다 (404)." -ForegroundColor Yellow
-            Write-Host "    CLAUDE_SETUP_REPO 값이 맞는지, 토큰에 이 레포 권한이 있는지 확인하세요."
+            Write-Host "  Diagnosis: the token authenticates but cannot see '$Repo' (404)." -ForegroundColor Yellow
+            Write-Host "    Check that CLAUDE_SETUP_REPO is correct and that the token has access to this repo."
         }
         200 {
-            Write-Host "  진단: 레포 접근은 되는데 ref '$Ref' 를 찾지 못했습니다." -ForegroundColor Yellow
-            Write-Host "    브랜치/태그 이름을 확인하세요. 완전한 형태로도 지정할 수 있습니다:"
+            Write-Host "  Diagnosis: the repo is reachable but ref '$Ref' was not found." -ForegroundColor Yellow
+            Write-Host "    Check the branch/tag name. You can also give the fully qualified form:"
             Write-Host "      `$env:CLAUDE_SETUP_REF = 'refs/heads/feature/my-branch'"
         }
         default {
-            Write-Host "  진단: GitHub API 에 닿지 못했습니다. 네트워크/프록시를 확인하세요." -ForegroundColor Yellow
+            Write-Host "  Diagnosis: could not reach the GitHub API. Check your network/proxy." -ForegroundColor Yellow
         }
     }
 }
@@ -192,26 +192,26 @@ function Invoke-Install {
 
     if ($Help) {
         Write-Host @"
-claude-code-setup 원격 설치 부트스트랩 (Windows)
+claude-code-setup remote install bootstrap (Windows)
 
-사용법:
-  irm .../install.ps1 | iex                                              # 대화형 온보딩 → 고른 대로
-  & ([scriptblock]::Create((irm .../install.ps1))) -Hooks                 # 전역 가드/권한만
-  & ([scriptblock]::Create((irm .../install.ps1))) -AgentsMd             # 현재 폴더에 AGENTS.md
-  & ([scriptblock]::Create((irm .../install.ps1))) -AgentsMd -Harness codex  # 하네스 지정
-  & ([scriptblock]::Create((irm .../install.ps1))) -Skills               # 번들 스킬만
-  & ([scriptblock]::Create((irm .../install.ps1))) -DryRun               # 미리보기
-  & ([scriptblock]::Create((irm .../install.ps1))) -NoOnboard            # 온보딩 없이 전체 설치
+Usage:
+  irm .../install.ps1 | iex                                              # interactive onboarding → install what you pick
+  & ([scriptblock]::Create((irm .../install.ps1))) -Hooks                 # global guards/permissions only
+  & ([scriptblock]::Create((irm .../install.ps1))) -AgentsMd             # AGENTS.md in the current folder
+  & ([scriptblock]::Create((irm .../install.ps1))) -AgentsMd -Harness codex  # choose the harness
+  & ([scriptblock]::Create((irm .../install.ps1))) -Skills               # bundled skills only
+  & ([scriptblock]::Create((irm .../install.ps1))) -DryRun               # preview
+  & ([scriptblock]::Create((irm .../install.ps1))) -NoOnboard            # full install without onboarding
 
-install.sh 와 같은 긴 표기(--hooks / --agentsmd / --harness L / --skills / --keybinds / --omc / --output-style / --mods / --newline VAL /
---uninstall / --dry-run / --no-onboard / --help)도 그대로 받습니다.
+The same long options as install.sh (--hooks / --agentsmd / --harness L / --skills / --keybinds / --omc / --output-style / --mods / --newline VAL /
+--uninstall / --dry-run / --no-onboard / --help) are accepted too.
 
-플래그 없이 실행하면 설치 범위·권한 모드(auto/bypassPermissions)를 고르는 온보딩이 뜹니다.
-콘솔이 없는 환경(CI 등)에서는 온보딩을 건너뛰고 전체 설치로 진행합니다.
+Run without flags to get an onboarding that picks the install scope and permission mode (auto/bypassPermissions).
+Without a console (CI, etc.) onboarding is skipped and a full install runs.
 
-환경변수:
-  `$env:CLAUDE_SETUP_REPO (기본 thsvkd/claude-code-setup), `$env:CLAUDE_SETUP_REF (기본 main)
-  `$env:GITHUB_TOKEN / `$env:GH_TOKEN — 비공개 레포 다운로드용 PAT (있으면 자동 사용)
+Environment variables:
+  `$env:CLAUDE_SETUP_REPO (default thsvkd/claude-code-setup), `$env:CLAUDE_SETUP_REF (default main)
+  `$env:GITHUB_TOKEN / `$env:GH_TOKEN — PAT for downloading private repos (used automatically if set)
 "@
         return
     }
@@ -220,7 +220,7 @@ install.sh 와 같은 긴 표기(--hooks / --agentsmd / --harness L / --skills /
     # 둔갑한다 — POSIX install.sh 는 알 수 없는 옵션에서 exit 1 이므로 여기서도 거절한다.
     # 다운로드 전에 판정한다: 오타 하나 때문에 레포를 통째로 받을 이유가 없다.
     if ($unknownArgs.Count -gt 0) {
-        throw "알 수 없는 옵션: $($unknownArgs -join ' ')"
+        throw "Unknown option: $($unknownArgs -join ' ')"
     }
 
     $repo = if ($env:CLAUDE_SETUP_REPO) { $env:CLAUDE_SETUP_REPO } else { "thsvkd/claude-code-setup" }
@@ -231,7 +231,7 @@ install.sh 와 같은 긴 표기(--hooks / --agentsmd / --harness L / --skills /
     try {
         $zip = Join-Path $tmp "repo.zip"
         $url = "https://github.com/$repo/archive/$ref.zip"
-        Write-Host "⬇️  claude-code-setup 다운로드 중 ($repo@$ref)..." -ForegroundColor Cyan
+        Write-Host "⬇️  claude-code-setup downloading ($repo@$ref)..." -ForegroundColor Cyan
         # 비공개 레포면 PAT 로 인증한다. github.com 아카이브 URL 은 Authorization 헤더를 받아준다.
         $token = Resolve-GitHubToken
         $iwr = @{ Uri = $url; OutFile = $zip; UseBasicParsing = $true }
@@ -245,10 +245,10 @@ install.sh 와 같은 긴 표기(--hooks / --agentsmd / --harness L / --skills /
         Expand-Archive -Path $zip -DestinationPath $tmp -Force
 
         $dir = Get-ChildItem -Path $tmp -Directory | Select-Object -First 1
-        if (-not $dir) { throw "다운로드한 아카이브 압축 해제에 실패했습니다." }
+        if (-not $dir) { throw "Failed to extract the downloaded archive." }
         $setup = Join-Path $dir.FullName "scripts\setup.ps1"
         if (-not (Test-Path $setup)) {
-            throw "다운로드한 아카이브에서 scripts\setup.ps1 을 찾지 못했습니다."
+            throw "scripts\setup.ps1 was not found in the downloaded archive."
         }
 
         # setup_agentsmd 는 현재 작업 디렉터리에 AGENTS.md 를 설치하므로 cwd 를 유지한 채 실행한다.

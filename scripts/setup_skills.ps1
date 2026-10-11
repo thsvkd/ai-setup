@@ -14,6 +14,6 @@ $homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
 $worker = Join-Path (Split-Path -Parent $PSScriptRoot) "res\skills\apply.py"
 $pyArgs = @("-X", "utf8", $worker, "--home", $homeDir)
 if ($DryRun) { $pyArgs += "--dry-run" }
-if ($Uninstall) { $pyArgs += "--uninstall"; Write-Host "🧹 번들 스킬 제거" } else { Write-Host "🔧 번들 스킬" }
+if ($Uninstall) { $pyArgs += "--uninstall"; Write-Host "🧹 Removing bundled skills" } else { Write-Host "🔧 Bundled skills" }
 & $py.Exe @($py.Args) @pyArgs
 exit $LASTEXITCODE

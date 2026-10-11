@@ -33,7 +33,7 @@ def load_json_object(path: Path) -> dict:
     # utf-8-sig: Windows PowerShell 5.1 의 Set-Content -Encoding UTF8 은 BOM 을 붙인다.
     data = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(data, dict):
-        raise ValueError("최상위가 객체가 아닙니다")
+        raise ValueError("top level is not an object")
     return data
 
 
@@ -44,18 +44,18 @@ def install(claude_dir: Path, dry_run: bool) -> int:
         settings = load_json_object(settings_path)
         manifest = load_json_object(manifest_path)
     except ValueError as e:
-        print(f"❌ 설정 파일을 파싱할 수 없어 멈춥니다: {e}", file=sys.stderr)
+        print(f"❌ Cannot parse the settings file; stopping: {e}", file=sys.stderr)
         return 1
 
     current = settings.get("outputStyle")
     if current == STYLE:
-        print(f"  • 이미 지정됨: outputStyle = {STYLE}")
+        print(f"  • already set: outputStyle = {STYLE}")
         return 0
 
     print(f"  • outputStyle: {current!r} → {STYLE!r}" if current is not None
           else f"  • outputStyle = {STYLE}")
     if dry_run:
-        print(f"🧪 DRY RUN — {settings_path} 에 실제로 쓰지 않았습니다.")
+        print(f"🧪 DRY RUN — nothing was written to {settings_path}.")
         return 0
 
     # 여기 왔다면 지금 값은 우리 값이 아니다 — 설치 전 값이거나, 설치 뒤 사용자가 고른 값이다.
@@ -70,7 +70,7 @@ def install(claude_dir: Path, dry_run: bool) -> int:
     write_json(str(settings_path), settings)
     manifest["output_style"] = receipt
     write_json(str(manifest_path), manifest)
-    print(f"✅ 출력 스타일 지정 완료: {settings_path} (새 세션부터 적용)")
+    print(f"✅ Output style set: {settings_path} (takes effect from the next session)")
     return 0
 
 
@@ -81,11 +81,11 @@ def uninstall(claude_dir: Path, dry_run: bool) -> int:
         settings = load_json_object(settings_path)
         manifest = load_json_object(manifest_path)
     except ValueError as e:
-        print(f"❌ 설정 파일을 파싱할 수 없어 멈춥니다: {e}", file=sys.stderr)
+        print(f"❌ Cannot parse the settings file; stopping: {e}", file=sys.stderr)
         return 1
     receipt = manifest.get("output_style")
     if not isinstance(receipt, dict):
-        print("  • (되돌릴 것 없음 — 이미 정리됨)")
+        print("  • (nothing to revert — already cleaned up)")
         return 0
 
     # 사용자가 나중에 바꾼 값은 사용자 것이다. 우리가 넣은 값 그대로일 때만 되돌린다.
@@ -93,13 +93,13 @@ def uninstall(claude_dir: Path, dry_run: bool) -> int:
     previous = receipt.get("previous")
     if restore:
         print(f"  • outputStyle: {STYLE!r} → {previous!r}" if previous is not None
-              else "  • outputStyle 제거")
+              else "  • outputStyle removed")
     elif not settings_path.is_file():
-        print("  • settings.json 이 없어 되돌릴 값이 없습니다 (영수증만 정리)")
+        print("  • settings.json is missing, nothing to revert (manifest cleanup only)")
     else:
-        print("  • outputStyle 이 바뀌어 있어 그대로 둡니다 (영수증만 정리)")
+        print("  • outputStyle was changed, leaving it as is (manifest cleanup only)")
     if dry_run:
-        print(f"🧪 DRY RUN — {settings_path} 에 실제로 쓰지 않았습니다.")
+        print(f"🧪 DRY RUN — nothing was written to {settings_path}.")
         return 0
 
     if restore:

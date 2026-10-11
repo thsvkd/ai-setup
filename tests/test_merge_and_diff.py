@@ -84,7 +84,7 @@ def test_idempotent(tmp_path):
     target = tmp_path / "settings.json"
     run_merge(target)
     proc2, _ = run_merge(target)
-    assert "변경 사항 없음" in proc2.stdout
+    assert "no changes" in proc2.stdout
 
 
 def test_dry_run_does_not_write(tmp_path):
@@ -296,7 +296,7 @@ def test_scalars_idempotent(tmp_path):
     target = tmp_path / "settings.json"
     run_merge(target)
     proc2, _ = run_merge(target)
-    assert "변경 사항 없음" in proc2.stdout   # 두 번째 실행은 이미 다 있어 변경 없음
+    assert "no changes" in proc2.stdout   # 두 번째 실행은 이미 다 있어 변경 없음
 
 
 def test_install_manifest_records_added_scalars(tmp_path):
@@ -520,7 +520,7 @@ def test_legacy_git_deny_rules_are_removed_on_install(tmp_path):
     assert proc.returncode == 0
     for key in LEGACY:
         assert not any("git" in rule for rule in result["permissions"].get(key, [])), \
-            "구버전 git %s 규칙이 남아 있으면 훅의 git 정책이 무력화된다" % key
+            "a leftover legacy git %s rule would defeat the hook's git policy" % key
 
 
 def test_legacy_removal_leaves_user_own_deny_rules(tmp_path):
@@ -584,8 +584,8 @@ def test_dry_run_reports_legacy_removal_without_writing(tmp_path):
     target.write_text(original, encoding="utf-8")
     proc, _ = run_merge(target, dry="1")
     assert proc.returncode == 0
-    assert "구버전 규칙" in proc.stdout, proc.stdout
-    assert target.read_text(encoding="utf-8") == original, "dry-run 은 파일을 바꾸면 안 된다"
+    assert "legacy rule" in proc.stdout, proc.stdout
+    assert target.read_text(encoding="utf-8") == original, "dry-run must not modify the file"
 
 
 def test_retired_hook_registration_is_pruned(tmp_path):

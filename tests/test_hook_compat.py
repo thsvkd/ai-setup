@@ -60,8 +60,8 @@ def test_pep604_annotations_are_deferred(hook):
     offenders = _pep604_annotations(tree)
     if offenders:
         assert _has_future_annotations(tree), (
-            f"{hook.name} 이 PEP 604 애노테이션을 쓰면서 "
-            f"`from __future__ import annotations` 가 없습니다 → Python 3.9 에서 죽습니다: {offenders[0]}"
+            f"{hook.name} uses PEP 604 annotations "
+            f"without `from __future__ import annotations` -> it crashes on Python 3.9: {offenders[0]}"
         )
 
 
@@ -88,18 +88,18 @@ def test_hook_runs_on_legacy_interpreter(hook):
     """실제 구버전 인터프리터가 있으면 그것으로 훅을 돌려본다 (macOS 의 /usr/bin/python3)."""
     interpreter = _legacy_interpreter()
     if interpreter is None:
-        pytest.skip(f"3.9.x python3 를 찾지 못함 (>= {MIN_SUPPORTED} 이고 < 3.10 인 것)")
+        pytest.skip(f"no 3.9.x python3 found (need >= {MIN_SUPPORTED} and < 3.10)")
 
     if hook.name in ("merge_and_diff.py", "send_to_trash.py"):
-        pytest.skip(f"{hook.name} 은 stdin 훅 프로토콜을 쓰지 않는다 (인자 기반)")
+        pytest.skip(f"{hook.name} does not use the stdin hook protocol (argument-based)")
 
     event = {"tool_name": "Bash", "tool_input": {"command": "git push origin main"}}
     proc = subprocess.run(
         [interpreter, "-X", "utf8", str(hook)],
         input=json.dumps(event), capture_output=True, text=True, encoding="utf-8",
     )
-    assert proc.returncode == 0, f"{hook.name} 이 {interpreter} 에서 죽었습니다:\n{proc.stderr}"
-    assert "Traceback" not in proc.stderr, f"{hook.name} 이 {interpreter} 에서 예외:\n{proc.stderr}"
+    assert proc.returncode == 0, f"{hook.name} crashed on {interpreter}:\n{proc.stderr}"
+    assert "Traceback" not in proc.stderr, f"{hook.name} raised on {interpreter}:\n{proc.stderr}"
 
 
 @pytest.mark.parametrize("hook", HOOKS, ids=lambda p: p.name)
@@ -133,5 +133,5 @@ def test_hooks_tolerate_leading_bom(hook, event, expected):
         text=True, capture_output=True, encoding="utf-8",
     )
     out = (proc.stdout or "").strip()
-    assert out, f"{hook}: BOM 이 붙었다고 판정을 건너뛰면 안 된다 (stderr={proc.stderr!r})"
+    assert out, f"{hook}: must not skip the verdict because a BOM is present (stderr={proc.stderr!r})"
     assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == expected

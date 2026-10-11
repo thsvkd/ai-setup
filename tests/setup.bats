@@ -22,7 +22,7 @@ teardown() {
 @test "setup.sh --help exits 0 and prints usage" {
     run bash "$REPO_ROOT/scripts/setup.sh" --help
     [ "$status" -eq 0 ]
-    [[ "$output" == *"사용법"* ]]
+    [[ "$output" == *"Usage"* ]]
 }
 
 @test "setup.sh -h prints usage" {
@@ -34,7 +34,7 @@ teardown() {
 @test "setup.sh rejects unknown option with exit 1" {
     run bash "$REPO_ROOT/scripts/setup.sh" --bogus
     [ "$status" -eq 1 ]
-    [[ "$output" == *"알 수 없는 옵션"* ]]
+    [[ "$output" == *"Unknown option"* ]]
 }
 
 @test "setup.sh --hooks --dry-run does not create ~/.claude/settings.json" {
@@ -52,7 +52,7 @@ teardown() {
 @test "install.sh --help exits 0 without network" {
     run sh "$REPO_ROOT/install.sh" --help
     [ "$status" -eq 0 ]
-    [[ "$output" == *"부트스트랩"* ]]
+    [[ "$output" == *"bootstrap"* ]]
 }
 
 # 아래는 dry-run 이 아닌 '실제 설치' 경로다. bash 3.2 (macOS 기본) 는 set -u 에서 빈 배열의
@@ -86,7 +86,7 @@ teardown() {
     cd "$SANDBOX"
     run bash "$SANDBOX/repo/scripts/setup.sh"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"설치를 중단합니다"* ]]
+    [[ "$output" == *"Aborting installation"* ]]
     [ ! -e "$HOME/.claude/settings.json" ]
     [ ! -e "$HOME/.claude/hooks/danger_guard.py" ]
     [ ! -e "$SANDBOX/AGENTS.md" ]
@@ -124,7 +124,7 @@ _keybind_sandbox() {
     printf '{broken' > "$HOME/.claude/settings.json"
     run bash "$REPO_ROOT/scripts/setup.sh" --hooks
     [ "$status" -ne 0 ]
-    [[ "$output" == *"실패 (exit $status)"* ]]
+    [[ "$output" == *"failed (exit $status)"* ]]
     [ "$(cat "$HOME/.claude/settings.json")" = "{broken" ]
 }
 
@@ -149,7 +149,7 @@ _keybind_sandbox() {
     run bash "$REPO_ROOT/scripts/setup.sh" --keybinds --newline foo
     [ "$status" -eq 1 ]
     [ "$(cat "$CLAUDE_SETUP_VSCODE_KEYBINDINGS")" = "$before" ]
-    [[ "$output" != *"알 수 없는 옵션"* ]]
+    [[ "$output" != *"Unknown option"* ]]
 }
 
 @test "setup.sh --keybinds does not install hooks or AGENTS.md (covers: Test-6)" {
@@ -164,7 +164,7 @@ _keybind_sandbox() {
 
 # 프로젝트 지침 설치는 고른 하네스에 따라 산출물이 달라진다. Codex/Grok/OpenCode 는
 # 루트 AGENTS.md 를 직접 읽고, Claude Code 는 CLAUDE.md 를 통해서만 읽는다.
-# Windows 쪽 같은 계약은 tests/Setup.Tests.ps1 의 "프로젝트 지침 하네스 선택" 에 있다.
+# Windows 쪽 같은 계약은 tests/Setup.Tests.ps1 의 "project instructions harness selection" 에 있다.
 
 @test "setup_agentsmd.sh with no args installs every harness artifact" {
     cd "$SANDBOX"
@@ -231,7 +231,7 @@ _keybind_sandbox() {
     run bash "$REPO_ROOT/scripts/setup_agentsmd.sh" --harness claude
     [ "$status" -eq 0 ]
     [[ "$output" == *"@AGENTS.md"* ]]
-    [[ "$output" == *"읽지 않습니다"* ]]
+    [[ "$output" == *"will not read"* ]]
     grep -q "project rules only" "$SANDBOX/CLAUDE.md"
 }
 
@@ -240,7 +240,7 @@ _keybind_sandbox() {
     printf '@AGENTS.md\n\n## project specific\n' > "$SANDBOX/CLAUDE.md"
     run bash "$REPO_ROOT/scripts/setup_agentsmd.sh" --harness claude
     [ "$status" -eq 0 ]
-    [[ "$output" != *"읽지 않습니다"* ]]
+    [[ "$output" != *"will not read"* ]]
 }
 
 @test "setup_agentsmd.sh --force backs CLAUDE.md up before overwriting it" {

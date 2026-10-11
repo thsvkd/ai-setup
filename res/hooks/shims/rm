@@ -37,7 +37,7 @@ if [ -z "$TRASH" ] && [ -f "$SEND_TO_TRASH" ]; then
     done
 fi
 if [ -z "$TRASH" ] && [ -z "$TRASH_PY" ]; then
-    echo "rm(shim): 휴지통 도구가 없어 휴지통 없이 실제 삭제합니다. (pip install trash-cli)" >&2
+    echo "rm(shim): no trash tool found; deleting for real without the trash. (pip install trash-cli)" >&2
     exec "$REAL_RM" "$@"
 fi
 
@@ -98,7 +98,7 @@ for a in "$@"; do
     # 루트/홈 전체 삭제는 어느 경로로 와도 거부한다.
     if [ "$abs" = "/" ] || { [ -n "$PW_HOME" ] && [ "$abs" = "${PW_HOME%/}" ]; } \
         || { [ -n "$ENV_HOME" ] && [ "$abs" = "${ENV_HOME%/}" ]; }; then
-        echo "rm(shim): 루트/홈 디렉터리 전체($a) 삭제는 거부합니다." >&2
+        echo "rm(shim): refusing to delete the entire root/home directory ($a)." >&2
         exit 1
     fi
 
@@ -166,7 +166,7 @@ else
     rc=$?
     if [ "$rc" -eq 127 ]; then
         # send2trash 미설치 — 휴지통으로 옮길 수단이 없다. 알리고 실제 삭제한다.
-        echo "rm(shim): 휴지통 없이 실제 삭제합니다. (pip install send2trash)" >&2
+        echo "rm(shim): deleting for real without the trash. (pip install send2trash)" >&2
         "$REAL_RM" -r -- "$@" || exit $?
     elif [ "$rc" -ne 0 ]; then
         exit "$rc"

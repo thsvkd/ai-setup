@@ -38,13 +38,13 @@ print_python_install_hint() {
         cmd="sudo apk add python3"
     fi
     {
-        echo "   Python 3 설치 방법:"
+        echo "   How to install Python 3:"
         if [[ -n "$cmd" ]]; then
             echo "     $cmd"
         else
-            echo "     배포판의 패키지 관리자로 python3 를 설치하세요 (https://www.python.org/downloads/)."
+            echo "     Install python3 with your distribution package manager (https://www.python.org/downloads/)."
         fi
-        echo "   설치 후 다시 실행하세요."
+        echo "   Run again after installing."
     } >&2
 }
 
@@ -124,21 +124,21 @@ uninstall_hooks() {
         files=$'danger_guard.py\nsecrets_guard.py\nsend_to_trash.py\nshims/rm\nshims/RmShim.psm1'
     fi
 
-    echo "[1/2] settings.json 정밀 복원 (설치가 건드린 것만)..."
+    echo "[1/2] Precisely restoring settings.json (only what the install touched)..."
     "$py_exe" -X utf8 "$merge_script" --uninstall "$settings_path" "$dry_run" "$manifest"
 
     echo ""
-    echo "[2/2] 훅 파일 + guard.log + 매니페스트 제거..."
+    echo "[2/2] Removing hook files + guard.log + manifest..."
     local f target
     while IFS= read -r f; do
         [[ -z "$f" ]] && continue
         target="$hooks_dir/$f"
         [[ -f "$target" ]] || continue
         if [[ "$dry_run" -eq 1 ]]; then
-            echo "  🧪 (dry-run) 제거 예정: $target"
+            echo "  🧪 (dry-run) would remove: $target"
         else
             rm -f "$target"
-            echo "  🗑️  제거: $target"
+            echo "  🗑️  Removed: $target"
         fi
     done <<< "$files"
 
@@ -151,10 +151,10 @@ uninstall_hooks() {
     for target in "$hooks_dir/guard.log"; do
         [[ -f "$target" ]] || continue
         if [[ "$dry_run" -eq 1 ]]; then
-            echo "  🧪 (dry-run) 제거 예정: $target"
+            echo "  🧪 (dry-run) would remove: $target"
         else
             rm -f "$target"
-            echo "  🗑️  제거: $target"
+            echo "  🗑️  Removed: $target"
         fi
     done
 
@@ -163,13 +163,13 @@ uninstall_hooks() {
     # refreshInterval' 을 식별할 근거를 잃는다.
     if [[ -f "$manifest" ]]; then
         if [[ "$dry_run" -eq 1 ]]; then
-            echo "  🧪 (dry-run) 제거 예정: $manifest"
+            echo "  🧪 (dry-run) would remove: $manifest"
         else
             "$py_exe" -c "import json,os,sys; p=sys.argv[1]; d=json.load(open(p,encoding='utf-8')); kept={k:d[k] for k in ('keybinds','omc_hud','output_style','mods') if isinstance(d,dict) and d.get(k)}; json.dump(kept,open(p,'w',encoding='utf-8'),ensure_ascii=False,indent=2) if kept else os.remove(p)" "$manifest" 2>/dev/null || rm -f "$manifest"
             if [[ -f "$manifest" ]]; then
-                echo "  🧾 유지: $manifest (다른 워커의 영수증만 남김)"
+                echo "  🧾 Kept: $manifest (only other workers' manifests remain)"
             else
-                echo "  🗑️  제거: $manifest"
+                echo "  🗑️  Removed: $manifest"
             fi
         fi
     fi
@@ -179,7 +179,7 @@ run_hook_self_test() {
     # args: py_exe hook_path  "label1:::json1" ["label2:::json2" ...]
     # 판정 규칙은 SetupCommon.ps1 의 Invoke-HookSelfTest 와 같다. '출력이 비어 있음' 을 성공으로
     # 읽지 않는다 — 훅이 죽었거나 stdin 이 전달되지 않아도 출력은 비기 때문이다. 판정 없이
-    # 통과하는 게 맞는 케이스는 라벨에 '통과' 를 넣어 구분한다. 성공한 케이스는 한 줄 요약으로
+    # 통과하는 게 맞는 케이스는 라벨에 'expect pass' 를 넣어 구분한다. 성공한 케이스는 한 줄 요약으로
     # 접고, 실패한 케이스만 사유와 함께 보여 준다. 실패 건수를 종료 코드로 돌려준다.
     local py_exe="$1" hook_path="$2"
     shift 2
@@ -192,14 +192,14 @@ run_hook_self_test() {
         out="$(printf '%s' "$json" | "$py_exe" -X utf8 "$hook_path" 2>"$errf")" || rc=$?
         if [[ "$rc" -ne 0 ]]; then
             echo "  ❌ $label"
-            echo "     훅이 비정상 종료했습니다 (exit $rc): $(cat "$errf")"
+            echo "     Hook exited abnormally (exit $rc): $(cat "$errf")"
             failures=$((failures + 1))
             continue
         fi
         if [[ -z "$out" ]]; then
-            if [[ "$label" != *통과* ]]; then
+            if [[ "$label" != *"expect pass"* ]]; then
                 echo "  ❌ $label"
-                echo "     판정이 비어 있습니다 — 가드가 이 명령을 그대로 흘려보냅니다."
+                echo "     Empty decision — the guard lets this command through unchecked."
                 failures=$((failures + 1))
             fi
             continue
@@ -209,13 +209,13 @@ h = json.load(sys.stdin).get("hookSpecificOutput", {})
 print(h.get("permissionDecision") or ("updatedInput" if "updatedInput" in h else ""))' 2>/dev/null)" || decision=""
         if [[ -z "$decision" ]]; then
             echo "  ❌ $label"
-            echo "     판정을 파싱할 수 없습니다: $out"
+            echo "     Could not parse the decision: $out"
             failures=$((failures + 1))
         fi
     done
     rm -f "$errf"
     if [[ "$failures" -eq 0 ]]; then
-        echo "  ✅ 셀프테스트 $#/$# 통과"
+        echo "  ✅ Self-test $#/$# passed"
     fi
     return "$failures"
 }
@@ -232,14 +232,14 @@ print_setup_report() {
 
     echo ""
     if [[ "$dry_run" -eq 1 ]]; then
-        echo "🧪 DRY RUN 완료 — 실제 파일은 하나도 바뀌지 않았습니다."
-        echo "   실제로 적용하려면: --dry-run 옵션 없이 다시 실행하세요."
+        echo "🧪 DRY RUN complete — no real files were changed."
+        echo "   To actually apply: run again without the --dry-run option."
         return 0
     fi
 
-    echo "🎉 초기화 완료!"
+    echo "🎉 Setup complete!"
     echo ""
-    echo "  생성/수정된 파일 (유저 레벨):"
+    echo "  Created/modified files (user level):"
     local f
     for f in "${installed[@]}"; do
         echo "    $f"
@@ -249,22 +249,22 @@ print_setup_report() {
     if [[ -n "$dependency_warning" ]]; then
         echo "  ⚠️ $dependency_warning"
     fi
-    echo "  🔁 중요: 방금 바뀐 권한/모드는 '새 Claude Code 세션'부터 적용됩니다. 실행 중인"
-    echo "     세션은 시작 시점의 권한 스냅샷을 그대로 쓰므로(실시간 재로드 안 함), 방금 allow"
-    echo "     목록에 넣은 Artifact 등이 이 세션에서는 계속 확인 프롬프트를 띄울 수 있습니다."
-    echo "     Claude Code 를 종료 후 다시 실행(새 세션)하면 프롬프트가 사라집니다."
-    echo "  ⚠️ 범위 변경 안내: 이 훅과 defaultMode($default_mode)는 이제 이 사용자가 여는 모든"
-    echo "     프로젝트에 적용됩니다 (특정 프로젝트 한정이 아님)."
+    echo "  🔁 Important: the permissions/mode just changed apply from a 'new Claude Code session'. A running"
+    echo "     session keeps the permission snapshot from its start (no live reload), so items just added to the allow"
+    echo "     list, such as Artifact, may keep showing confirmation prompts in this session."
+    echo "     Quit and restart Claude Code (new session) and the prompts go away."
+    echo "  ⚠️ Scope change notice: these hooks and defaultMode($default_mode) now apply to every"
+    echo "     project this user opens (not limited to one project)."
     if [[ "$default_mode" == "auto" ]]; then
-        echo "  ℹ️ defaultMode를 'auto'로 설정했지만, 실제로 auto 모드가 켜지려면 계정이"
-        echo "     Claude Code v2.1.83+, Team/Enterprise/API 플랜, Sonnet 4.6 이상 모델 등"
-        echo "     자격 요건을 충족해야 합니다 (아직 research preview). 세션에서 Shift+Tab 으로"
-        echo "     모드를 순환시켜 auto 가 뜨는지 직접 확인해보세요."
+        echo "  ℹ️ defaultMode is set to 'auto', but for auto mode to actually turn on, the account must meet"
+        echo "     eligibility requirements such as Claude Code v2.1.83+, a Team/Enterprise/API plan, and Sonnet 4.6"
+        echo "     or later (still a research preview). Cycle modes with Shift+Tab in a session"
+        echo "     to check that auto shows up."
     elif [[ "$default_mode" == "bypassPermissions" ]]; then
-        echo "  ⚠️ defaultMode를 'bypassPermissions'로 설정했습니다 — Claude Code 의 권한 확인이"
-        echo "     모두 생략됩니다. 방금 설치한 가드 훅(rm 휴지통 치환, git 백업, 시크릿 확인)은"
-        echo "     그대로 동작하지만, 훅이 판단하지 않는 명령은 확인 없이 실행됩니다."
-        echo "     되돌리려면 $settings_path 의 permissions.defaultMode 를 'auto' 로 바꾸세요."
+        echo "  ⚠️ defaultMode is set to 'bypassPermissions' — all Claude Code permission checks"
+        echo "     are skipped. The guard hooks just installed (rm to trash, git backup, secret checks)"
+        echo "     still work, but commands the hooks do not judge run without confirmation."
+        echo "     To revert, set permissions.defaultMode in $settings_path to 'auto'."
     fi
-    echo "  감사 로그: $guard_log_path"
+    echo "  Audit log: $guard_log_path"
 }

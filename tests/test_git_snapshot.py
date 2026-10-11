@@ -69,7 +69,7 @@ def test_reset_hard_backs_up_tracked_modification(repo):
     (repo / "tracked.txt").write_text("WIP 편집\n", encoding="utf-8")
     run_hook("git reset --hard HEAD", repo)
     ref = latest_backup(repo)
-    assert ref, "백업 ref 가 생성돼야 한다"
+    assert ref, "a backup ref must be created"
 
     git(repo, "reset", "--hard", "HEAD")
     assert (repo / "tracked.txt").read_text(encoding="utf-8") == "committed\n"
@@ -138,7 +138,7 @@ def test_worktree_remove_backs_up_the_target_worktree(repo, tmp_path):
 
     run_hook("git worktree remove --force %s" % wt, repo)
     ref = latest_backup(repo)
-    assert ref, "본 저장소에 워크트리 스냅샷이 남아야 한다"
+    assert ref, "a worktree snapshot must remain in the main repository"
     blob = git(repo, "show", "%s:tracked.txt" % ref).stdout
     assert blob == "워크트리 미커밋\n"
 
@@ -537,9 +537,9 @@ def test_clean_x_skips_ignored_when_too_large(repo, monkeypatch):
     monkeypatch.setattr(danger_guard, "MAX_IGNORED_FILES", 1)
     notes = danger_guard.git_snapshot("git clean -fdx", str(repo))
 
-    assert any("제외했습니다" in n for n in notes), notes
+    assert any("left out of the snapshot" in n for n in notes), notes
     ref = latest_backup(repo)
-    assert ref, "무시된 파일을 포기해도 스냅샷 자체는 남아야 한다"
+    assert ref, "the snapshot itself must remain even when ignored files are given up"
     listing = git(repo, "ls-tree", "-r", "--name-only", ref).stdout
     assert "tracked.txt" in listing
     assert "junk/" not in listing

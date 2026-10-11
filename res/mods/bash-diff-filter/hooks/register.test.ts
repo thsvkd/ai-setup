@@ -14,28 +14,28 @@ function bash(files: string[], moreFiles = 0) {
 }
 
 describe('filterOutput', () => {
-  test('HUD 캐시만 빼고 다른 파일은 남긴다', () => {
+  test('drops only the HUD cache and keeps other files', () => {
     const out = filterOutput(bash([HUD, SRC]))
     expect(out.bashEditDiff?.files.map((f) => f.filePath)).toEqual([SRC])
     expect(out.bashEditDiff?.changedFiles).toEqual([SRC])
     expect(out.stdout).toBe('ok')
   })
 
-  test('세션별 경로도 뺀다', () => {
+  test('also drops the per-session path', () => {
     expect(filterOutput(bash([HUD_SESSION, SRC])).bashEditDiff?.files.length).toBe(1)
   })
 
-  test('HUD 캐시뿐이면 bashEditDiff 를 통째로 지운다', () => {
+  test('removes bashEditDiff entirely when only the HUD cache is present', () => {
     expect('bashEditDiff' in filterOutput(bash([HUD]))).toBe(false)
   })
 
-  test('잘린 파일이 더 있으면 빈 목록이어도 bashEditDiff 를 남긴다', () => {
+  test('keeps bashEditDiff even with an empty list when truncated files remain', () => {
     const out = filterOutput(bash([HUD], 3))
     expect(out.bashEditDiff?.files).toEqual([])
     expect(out.bashEditDiff?.moreFiles).toBe(3)
   })
 
-  test('목록에서 잘린 HUD 캐시는 +N more 숫자에서 뺀다', () => {
+  test('subtracts a HUD cache truncated from the list out of the +N more count', () => {
     const input = bash([SRC], 2)
     input.bashEditDiff.changedFiles = [SRC, HUD, '/work/proj/other.ts']
     const out = filterOutput(input)
@@ -44,21 +44,21 @@ describe('filterOutput', () => {
     expect(out.bashEditDiff?.changedFiles).toEqual([SRC, '/work/proj/other.ts'])
   })
 
-  test('걸러낼 게 없으면 같은 객체를 돌려준다', () => {
+  test('returns the same object when there is nothing to filter', () => {
     const input = bash([SRC])
     expect(filterOutput(input)).toBe(input)
     const plain = { stdout: '', stderr: '', interrupted: false }
     expect(filterOutput(plain)).toBe(plain)
   })
 
-  test('이름만 같은 다른 위치의 파일은 남긴다', () => {
+  test('keeps files that only share the name but live elsewhere', () => {
     const other = '/work/proj/docs/hud-stdin-cache.json'
     expect(filterOutput(bash([other])).bashEditDiff?.files.length).toBe(1)
   })
 })
 
 for (const component of ['ToolResult', 'ToolUse'] as const) {
-  test(`${component}: Bash 결과는 걸러서 엔진에 넘긴다`, async ($, on) => {
+  test(`${component}: filters Bash results before handing them to the engine`, async ($, on) => {
     let seen: unknown
     on('ui.render', { component }, async (_$, e) => {
       seen = e.props.output
@@ -72,7 +72,7 @@ for (const component of ['ToolResult', 'ToolUse'] as const) {
     expect((seen as ReturnType<typeof bash>).bashEditDiff?.files.map((f) => f.filePath)).toEqual([SRC])
   })
 
-  test(`${component}: Bash 가 아닌 도구는 그대로 넘긴다`, async ($, on) => {
+  test(`${component}: passes non-Bash tools through unchanged`, async ($, on) => {
     let seen: unknown
     on('ui.render', { component }, async (_$, e) => {
       seen = e.props.output

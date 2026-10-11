@@ -4,10 +4,10 @@ import { format, touchesCache } from './register'
 const T0 = 1_000_000_000
 
 describe('format', () => {
-  test('캐시를 쓴 적이 없으면 아무것도 보이지 않는다', () => {
+  test('shows nothing when the cache has never been used', () => {
     expect(format(undefined, T0)).toBe(undefined)
   })
-  test('1분 이상은 분, 미만은 초, 지나면 cold', () => {
+  test('minutes at 1 minute or more, seconds below that, cold once expired', () => {
     expect(format(T0 + 57 * 60_000 + 5_000, T0)).toBe('cache:57m')
     expect(format(T0 + 45_000, T0)).toBe('cache:45s')
     expect(format(T0, T0)).toBe('cache:cold')
@@ -16,7 +16,7 @@ describe('format', () => {
 })
 
 describe('touchesCache', () => {
-  test('캐시를 읽거나 쓴 응답만 TTL 을 갱신한다', () => {
+  test('only responses that read or wrote the cache refresh the TTL', () => {
     expect(touchesCache({ cache_read_input_tokens: 10, cache_creation_input_tokens: 0 })).toBe(true)
     expect(touchesCache({ cache_read_input_tokens: 0, cache_creation_input_tokens: 5 })).toBe(true)
     expect(touchesCache({ cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })).toBe(false)
@@ -37,7 +37,7 @@ async function runStep($: any, input: object) {
   return stream.result
 }
 
-test('메인 요청이 캐시를 읽으면 TTL 이 흐르고, 지나면 cold 가 된다', { options: { ttl: '5m' } }, async ($, on) => {
+test('a main request reading the cache starts the TTL, and it goes cold once it passes', { options: { ttl: '5m' } }, async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   const seen: (string | undefined)[] = []
   on('ui.status', async (_$, e) => { seen.push(e.text); return { value: undefined } })
@@ -55,7 +55,7 @@ test('메인 요청이 캐시를 읽으면 TTL 이 흐르고, 지나면 cold 가
   expect(seen.at(-1)).toBe('cache:cold')
 })
 
-test('서브에이전트 요청과 캐시를 건드리지 않은 요청은 무시한다', async ($, on) => {
+test('ignores subagent requests and requests that did not touch the cache', async ($, on) => {
   mock.clock(on, { now: T0 })
   const seen: (string | undefined)[] = []
   on('ui.status', async (_$, e) => { seen.push(e.text); return { value: undefined } })
@@ -66,7 +66,7 @@ test('서브에이전트 요청과 캐시를 건드리지 않은 요청은 무�
   expect(seen).toEqual([])
 })
 
-test('모델을 바꾸면 cold 가 되고, 엔진이 알려 준 TTL 을 쓴다', { options: { ttl: '1h' } }, async ($, on) => {
+test('switching models goes cold and uses the TTL the engine reports', { options: { ttl: '1h' } }, async ($, on) => {
   mock.clock(on, { now: T0 })
   const seen: (string | undefined)[] = []
   on('ui.status', async (_$, e) => { seen.push(e.text); return { value: undefined } })
@@ -86,7 +86,7 @@ test('모델을 바꾸면 cold 가 되고, 엔진이 알려 준 TTL 을 쓴다',
   expect(seen.at(-1)).toBe('cache:5m')
 })
 
-test('session.start 없이 로드돼도(reload) 첫 요청부터 카운트다운이 흐른다', { options: { ttl: '5m' } }, async ($, on) => {
+test('the countdown runs from the first request even when loaded without session.start (reload)', { options: { ttl: '5m' } }, async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   const seen: (string | undefined)[] = []
   on('ui.status', async (_$, e) => { seen.push(e.text); return { value: undefined } })

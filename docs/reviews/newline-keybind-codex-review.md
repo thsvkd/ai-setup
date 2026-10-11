@@ -11,15 +11,15 @@
 
 | # | 심각도 | 결함 | 수정 | 회귀 테스트 |
 | --- | --- | --- | --- | --- |
-| 1 | HIGH | uninstall 이 사용자 소유 Claude/Codex 키를 지우고, 설치가 덮어쓴 값을 복원하지 않음 | 영수증에 있는 키만 제거. 설치가 덮어쓴 값은 `claude_overwrote` 에 남겨 복원. 이미 있던 키는 영수증에 적지 않음 | `test_설치가_덮어쓴_Claude값을_uninstall이_되돌린다`, `test_uninstall은_영수증에_없는_Codex코드를_지우지_않는다` |
-| 2 | HIGH | 점 표기 TOML 을 유효하지 않게 만듦 | 편집기를 경로 인식 방식으로 재작성 — 섹션 헤더와 점 표기 키를 같은 경로로 해석한다 | `test_점표기_codex_toml도_유효하게_남는다` (4개 형태) |
-| 3 | HIGH | shift-enter 설치가 사용자의 ctrl+enter WT 항목을 삭제 | 시퀀스에 더해 **소유권**(지금 쓰는 키이거나 영수증에 있는 이전 키)까지 봐야 제거 | `test_고르지_않은_키의_WT_사용자항목은_남는다` |
-| 4 | HIGH | 원자적 쓰기가 심볼릭 링크를 끊고 권한을 완화 | 링크는 실체를 찾아 쓰고, 교체 전 `shutil.copymode` 로 권한 이전 | `test_심볼릭_링크를_끊지_않고_권한을_보존한다` |
-| 5 | MEDIUM | 부분 복구가 영수증을 줄여 uninstall 이 우리 줄을 남김 | `union_receipt` 로 영수증을 합집합 누적 | `test_부분_복구_뒤에도_영수증이_두_줄을_모두_기억한다` |
-| 6 | MEDIUM | 주석의 `extended-keys` 가 tmux 설정을 통째로 막음 | 주석을 뗀 뒤 실제 명령만 검사 | `test_tmux_주석은_설정으로_세지_않는다` |
-| 7 | MEDIUM | tmux 설치 경로가 백업·원자적 쓰기를 안 씀 | 설치 경로도 `write_text_atomic` 사용 | `test_tmux도_백업을_남긴다` |
-| 8 | MEDIUM | WT Preview/Canary/비패키지 설치를 못 찾음 | `default_wt_paths()` 가 후보 넷을 반환하고 존재하는 것을 고름. `local` 인자를 받아 플랫폼과 무관하게 검증 가능 | `test_WT_기본경로는_Stable말고도_찾는다` |
-| 9 | MEDIUM | `--hooks --uninstall` 이 키바인딩까지 제거 (결정 4 위반) | 제거도 설치와 같은 범위 규칙을 따른다 | `test_hooks_uninstall은_키바인딩을_건드리지_않는다` |
+| 1 | HIGH | uninstall 이 사용자 소유 Claude/Codex 키를 지우고, 설치가 덮어쓴 값을 복원하지 않음 | 영수증에 있는 키만 제거. 설치가 덮어쓴 값은 `claude_overwrote` 에 남겨 복원. 이미 있던 키는 영수증에 적지 않음 | `test_uninstall_restores_claude_value_overwritten_by_install`, `test_uninstall_does_not_remove_codex_chords_absent_from_manifest` |
+| 2 | HIGH | 점 표기 TOML 을 유효하지 않게 만듦 | 편집기를 경로 인식 방식으로 재작성 — 섹션 헤더와 점 표기 키를 같은 경로로 해석한다 | `test_dotted_codex_toml_stays_valid` (4개 형태) |
+| 3 | HIGH | shift-enter 설치가 사용자의 ctrl+enter WT 항목을 삭제 | 시퀀스에 더해 **소유권**(지금 쓰는 키이거나 영수증에 있는 이전 키)까지 봐야 제거 | `test_wt_user_entries_for_unchosen_key_are_kept` |
+| 4 | HIGH | 원자적 쓰기가 심볼릭 링크를 끊고 권한을 완화 | 링크는 실체를 찾아 쓰고, 교체 전 `shutil.copymode` 로 권한 이전 | `test_keeps_symlink_intact_and_preserves_permissions` |
+| 5 | MEDIUM | 부분 복구가 영수증을 줄여 uninstall 이 우리 줄을 남김 | `union_receipt` 로 영수증을 합집합 누적 | `test_manifest_remembers_both_lines_after_partial_repair` |
+| 6 | MEDIUM | 주석의 `extended-keys` 가 tmux 설정을 통째로 막음 | 주석을 뗀 뒤 실제 명령만 검사 | `test_tmux_comments_do_not_count_as_config` |
+| 7 | MEDIUM | tmux 설치 경로가 백업·원자적 쓰기를 안 씀 | 설치 경로도 `write_text_atomic` 사용 | `test_tmux_also_leaves_a_backup` |
+| 8 | MEDIUM | WT Preview/Canary/비패키지 설치를 못 찾음 | `default_wt_paths()` 가 후보 넷을 반환하고 존재하는 것을 고름. `local` 인자를 받아 플랫폼과 무관하게 검증 가능 | `test_wt_default_paths_also_find_non_stable` |
+| 9 | MEDIUM | `--hooks --uninstall` 이 키바인딩까지 제거 (결정 4 위반) | 제거도 설치와 같은 범위 규칙을 따른다 | `test_hooks_uninstall_leaves_keybindings_untouched` |
 
 ## 앞선 검토에서 절반만 고쳤던 것
 

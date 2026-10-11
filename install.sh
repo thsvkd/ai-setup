@@ -29,34 +29,34 @@ set -eu
 
 print_help() {
     cat <<'EOF'
-claude-code-setup 원격 설치 부트스트랩
+claude-code-setup remote install bootstrap
 
-사용법:
-  curl -fsSL .../install.sh | sh                 # 대화형 온보딩 → 고른 대로 설치
-  curl -fsSL .../install.sh | sh -s -- --hooks    # 전역 가드/권한만
-  curl -fsSL .../install.sh | sh -s -- --agentsmd # 현재 폴더에 AGENTS.md 만
-  curl -fsSL .../install.sh | sh -s -- --dry-run  # 아무것도 바꾸지 않고 미리보기
-  curl -fsSL .../install.sh | sh -s -- --no-onboard # 온보딩 없이 전체 설치
-  curl -fsSL .../install.sh | sh -s -- --skills   # 번들 스킬만
-  curl -fsSL .../install.sh | sh -s -- --keybinds # 줄바꿈 키바인딩만
-  curl -fsSL .../install.sh | sh -s -- --omc      # oh-my-claudecode + 캐시 TTL HUD
-  curl -fsSL .../install.sh | sh -s -- --output-style # fluent-korean 출력 스타일
-  curl -fsSL .../install.sh | sh -s -- --mods     # Claude Code mod (Bash diff 필터, 캐시 TTL 상태 줄)
+Usage:
+  curl -fsSL .../install.sh | sh                 # interactive onboarding → install what you pick
+  curl -fsSL .../install.sh | sh -s -- --hooks    # global guards/permissions only
+  curl -fsSL .../install.sh | sh -s -- --agentsmd # AGENTS.md in the current folder only
+  curl -fsSL .../install.sh | sh -s -- --dry-run  # preview without changing anything
+  curl -fsSL .../install.sh | sh -s -- --no-onboard # full install without onboarding
+  curl -fsSL .../install.sh | sh -s -- --skills   # bundled skills only
+  curl -fsSL .../install.sh | sh -s -- --keybinds # newline keybinding only
+  curl -fsSL .../install.sh | sh -s -- --omc      # oh-my-claudecode + cache TTL HUD
+  curl -fsSL .../install.sh | sh -s -- --output-style # fluent-korean output style
+  curl -fsSL .../install.sh | sh -s -- --mods     # Claude Code mod (Bash diff filter, cache TTL status line)
   curl -fsSL .../install.sh | sh -s -- --newline ctrl-enter
-  curl -fsSL .../install.sh | sh -s -- --help     # 이 도움말
+  curl -fsSL .../install.sh | sh -s -- --help     # this help
 
-인자 없이 실행하면 설치 범위·권한 모드(auto/bypassPermissions)를 고르는 온보딩이 뜹니다.
-파이프로 실행해도(stdin 이 스크립트 본문이어도) 제어 터미널을 직접 열어 동작하며,
-터미널이 없는 환경(CI 등)에서는 온보딩 없이 전체 설치로 진행합니다.
+Run without arguments to get an onboarding that picks the install scope and permission mode (auto/bypassPermissions).
+It works even when piped (stdin is the script body) by opening the controlling terminal directly;
+without a terminal (CI, etc.) it does a full install without onboarding.
 
-환경변수:
-  CLAUDE_SETUP_REPO=owner/repo   대상 레포 (기본 thsvkd/claude-code-setup)
-  CLAUDE_SETUP_REF=main          브랜치/태그 (기본 main). feature/foo 처럼 슬래시가
-                                 들어가도 되고, refs/heads/feature/foo 도 된다.
-  GITHUB_TOKEN / GH_TOKEN        비공개 레포용 PAT. 없으면 `gh auth token` 으로 폴백.
+Environment variables:
+  CLAUDE_SETUP_REPO=owner/repo   target repo (default thsvkd/claude-code-setup)
+  CLAUDE_SETUP_REF=main          branch/tag (default main). Slashes are fine, as in
+                                 feature/foo, and so is refs/heads/feature/foo.
+  GITHUB_TOKEN / GH_TOKEN        PAT for private repos. Falls back to `gh auth token` if unset.
 
-비공개 레포에서 404 가 나면 대부분 토큰 문제입니다 (GitHub 은 인증 실패를 404 로
-위장합니다). 이 스크립트가 실패 시 원인을 진단해 알려줍니다.
+A 404 on a private repo is almost always a token problem (GitHub disguises auth failures
+as 404). On failure this script diagnoses and reports the cause.
 EOF
 }
 
@@ -104,7 +104,7 @@ fetch() {
         wget --https-only -q -O "$2" "$1"
         return $?
     fi
-    echo "❌ curl 또는 wget 이 필요합니다." >&2
+    echo "❌ curl or wget is required." >&2
     exit 1
 }
 
@@ -126,41 +126,41 @@ api_status() {
 # API 를 한 번 찔러 실제 원인을 특정해준다.
 explain_download_failure() {
     echo "" >&2
-    echo "❌ 다운로드 실패: $TARBALL" >&2
+    echo "❌ Download failed: $TARBALL" >&2
     echo "" >&2
 
     if [ -z "$TOKEN" ]; then
-        echo "  토큰을 찾지 못했습니다. 비공개(private) 레포라면 인증이 필요합니다:" >&2
+        echo "  No token found. A private repo requires authentication:" >&2
         echo "    gh auth login -h github.com" >&2
-        echo "  로그인해 두면 이 스크립트가 gh 에서 토큰을 알아서 읽어옵니다." >&2
+        echo "  Once logged in, this script reads the token from gh automatically." >&2
         return 0
     fi
 
-    echo "  토큰이 있는데도 실패했습니다. 비공개 레포는 인증 실패를 401 이 아니라 404 로" >&2
-    echo "  돌려주므로, '파일이 없다'처럼 보여도 원인은 대개 토큰입니다." >&2
+    echo "  Failed even with a token. Private repos report auth failures as 404, not 401," >&2
+    echo "  so even when it looks like 'file not found', the cause is usually the token." >&2
     echo "" >&2
     case "$(api_status "https://api.github.com/repos/$REPO")" in
         401)
-            echo "  진단: 토큰이 만료/폐기되었습니다 (GitHub API 가 401 Bad credentials)." >&2
+            echo "  Diagnosis: the token is expired/revoked (GitHub API returned 401 Bad credentials)." >&2
             echo "    unset GITHUB_TOKEN GH_TOKEN" >&2
             echo "    gh auth login -h github.com" >&2
-            echo "  ※ GITHUB_TOKEN 이 설정돼 있으면 gh auth login 이 거부됩니다. 먼저 unset 하세요." >&2
+            echo "  ※ gh auth login refuses to run while GITHUB_TOKEN is set. Unset it first." >&2
             ;;
         403)
-            echo "  진단: 토큰은 유효하지만 이 레포에 접근할 권한이 없습니다 (403)." >&2
-            echo "    classic PAT 는 repo 스코프, fine-grained PAT 는 Contents:Read 가 필요합니다." >&2
+            echo "  Diagnosis: the token is valid but has no permission for this repo (403)." >&2
+            echo "    A classic PAT needs the repo scope; a fine-grained PAT needs Contents:Read." >&2
             ;;
         404)
-            echo "  진단: 토큰은 인증되지만 '$REPO' 를 볼 수 없습니다 (404)." >&2
-            echo "    CLAUDE_SETUP_REPO 값이 맞는지, 토큰에 이 레포 권한이 있는지 확인하세요." >&2
+            echo "  Diagnosis: the token authenticates but cannot see '$REPO' (404)." >&2
+            echo "    Check that CLAUDE_SETUP_REPO is correct and that the token has access to this repo." >&2
             ;;
         200)
-            echo "  진단: 레포 접근은 되는데 ref '$REF' 를 찾지 못했습니다." >&2
-            echo "    브랜치/태그 이름을 확인하세요. 완전한 형태로도 지정할 수 있습니다:" >&2
+            echo "  Diagnosis: the repo is reachable but ref '$REF' was not found." >&2
+            echo "    Check the branch/tag name. You can also give the fully qualified form:" >&2
             echo "      CLAUDE_SETUP_REF=refs/heads/feature/my-branch" >&2
             ;;
         *)
-            echo "  진단: GitHub API 에 닿지 못했습니다. 네트워크/프록시를 확인하세요." >&2
+            echo "  Diagnosis: could not reach the GitHub API. Check your network/proxy." >&2
             ;;
     esac
 }
@@ -176,7 +176,7 @@ main() {
     REF="${CLAUDE_SETUP_REF:-main}"
 
     if ! need_cmd bash; then
-        echo "❌ bash 가 필요합니다 (setup.sh 는 bash 문법을 씁니다). bash 설치 후 다시 실행하세요." >&2
+        echo "❌ bash is required (setup.sh uses bash syntax). Install bash and run again." >&2
         exit 1
     fi
 
@@ -202,7 +202,7 @@ main() {
     TARBALL="https://github.com/$REPO/archive/$REF.tar.gz"
     TARFILE="$TMP/repo.tar.gz"
 
-    echo "⬇️  claude-code-setup 다운로드 중 ($REPO@$REF)..."
+    echo "⬇️  claude-code-setup downloading ($REPO@$REF)..."
     # 파이프(curl | tar) 대신 파일로 받는다. 파이프였다면 pipeline 의 종료 상태가 tar 의
     # 것이라 curl 의 404 가 "Unexpected EOF" 로 둔갑해 원인을 알 수 없었다.
     if ! fetch "$TARBALL" "$TARFILE"; then
@@ -210,14 +210,14 @@ main() {
         exit 1
     fi
     if ! tar -xzf "$TARFILE" -C "$TMP"; then
-        echo "❌ 내려받은 아카이브를 풀지 못했습니다: $TARBALL" >&2
+        echo "❌ Could not extract the downloaded archive: $TARBALL" >&2
         exit 1
     fi
     rm -f "$TARFILE"
 
     DIR="$(find "$TMP" -mindepth 1 -maxdepth 1 -type d | head -n1)"
     if [ -z "$DIR" ] || [ ! -f "$DIR/scripts/setup.sh" ]; then
-        echo "❌ 다운로드한 아카이브에서 scripts/setup.sh 를 찾지 못했습니다." >&2
+        echo "❌ scripts/setup.sh was not found in the downloaded archive." >&2
         exit 1
     fi
 

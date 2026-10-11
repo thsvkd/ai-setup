@@ -30,7 +30,7 @@ $apply = Join-Path $RepoRoot "res\output_style\apply.py"
 
 $py = Resolve-PythonCommand
 if (-not $py) {
-    Write-Host "❌ Python을 찾을 수 없습니다." -ForegroundColor Red
+    Write-Host "❌ Python not found." -ForegroundColor Red
     Write-PythonInstallHint
     exit 1
 }
@@ -40,13 +40,13 @@ $pyArgs = @("-X", "utf8", $apply, "--home", $homeDir)
 if ($DryRun) { $pyArgs += "--dry-run" }
 
 if ($Uninstall) {
-    Write-Host "🧹 출력 스타일 되돌리기"
+    Write-Host "🧹 Reverting output style"
     & $py.Exe @($py.Args) @pyArgs --uninstall
     exit $LASTEXITCODE
 }
 
 if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
-    Write-Host "❌ claude CLI 를 찾을 수 없습니다. Claude Code 를 먼저 설치하세요." -ForegroundColor Red
+    Write-Host "❌ claude CLI not found. Install Claude Code first." -ForegroundColor Red
     exit 1
 }
 
@@ -67,9 +67,9 @@ $plugins = & claude plugin list 2>$null | Out-String
 $marketplaces = & claude plugin marketplace list 2>$null | Out-String
 $ErrorActionPreference = $prevEap
 
-Write-Host "🔧 fluent-korean 플러그인"
+Write-Host "🔧 fluent-korean plugin"
 if ($plugins -match [regex]::Escape($Plugin)) {
-    Write-Host "  • 이미 설치됨: $Plugin"
+    Write-Host "  • Already installed: $Plugin"
 } else {
     if ($marketplaces -notmatch [regex]::Escape($MarketplaceRepo)) {
         Invoke-Step @("plugin", "marketplace", "add", $MarketplaceRepo)
@@ -77,6 +77,6 @@ if ($plugins -match [regex]::Escape($Plugin)) {
     Invoke-Step @("plugin", "install", $Plugin)
 }
 
-Write-Host "🔧 출력 스타일"
+Write-Host "🔧 Output style"
 & $py.Exe @($py.Args) @pyArgs
 exit $LASTEXITCODE

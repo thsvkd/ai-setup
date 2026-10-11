@@ -214,7 +214,7 @@ def prune_legacy_rules(perms: dict, frag_perms: dict, changes: list) -> dict:
             continue
         perms[key] = [x for x in current if x not in targets]
         removed_map[key] = targets
-        changes.append(f"permissions.{key}: -{targets} (구버전 규칙 — 훅의 git 정책을 무력화하므로 제거)")
+        changes.append(f"permissions.{key}: -{targets} (legacy rule - removed because it defeats the hook's git policy)")
         if not perms[key]:
             del perms[key]
     return removed_map
@@ -233,7 +233,7 @@ def restore_legacy_rules(perms: dict, receipt: dict) -> list:
         if not restored:
             continue
         perms[key] = current + restored
-        changes.append(f"permissions.{key}: +{restored} (설치가 제거했던 구버전 규칙 복원)")
+        changes.append(f"permissions.{key}: +{restored} (restoring a legacy rule that install had removed)")
     return changes
 
 
@@ -245,7 +245,7 @@ def merge_scalars(existing: dict, fragment: dict, changes: list) -> dict:
             continue  # 조각에 없거나, 사용자가 이미 값을 갖고 있으면 건드리지 않는다.
         existing[key] = fragment[key]
         added[key] = fragment[key]
-        changes.append(f"{key}: (없음) -> {fragment[key]!r}")
+        changes.append(f"{key}: (none) -> {fragment[key]!r}")
     return added
 
 
@@ -266,7 +266,7 @@ def merge_env(existing: dict, fragment: dict, changes: list) -> dict:
             continue  # 사용자가 이미 값을 갖고 있으면 보존한다.
         existing_env[key] = value
         added[key] = value
-        changes.append(f"env.{key}: (없음) -> {value!r}")
+        changes.append(f"env.{key}: (none) -> {value!r}")
     if added:
         existing["env"] = existing_env
     return added
@@ -286,7 +286,7 @@ def merge_auto_allow(existing: dict, fragment: dict, changes: list) -> list:
     if not isinstance(auto, dict) or not isinstance(auto.get("allow", []), list):
         # 형식이 어긋난 사용자 값을 덮어쓰면 uninstall 이 원래 값을 되살릴 수 없다 — 건드리지 않는다.
         # changes 에 넣으면 설치기가 '변경 있음'으로 보고 실행할 때마다 백업을 만든다.
-        print("  ⚠️ autoMode.allow: 형식이 예상과 달라(객체/목록 아님) 병합을 건너뜀")
+        print("  ⚠️ autoMode.allow: unexpected format (not an object/list); skipping merge")
         return []
     has_list = isinstance(auto.get("allow"), list)
     current = list(auto["allow"]) if has_list else []
@@ -339,7 +339,7 @@ def prune_retired_hooks(existing: dict, fragment: dict, changes: list) -> list:
     before = len(changes)
     removed = remove_hooks(existing, retired)
     for line in removed:
-        changes.append(line + " (더 이상 배포하지 않는 훅 — 제거)")
+        changes.append(line + " (hook no longer shipped - removed)")
     return retired if len(changes) > before else []
 
 
@@ -382,7 +382,7 @@ def merge(existing: dict, fragment: dict):
                 perms["defaultMode"] = new_mode
                 receipt["default_mode_changed"] = True
         if "mode" in perms:
-            changes.append(f"permissions.mode (잘못된 legacy 키) 제거: {perms['mode']!r}")
+            changes.append(f"Remove permissions.mode (invalid legacy key): {perms['mode']!r}")
             del perms["mode"]
 
     frag_hooks = fragment.get("hooks", {})
@@ -436,7 +436,7 @@ def revert_permissions(existing: dict, receipt: dict) -> list:
             if before is None:
                 if "defaultMode" in perms:
                     del perms["defaultMode"]
-                    changes.append("permissions.defaultMode 제거 (설치 전 값 없음)")
+                    changes.append("Remove permissions.defaultMode (no value before install)")
             else:
                 perms["defaultMode"] = before
                 changes.append(f"permissions.defaultMode: {after!r} -> {before!r}")
@@ -455,7 +455,7 @@ def revert_scalars(existing: dict, receipt: dict) -> list:
         # 설치 이후 사용자가 값을 또 바꿨다면 건드리지 않는다 (여전히 우리 값일 때만 제거).
         if key in existing and existing[key] == value:
             del existing[key]
-            changes.append(f"{key} 제거 ({value!r})")
+            changes.append(f"Remove {key} ({value!r})")
     return changes
 
 
@@ -471,7 +471,7 @@ def revert_env(existing: dict, receipt: dict) -> list:
         # 설치 이후 사용자가 값을 또 바꿨다면 건드리지 않는다 (여전히 우리 값일 때만 제거).
         if key in env and env[key] == value:
             del env[key]
-            changes.append(f"env.{key} 제거 ({value!r})")
+            changes.append(f"Remove env.{key} ({value!r})")
     if not env:
         del existing["env"]
     return changes
@@ -524,7 +524,7 @@ def main_uninstall(argv) -> int:
     dry_run = dry_run_s == "1"
 
     if not os.path.exists(settings_path):
-        print("(settings.json 이 없어 되돌릴 것이 없습니다.)")
+        print("(settings.json does not exist, so there is nothing to revert.)")
         return 0
 
     # 설치 영수증(매니페스트). 없으면(구버전 설치) 훅 등록 해제만 하고 권한은 건드리지 못한다.
@@ -542,27 +542,27 @@ def main_uninstall(argv) -> int:
     changes += revert_env(after, receipt)
     changes += revert_auto_allow(after, receipt)
 
-    print("── 되돌리기 계획 ──────────────────────")
+    print("── Revert plan ────────────────────────")
     if changes:
         for c in changes:
             print(f"  • {c}")
     else:
-        print("  (되돌릴 것 없음 — 이미 정리됨)")
+        print("  (nothing to revert - already clean)")
     print("──────────────────────────────────────")
 
     if dry_run:
-        print(f"🧪 DRY RUN — {settings_path} 에 실제로 쓰지 않았습니다.")
+        print(f"🧪 DRY RUN — {settings_path} was not actually written.")
     elif changes:
         backup = backup_file(settings_path)
         if backup:
-            print(f"  💾 백업: {backup}")
+            print(f"  💾 Backup: {backup}")
         # 설치가 settings.json 을 처음 만든 경우, 되돌린 뒤 빈 {} 만 남으면 그 파일도 제거한다.
         if not after and not receipt.get("settings_existed_before", True):
             os.remove(settings_path)
-            print(f"✅ 설치 전 없던 settings.json 을 제거했습니다: {settings_path}")
+            print(f"✅ Removed settings.json, which did not exist before install: {settings_path}")
         else:
             write_json(settings_path, after)
-            print(f"✅ 설치가 건드린 부분을 되돌렸습니다: {settings_path}")
+            print(f"✅ Reverted the parts install touched: {settings_path}")
     return 0
 
 
@@ -589,7 +589,7 @@ def main() -> int:
     argv = positional
 
     if default_mode and default_mode not in VALID_DEFAULT_MODES:
-        print(f"알 수 없는 defaultMode: {default_mode!r} (가능: {', '.join(VALID_DEFAULT_MODES)})",
+        print(f"Unknown defaultMode: {default_mode!r} (valid: {', '.join(VALID_DEFAULT_MODES)})",
               file=sys.stderr)
         return 1
 
@@ -631,27 +631,27 @@ def main() -> int:
     changes, receipt = merge(after, fragment)
     preserved, violated = top_level_diff(before, after)
 
-    print("── 변경 계획 ──────────────────────────")
+    print("── Planned changes ────────────────────")
     if changes:
         for c in changes:
             print(f"  • {c}")
     else:
-        print("  (변경 사항 없음 — 이미 최신 상태)")
+        print("  (no changes - already up to date)")
     if before:
-        print(f"── 보존된 기존 최상위 키: {preserved or '(없음)'}")
+        print(f"── Preserved existing top-level keys: {preserved or '(none)'}")
         if violated:
-            print(f"  ⚠️ 예상과 다르게 변경된 키 발견: {violated}")
+            print(f"  ⚠️ Found keys changed unexpectedly: {violated}")
     print("──────────────────────────────────────")
 
     if dry_run:
-        print(f"🧪 DRY RUN — {settings_path} 에 실제로 쓰지 않았습니다.")
+        print(f"🧪 DRY RUN — {settings_path} was not actually written.")
     else:
         if changes and settings_existed:
             backup = backup_file(settings_path)
             if backup:
-                print(f"  💾 백업: {backup}")
+                print(f"  💾 Backup: {backup}")
         write_json(settings_path, after)
-        print(f"✅ 병합 완료: {settings_path}")
+        print(f"✅ Merge complete: {settings_path}")
 
         # 설치 영수증(매니페스트) 기록 — uninstall 이 '건드린 것만' 정밀 복원하는 근거.
         # 재실행(멱등)해도 첫 설치의 기억을 잃지 않도록 이전 영수증 위에 누적한다.

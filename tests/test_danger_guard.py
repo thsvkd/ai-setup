@@ -174,7 +174,7 @@ def test_ps_not_blocked(cmd):
 
 
 def test_prose_mentioning_disk_command_is_not_blocked():
-    assert decision_of(bash('echo "mkfs 를 쓰지 마세요"')) is None
+    assert decision_of(bash('echo "mkfs should not be used"')) is None
 
 
 def test_grep_for_dangerous_string_is_not_blocked():

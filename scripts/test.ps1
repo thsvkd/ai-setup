@@ -38,17 +38,17 @@ $PSNativeCommandUseErrorActionPreference = $false
 
 if ($Help) {
     Write-Host @"
-claude-code-setup — 테스트 스위트 실행
+claude-code-setup — run the test suites
 
-사용법: .\test.ps1 [옵션]
-  (옵션 없음)    설치된 러너로 pytest + Pester + bats 전부 실행
-  -PythonOnly    pytest 만 실행
-  -Strict        러너 미설치로 건너뛴 스위트도 실패로 취급 (종료 코드 1)
-  -PytestArgs    pytest 에 그대로 전달할 인자 배열 (예: -PytestArgs '-k','git_guard')
-  -Help          이 도움말
+Usage: .\test.ps1 [options]
+  (no options)   run all of pytest + Pester + bats with the installed runners
+  -PythonOnly    run pytest only
+  -Strict        treat suites skipped for a missing runner as failures (exit code 1)
+  -PytestArgs    argument array passed to pytest as is (e.g. -PytestArgs '-k','git_guard')
+  -Help          this help
 
-환경 변수:
-  CLAUDE_TEST_PYTHON   pytest 를 돌릴 인터프리터 경로 (지정하면 자동 탐색을 건너뛴다)
+Environment variables:
+  CLAUDE_TEST_PYTHON   interpreter path for pytest (skips auto-detection when set)
 "@
     exit 0
 }
@@ -69,7 +69,7 @@ function Resolve-PytestPython {
     # SetupCommon.ps1 의 Resolve-PythonCommand 는 '아무 python' 이면 되지만(병합 스크립트용),
     # 테스트 러너는 'pytest 가 설치된 python' 이 필요하다 — 요구사항이 다르다. 한 머신에
     # python 이 여러 개 깔려 있고 그중 일부에만 pytest 가 있는 경우가 흔해서, 첫 번째로 찾은
-    # python 을 그냥 쓰면 "pytest 미설치" 로 오판한다.
+    # python 을 그냥 쓰면 "pytest not installed" 로 오판한다.
     $PSNativeCommandUseErrorActionPreference = $false
     $candidates = @(
         @{ Exe = "python";  Args = @() },
@@ -105,8 +105,8 @@ function Invoke-PytestSuite {
             $ok = ($LASTEXITCODE -eq 0)
         } catch { $ok = $false }
         if (-not $ok) {
-            Write-Host "CLAUDE_TEST_PYTHON=$override 로 pytest 를 import 하지 못했습니다."
-            Add-Result "pytest" "fail" "지정한 인터프리터에 pytest 없음"
+            Write-Host "CLAUDE_TEST_PYTHON=$override could not import pytest."
+            Add-Result "pytest" "fail" "pytest missing from the given interpreter"
             return
         }
         $py = @{ Exe = $override; Args = @() }
@@ -116,17 +116,17 @@ function Invoke-PytestSuite {
 
     if ($null -eq $py) {
         if (Test-AnyPython) {
-            Write-Host "python 은 있으나 pytest 가 설치돼 있지 않습니다. (python -m pip install pytest)"
-            Write-Host "  (pytest 가 다른 인터프리터에 있다면 CLAUDE_TEST_PYTHON 으로 지정할 수 있습니다.)"
-            Add-Result "pytest" "skip" "pytest 미설치"
+            Write-Host "python found but pytest is not installed. (python -m pip install pytest)"
+            Write-Host "  (if pytest is in another interpreter, point CLAUDE_TEST_PYTHON at it.)"
+            Add-Result "pytest" "skip" "pytest not installed"
         } else {
-            Write-Host "python 을 찾지 못했습니다."
-            Add-Result "pytest" "skip" "python 없음"
+            Write-Host "python not found."
+            Add-Result "pytest" "skip" "no python"
         }
         return
     }
 
-    Write-Host "인터프리터: $($py.Exe) $($py.Args -join ' ')"
+    Write-Host "Interpreter: $($py.Exe) $($py.Args -join ' ')"
     # -rs: 스킵된 테스트의 '사유'까지 출력한다. 이 저장소의 스킵은 환경 조건부라
     # (macOS 전용 경로, 3.9.x 인터프리터 유무) 무엇이 검증되지 '않았는지' 보이는 게 중요하다.
     & $py.Exe @($py.Args) -m pytest (Join-Path $repoRoot "tests") -rs @PytestArgs
@@ -140,13 +140,13 @@ if ($PythonOnly) {
     # -PythonOnly 는 '요청하지 않은' 것이므로 아예 기록하지 않는다 — 러너가 없어서 못 돌린
     # skip 과 섞이면 -Strict 가 사용자가 직접 고른 선택까지 실패로 만든다.
     Write-Host ""
-    Write-Host "(-PythonOnly: Pester/bats 는 요청되지 않아 실행하지 않습니다)"
+    Write-Host "(-PythonOnly: Pester/bats not requested, not run)"
 } else {
     # --- Pester: PowerShell 셋업 스크립트. Windows 훅의 PS 경로를 실제로 실행하는 유일한 스위트 ---
     Write-Section "Pester"
     if (-not (Get-Module -ListAvailable -Name Pester)) {
-        Write-Host "Pester 모듈이 없어 건너뜁니다. (Install-Module Pester -Scope CurrentUser)"
-        Add-Result "Pester (Setup.Tests.ps1)" "skip" "Pester 미설치"
+        Write-Host "Pester module not found, skipping. (Install-Module Pester -Scope CurrentUser)"
+        Add-Result "Pester (Setup.Tests.ps1)" "skip" "Pester not installed"
     } else {
         $result = Invoke-Pester (Join-Path $repoRoot "tests\Setup.Tests.ps1") -Output Detailed -PassThru
         if ($result.FailedCount -eq 0) {
@@ -160,13 +160,13 @@ if ($PythonOnly) {
     Write-Section "bats"
     $bash = Get-Command bash -ErrorAction SilentlyContinue
     if (-not $bash) {
-        Write-Host "bash 가 없어 건너뜁니다. (Git for Windows 미설치)"
-        Add-Result "bats (setup.bats)" "skip" "bash 없음"
+        Write-Host "bash not found, skipping. (Git for Windows not installed)"
+        Add-Result "bats (setup.bats)" "skip" "no bash"
     } else {
         & bash -lc "command -v bats" *> $null
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "bats 가 없어 건너뜁니다. (npm i -g bats)"
-            Add-Result "bats (setup.bats)" "skip" "bats 미설치"
+            Write-Host "bats not found, skipping. (npm i -g bats)"
+            Add-Result "bats (setup.bats)" "skip" "bats not installed"
         } else {
             # Windows 경로를 그대로 넘기면 Git Bash 가 해석하지 못하므로 POSIX 경로로 바꾼다.
             $batsPath = (Join-Path $repoRoot "tests/setup.bats") -replace '\\', '/'
@@ -178,36 +178,36 @@ if ($PythonOnly) {
 
 # --- 종합 리포트 ---
 Write-Host ""
-Write-Host "══ 결과 ═══════════════════════════════════════"
+Write-Host "══ Results ═══════════════════════════════════════"
 $failed = 0
 $skipped = 0
 $ran = 0
 foreach ($s in $suites) {
     switch ($s.State) {
-        "pass" { Write-Host ("  [PASS] {0,-26} 통과" -f $s.Name); $ran++ }
-        "fail" { Write-Host ("  [FAIL] {0,-26} 실패" -f $s.Name); $failed++; $ran++ }
-        "skip" { Write-Host ("  [SKIP] {0,-26} 건너뜀 ({1})" -f $s.Name, $s.Note); $skipped++ }
+        "pass" { Write-Host ("  [PASS] {0,-26} passed" -f $s.Name); $ran++ }
+        "fail" { Write-Host ("  [FAIL] {0,-26} failed" -f $s.Name); $failed++; $ran++ }
+        "skip" { Write-Host ("  [SKIP] {0,-26} skipped ({1})" -f $s.Name, $s.Note); $skipped++ }
     }
 }
 
 if ($skipped -gt 0) {
     Write-Host ""
-    Write-Host "  건너뛴 스위트는 '통과'가 아니라 '검증 안 됨' 이다."
+    Write-Host "  A skipped suite is 'not verified', not 'passed'."
 }
 
 Write-Host ""
 if ($failed -gt 0) {
-    Write-Host "실패한 스위트: ${failed}개"
+    Write-Host "Failed suites: ${failed}"
     exit 1
 }
 # 하나도 못 돌린 것은 통과가 아니다 — 테스트를 요청했는데 아무것도 검증되지 않은 상태다.
 if ($ran -eq 0) {
-    Write-Host "실행된 스위트가 없습니다. 최소한 pytest 는 돌 수 있어야 합니다."
+    Write-Host "No suites ran. At least pytest must be able to run."
     exit 1
 }
 if ($Strict -and $skipped -gt 0) {
-    Write-Host "-Strict: 건너뛴 스위트 ${skipped}개를 실패로 취급합니다."
+    Write-Host "-Strict: treating ${skipped} skipped suite(s) as failures."
     exit 1
 }
-Write-Host "실행된 스위트 ${ran}개 모두 통과."
+Write-Host "All ${ran} suite(s) that ran passed."
 exit 0

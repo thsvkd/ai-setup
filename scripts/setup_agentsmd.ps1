@@ -61,7 +61,7 @@ function Resolve-Harnesses {
                 "grok"        { @("grok") }
                 "opencode"    { @("opencode") }
                 default {
-                    Write-Error "알 수 없는 하네스: $name (claude|codex|grok|opencode|all)"
+                    Write-Error "Unknown harness: $name (claude|codex|grok|opencode|all)"
                     exit 1
                 }
             }
@@ -72,7 +72,7 @@ function Resolve-Harnesses {
     }
 
     if ($selected.Count -eq 0) {
-        Write-Error "하네스를 최소 하나는 골라야 합니다 (claude|codex|grok|opencode|all)"
+        Write-Error "Pick at least one harness (claude|codex|grok|opencode|all)"
         exit 1
     }
     return $selected
@@ -84,22 +84,22 @@ function Install-InstructionFile {
     param([string]$Source, [string]$Target)
 
     if (-not (Test-Path $Source)) {
-        Write-Error "❌ 소스 파일을 찾을 수 없습니다: $Source"
+        Write-Error "❌ Source file not found: $Source"
         exit 1
     }
 
     $exists = Test-Path $Target
 
     if ($exists -and -not $Force) {
-        Write-Host "  ℹ️ 이미 $Target 가 존재합니다 — 덮어쓰지 않고 건너뜁니다." -ForegroundColor DarkGray
+        Write-Host "  ℹ️ $Target already exists — skipped without overwriting." -ForegroundColor DarkGray
         return
     }
 
     if ($DryRun) {
         if ($exists) {
-            Write-Host "  🧪 DRY RUN — 기존 $Target 를 백업 후 덮어쓸 예정입니다 (실제로 쓰지 않음)." -ForegroundColor Magenta
+            Write-Host "  🧪 DRY RUN — would back up the existing $Target and overwrite it (nothing is written)." -ForegroundColor Magenta
         } else {
-            Write-Host "  🧪 DRY RUN — $Target 에 설치될 예정입니다 (실제로 쓰지 않음)." -ForegroundColor Magenta
+            Write-Host "  🧪 DRY RUN — $Target would be installed (nothing is written)." -ForegroundColor Magenta
         }
         return
     }
@@ -108,15 +108,15 @@ function Install-InstructionFile {
     if ($exists) {
         $backup = "$Target.bak.$(Get-Date -Format 'yyyyMMddHHmmss')"
         Copy-Item -Path $Target -Destination $backup
-        Write-Host "  💾 기존 파일 백업: $backup" -ForegroundColor DarkGray
+        Write-Host "  💾 Backed up existing file: $backup" -ForegroundColor DarkGray
     }
     Copy-Item -Path $Source -Destination $Target -Force
-    Write-Host "  ✅ 설치 완료: $Target" -ForegroundColor Green
+    Write-Host "  ✅ Installed: $Target" -ForegroundColor Green
 }
 
 $selected = Resolve-Harnesses -Requested $Harness
 
-Write-Host "🔧 프로젝트 지침 설치... (하네스: $($selected -join ','))" -ForegroundColor Cyan
+Write-Host "🔧 Installing project instructions... (harnesses: $($selected -join ','))" -ForegroundColor Cyan
 
 # AGENTS.md is the shared source for every harness, including Claude Code, which
 # reaches it through the CLAUDE.md import.
@@ -134,8 +134,8 @@ if ($selected.Contains("claude")) {
     # for an install that did nothing for the harness the user selected.
     if ($hadClaudeMd -and -not $Force -and
         -not (Select-String -Path $claudeTarget -Pattern "@AGENTS\.md" -Quiet)) {
-        Write-Host "  ⚠️ 기존 $claudeTarget 에 '@AGENTS.md' 가 없습니다 — Claude Code 는 방금 설치한 AGENTS.md 를 읽지 않습니다." -ForegroundColor Yellow
-        Write-Host "     기존 내용을 지우지 않으려면 그 파일 맨 위에 '@AGENTS.md' 한 줄을 직접 추가하세요." -ForegroundColor Yellow
+        Write-Host "  ⚠️ The existing $claudeTarget has no '@AGENTS.md' — Claude Code will not read the AGENTS.md just installed." -ForegroundColor Yellow
+        Write-Host "     To keep its existing content, add a single '@AGENTS.md' line at the top of that file yourself." -ForegroundColor Yellow
     }
 }
 

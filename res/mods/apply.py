@@ -41,7 +41,7 @@ def load_json_object(path: Path) -> dict:
         return {}
     data = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(data, dict):
-        raise ValueError("최상위가 객체가 아닙니다")
+        raise ValueError("top level is not an object")
     return data
 
 
@@ -95,16 +95,16 @@ def install(claude_dir: Path, dry_run: bool) -> int:
         settings = load_json_object(settings_path)
         manifest = load_json_object(manifest_path)
     except ValueError as e:
-        print(f"❌ 설정 파일을 파싱할 수 없어 멈춥니다: {e}", file=sys.stderr)
+        print(f"❌ Cannot parse the settings file; aborting: {e}", file=sys.stderr)
         return 1
     env = settings.get("env", {})
     if not isinstance(env, dict) or not isinstance(env.get(ENV_KEY, ""), str):
-        print(f"❌ settings.json 의 env.{ENV_KEY} 형식을 알 수 없어 멈춥니다.", file=sys.stderr)
+        print(f"❌ Unrecognized format for env.{ENV_KEY} in settings.json; aborting.", file=sys.stderr)
         return 1
 
     receipt = manifest.get("mods", {})
     if not valid_receipt(receipt):
-        print("❌ 매니페스트의 mods 영수증 형식을 알 수 없어 멈춥니다.", file=sys.stderr)
+        print("❌ Unrecognized format for the mods receipt in the manifest; aborting.", file=sys.stderr)
         return 1
     owned = dict(receipt.get("files", {}))
     claimed = False
@@ -114,7 +114,7 @@ def install(claude_dir: Path, dry_run: bool) -> int:
         for rel in source_files(name):
             src, dst, key = HERE / name / rel, target / rel, f"{name}/{rel}"
             if dst.exists() and not dst.is_file():
-                print(f"❌ {dst} 자리에 파일이 아닌 것이 있어 멈춥니다.", file=sys.stderr)
+                print(f"❌ {dst} exists but is not a file; aborting.", file=sys.stderr)
                 return 1
             if dst.is_file():
                 if sha256(dst) == sha256(src):
@@ -125,22 +125,22 @@ def install(claude_dir: Path, dry_run: bool) -> int:
                     continue
                 # 우리가 복사한 그대로가 아니면 사용자(또는 다른 도구)가 고친 파일이다.
                 if owned.get(key) != sha256(dst):
-                    print(f"❌ {dst} 가 이미 있고 내용이 달라 덮어쓰지 않습니다. 직접 정리한 뒤 다시 실행하세요.",
+                    print(f"❌ {dst} already exists with different content, so it will not be overwritten. Clean it up yourself and run again.",
                           file=sys.stderr)
                     return 1
             copies.append((src, dst, key))
-            changes.append(f"mod 파일 복사: {dst}")
+            changes.append(f"Copy mod file: {dst}")
 
     dirs = split_dirs(env.get(ENV_KEY, ""))
     added = [dir_ref(claude_dir, name) for name in MODS]
     added = [d for d in added if not any(same_dir(d, x) for x in dirs)]
     for d in added:
-        changes.append(f"env.{ENV_KEY} 에 추가: {d}")
+        changes.append(f"Add to env.{ENV_KEY}: {d}")
 
-    for c in changes or ["(바꿀 것 없음 — 이미 설치됨)"]:
+    for c in changes or ["(no changes - already installed)"]:
         print(f"  • {c}")
     if dry_run:
-        print(f"🧪 DRY RUN — {settings_path} 에 실제로 쓰지 않았습니다.")
+        print(f"🧪 DRY RUN — {settings_path} was not actually written.")
         return 0
 
     for src, dst, key in copies:
@@ -161,7 +161,7 @@ def install(claude_dir: Path, dry_run: bool) -> int:
         receipt["files"] = owned
         manifest["mods"] = receipt
         write_json(str(manifest_path), manifest)
-        print("✅ mod 설치 완료 (새 세션부터 로드, Claude Code v2.1.290 이상)")
+        print("✅ Mod installation complete (loaded from the next new session; requires Claude Code v2.1.290 or later)")
     return 0
 
 
@@ -172,14 +172,14 @@ def uninstall(claude_dir: Path, dry_run: bool) -> int:
         settings = load_json_object(settings_path)
         manifest = load_json_object(manifest_path)
     except ValueError as e:
-        print(f"❌ 설정 파일을 파싱할 수 없어 멈춥니다: {e}", file=sys.stderr)
+        print(f"❌ Cannot parse the settings file; aborting: {e}", file=sys.stderr)
         return 1
     if "mods" not in manifest:
-        print("  • (되돌릴 것 없음 — 이미 정리됨)")
+        print("  • (nothing to revert - already clean)")
         return 0
     receipt = manifest["mods"]
     if not valid_receipt(receipt):
-        print("❌ 매니페스트의 mods 영수증 형식을 알 수 없어 멈춥니다.", file=sys.stderr)
+        print("❌ Unrecognized format for the mods receipt in the manifest; aborting.", file=sys.stderr)
         return 1
 
     changes = []
@@ -191,7 +191,7 @@ def uninstall(claude_dir: Path, dry_run: bool) -> int:
         kept = [d for d in dirs if not any(same_dir(d, o) for o in ours)]
         if kept != dirs:
             settings_changed = True
-            changes.append(f"env.{ENV_KEY} 에서 제거: {', '.join(d for d in dirs if d not in kept)}")
+            changes.append(f"Remove from env.{ENV_KEY}: {', '.join(d for d in dirs if d not in kept)}")
             if kept:
                 env[ENV_KEY] = os.pathsep.join(kept)
             else:
@@ -205,20 +205,20 @@ def uninstall(claude_dir: Path, dry_run: bool) -> int:
         if path.is_file() and sha256(path) == digest:
             files.append(path)
         elif path.is_file():
-            changes.append(f"{path} 는 복사 뒤 바뀌어 남깁니다 (env 에서 빠지므로 더는 로드되지 않습니다)")
-    changes += [f"{p} 삭제" for p in files]
+            changes.append(f"Keep {path}: it changed after copying (it is dropped from env, so it will no longer be loaded)")
+    changes += [f"Delete {p}" for p in files]
     generated = [claude_dir / "mods" / name / GENERATED for name in MODS]
     generated = [g for g in generated if g.is_dir()]
-    changes += [f"{g} 삭제 (엔진이 로드 때 만든 타입)" for g in generated]
+    changes += [f"Delete {g} (types the engine generated at load)" for g in generated]
     # 루트 tsconfig.json 은 엔진이 쓰는 모양 그대로일 때만 엔진 것으로 보고 지운다.
     stubs = [claude_dir / "mods" / name / "tsconfig.json" for name in MODS]
     stubs = [t for t in stubs if t.is_file() and is_engine_tsconfig(t)]
-    changes += [f"{t} 삭제 (엔진이 로드 때 만든 tsconfig)" for t in stubs]
+    changes += [f"Delete {t} (tsconfig the engine generated at load)" for t in stubs]
 
-    for c in changes or ["(되돌릴 것 없음 — 이미 정리됨)"]:
+    for c in changes or ["(nothing to revert - already clean)"]:
         print(f"  • {c}")
     if dry_run:
-        print(f"🧪 DRY RUN — {settings_path} 에 실제로 쓰지 않았습니다.")
+        print(f"🧪 DRY RUN — {settings_path} was not actually written.")
         return 0
 
     if settings_changed:

@@ -38,10 +38,10 @@ irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubuserco
 **3. 고르기** — 실행하면 무엇을 설치할지 묻는다. 방향키로 고르고 Enter.
 
 ```
-? 무엇을 설치할까요? (↑↓ 이동, Enter 선택)
- » 전체 — 가드 훅/권한(전역) + AGENTS.md(현재 폴더) + 번들 스킬
-   가드 훅 + 권한만 (~/.claude, 모든 프로젝트에 적용)
-   AGENTS.md 만 (현재 폴더)
+? What would you like to install? (↑↓ move · Enter select)
+ » Everything — guard hooks/permissions (global) + AGENTS.md (current folder) + bundled skills
+   Guard hooks + permissions only (~/.claude, applies to all projects)
+   AGENTS.md only (current folder)
 ```
 
 이어서 권한 모드(`auto` / `bypassPermissions`), 지침을 깔 하네스(Claude Code·Codex·Grok·OpenCode), 줄바꿈 키, 기존 `AGENTS.md` 덮어쓰기 여부, 바로 적용할지 미리보기만 할지를 묻는다. 끝나면 Claude Code를 다시 시작한다.

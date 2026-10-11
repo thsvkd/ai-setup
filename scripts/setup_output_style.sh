@@ -25,12 +25,12 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY_RUN=1; shift ;;
         --uninstall) UNINSTALL=1; shift ;;
-        *) echo "알 수 없는 옵션: $1" >&2; exit 1 ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
 
 if ! PY="$(resolve_python_command)"; then
-    echo "❌ Python 3을 찾을 수 없습니다." >&2
+    echo "❌ Python 3 not found." >&2
     print_python_install_hint
     exit 1
 fi
@@ -39,7 +39,7 @@ FLAGS=()
 [[ "$DRY_RUN" -eq 1 ]] && FLAGS+=(--dry-run)
 
 if [[ "$UNINSTALL" -eq 1 ]]; then
-    echo "🧹 출력 스타일 되돌리기"
+    echo "🧹 Reverting output style"
     exec "$PY" -X utf8 "$REPO_ROOT/res/output_style/apply.py" --home "$HOME" --uninstall ${FLAGS[@]+"${FLAGS[@]}"}
 fi
 
@@ -52,16 +52,16 @@ run() {
 }
 
 if ! command -v claude &>/dev/null; then
-    echo "❌ claude CLI 를 찾을 수 없습니다. Claude Code 를 먼저 설치하세요." >&2
+    echo "❌ claude CLI not found. Install Claude Code first." >&2
     exit 1
 fi
 
-echo "🔧 fluent-korean 플러그인"
+echo "🔧 fluent-korean plugin"
 # 출력을 먼저 받아 두고 검사한다. pipefail 아래에서 grep -q 가 일찍 끝나면 claude 가 EPIPE 로
 # 실패해 '미설치' 로 오판할 수 있다.
 plugins="$(claude plugin list 2>/dev/null || true)"
 if [[ "$plugins" == *"$PLUGIN"* ]]; then
-    echo "  • 이미 설치됨: $PLUGIN"
+    echo "  • Already installed: $PLUGIN"
 else
     marketplaces="$(claude plugin marketplace list 2>/dev/null || true)"
     if [[ "$marketplaces" != *"$MARKETPLACE_REPO"* ]]; then
@@ -70,5 +70,5 @@ else
     run claude plugin install "$PLUGIN"
 fi
 
-echo "🔧 출력 스타일"
+echo "🔧 Output style"
 "$PY" -X utf8 "$REPO_ROOT/res/output_style/apply.py" --home "$HOME" ${FLAGS[@]+"${FLAGS[@]}"}

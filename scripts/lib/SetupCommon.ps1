@@ -44,7 +44,7 @@ function Resolve-PythonCommand {
 function Write-PythonInstallHint {
     $onMac = (Test-Path variable:IsMacOS) -and $IsMacOS
     $onLinux = (Test-Path variable:IsLinux) -and $IsLinux
-    Write-Host "   Python 3 설치 방법:" -ForegroundColor Yellow
+    Write-Host "   How to install Python 3:" -ForegroundColor Yellow
     if ($onMac) {
         Write-Host "     brew install python"
     } elseif ($onLinux) {
@@ -52,9 +52,9 @@ function Write-PythonInstallHint {
         Write-Host "     sudo dnf install -y python3       # Fedora/RHEL"
     } else {
         Write-Host "     winget install -e --id Python.Python.3.14"
-        Write-Host "   winget 이 없으면 https://www.python.org/downloads/windows/ 에서 설치하세요."
-        Write-Host "   설치 후 새 터미널에서 다시 실행하세요. 그래도 Microsoft Store 가 열리면"
-        Write-Host "   설정 > 앱 > 고급 앱 설정 > 앱 실행 별칭에서 python.exe / python3.exe 를 끄세요."
+        Write-Host "   Without winget, install it from https://www.python.org/downloads/windows/."
+        Write-Host "   After installing, run again in a new terminal. If the Microsoft Store still opens,"
+        Write-Host "   turn off python.exe / python3.exe under Settings > Apps > Advanced app settings > App execution aliases."
     }
 }
 
@@ -192,7 +192,7 @@ function Invoke-HookSelfTest {
     .DESCRIPTION
         '출력이 비어 있음' 을 성공으로 읽지 않는다. 훅이 죽었거나 stdin 이 전달되지 않으면
         판정이 없는데, 그걸 조용히 넘기면 셀프테스트가 존재할 이유가 없다. 통과(무판단)를
-        기대하는 케이스는 라벨에 '통과' 를 넣어 구분한다. 성공한 케이스는 한 줄 요약으로 접고,
+        기대하는 케이스는 라벨에 'expect pass' 를 넣어 구분한다. 성공한 케이스는 한 줄 요약으로 접고,
         실패한 케이스만 사유와 함께 보여 준다 (setup_common.sh 의 run_hook_self_test 와 같다).
     #>
     param(
@@ -204,19 +204,19 @@ function Invoke-HookSelfTest {
     $failures = 0
     foreach ($c in $Cases) {
         $r = Invoke-HookProbe -HookPath $HookPath -PyExe $PyExe -PyArgs $PyArgs -Json $c.Json
-        $expectsPass = $c.Label -match '통과'
+        $expectsPass = $c.Label -match 'expect pass'
 
         if ($r.ExitCode -ne 0) {
             $failures++
             Write-Host "  ❌ $($c.Label)" -ForegroundColor Red
-            Write-Host "     훅이 비정상 종료했습니다 (exit $($r.ExitCode)): $($r.Stderr)" -ForegroundColor Red
+            Write-Host "     Hook exited abnormally (exit $($r.ExitCode)): $($r.Stderr)" -ForegroundColor Red
             continue
         }
         if (-not $r.Stdout) {
             if (-not $expectsPass) {
                 $failures++
                 Write-Host "  ❌ $($c.Label)" -ForegroundColor Red
-                Write-Host "     판정이 비어 있습니다 — 가드가 이 명령을 그대로 흘려보냅니다." -ForegroundColor Red
+                Write-Host "     Empty decision — the guard lets this command through unchecked." -ForegroundColor Red
             }
             continue
         }
@@ -232,11 +232,11 @@ function Invoke-HookSelfTest {
         if (-not $decision) {
             $failures++
             Write-Host "  ❌ $($c.Label)" -ForegroundColor Red
-            Write-Host "     판정을 파싱할 수 없습니다: $($r.Stdout)" -ForegroundColor Red
+            Write-Host "     Could not parse the decision: $($r.Stdout)" -ForegroundColor Red
         }
     }
     if ($failures -eq 0) {
-        Write-Host "  ✅ 셀프테스트 $($Cases.Count)/$($Cases.Count) 통과" -ForegroundColor Green
+        Write-Host "  ✅ Self-test $($Cases.Count)/$($Cases.Count) passed" -ForegroundColor Green
     }
     return $failures
 }
@@ -253,39 +253,39 @@ function Write-SetupReport {
     if (-not $DefaultMode) { $DefaultMode = "auto" }
     Write-Host ""
     if ($DryRun) {
-        Write-Host "🧪 DRY RUN 완료 — 실제 파일은 하나도 바뀌지 않았습니다." -ForegroundColor Magenta
-        Write-Host "   실제로 적용하려면 -DryRun 옵션 없이 다시 실행하세요."
+        Write-Host "🧪 DRY RUN complete — no real files were changed." -ForegroundColor Magenta
+        Write-Host "   To actually apply, run again without the -DryRun option."
         return
     }
 
-    Write-Host "🎉 초기화 완료!" -ForegroundColor Green
+    Write-Host "🎉 Setup complete!" -ForegroundColor Green
     Write-Host ""
-    Write-Host "  생성/수정된 파일 (유저 레벨):" -ForegroundColor White
+    Write-Host "  Created/modified files (user level):" -ForegroundColor White
     foreach ($f in $InstalledFiles) { Write-Host "    $f" }
     Write-Host "    $SettingsPath"
     Write-Host ""
     if ($DependencyWarning) {
         Write-Host "  ⚠️ $DependencyWarning" -ForegroundColor Yellow
     }
-    Write-Host "  🔁 중요: 방금 바뀐 권한/모드는 '새 Claude Code 세션'부터 적용됩니다. 실행 중인" -ForegroundColor Yellow
-    Write-Host "     세션은 시작 시점의 권한 스냅샷을 그대로 쓰므로(실시간 재로드 안 함), 방금 allow" -ForegroundColor Yellow
-    Write-Host "     목록에 넣은 Artifact 등이 이 세션에서는 계속 확인 프롬프트를 띄울 수 있습니다." -ForegroundColor Yellow
-    Write-Host "     Claude Code 를 종료 후 다시 실행(새 세션)하면 프롬프트가 사라집니다." -ForegroundColor Yellow
-    Write-Host "  ⚠️ 범위 변경 안내: 이 훅과 defaultMode($DefaultMode)는 이제 이 사용자가 여는 모든" -ForegroundColor DarkGray
-    Write-Host "     프로젝트에 적용됩니다 (특정 프로젝트 한정이 아님)." -ForegroundColor DarkGray
+    Write-Host "  🔁 Important: the permissions/mode just changed apply from a 'new Claude Code session'. A running" -ForegroundColor Yellow
+    Write-Host "     session keeps the permission snapshot from its start (no live reload), so items just added to the allow" -ForegroundColor Yellow
+    Write-Host "     list, such as Artifact, may keep showing confirmation prompts in this session." -ForegroundColor Yellow
+    Write-Host "     Quit and restart Claude Code (new session) and the prompts go away." -ForegroundColor Yellow
+    Write-Host "  ⚠️ Scope change notice: these hooks and defaultMode($DefaultMode) now apply to every" -ForegroundColor DarkGray
+    Write-Host "     project this user opens (not limited to one project)." -ForegroundColor DarkGray
     if ($DefaultMode -eq "auto") {
-        Write-Host "  ℹ️ defaultMode를 'auto'로 설정했지만, 실제로 auto 모드가 켜지려면 계정이" -ForegroundColor DarkGray
-        Write-Host "     Claude Code v2.1.83+, Team/Enterprise/API 플랜, Sonnet 4.6 이상 모델 등" -ForegroundColor DarkGray
-        Write-Host "     자격 요건을 충족해야 합니다 (아직 research preview, PowerShell 툴에서는" -ForegroundColor DarkGray
-        Write-Host "     auto 모드가 아직 지원되지 않는다는 보고도 있습니다). Shift+Tab 으로 모드를" -ForegroundColor DarkGray
-        Write-Host "     순환시켜 auto 가 뜨는지 직접 확인해보세요." -ForegroundColor DarkGray
+        Write-Host "  ℹ️ defaultMode is set to 'auto', but for auto mode to actually turn on, the account must meet" -ForegroundColor DarkGray
+        Write-Host "     eligibility requirements such as Claude Code v2.1.83+, a Team/Enterprise/API plan, and Sonnet 4.6" -ForegroundColor DarkGray
+        Write-Host "     or later (still a research preview, and there are reports that the PowerShell tool" -ForegroundColor DarkGray
+        Write-Host "     does not support auto mode yet). Cycle modes with Shift+Tab" -ForegroundColor DarkGray
+        Write-Host "     to check that auto shows up." -ForegroundColor DarkGray
     } elseif ($DefaultMode -eq "bypassPermissions") {
-        Write-Host "  ⚠️ defaultMode를 'bypassPermissions'로 설정했습니다 — Claude Code 의 권한 확인이" -ForegroundColor Yellow
-        Write-Host "     모두 생략됩니다. 방금 설치한 가드 훅(rm 휴지통 치환, git 백업, 시크릿 확인)은" -ForegroundColor Yellow
-        Write-Host "     그대로 동작하지만, 훅이 판단하지 않는 명령은 확인 없이 실행됩니다." -ForegroundColor Yellow
-        Write-Host "     되돌리려면 $SettingsPath 의 permissions.defaultMode 를 'auto' 로 바꾸세요." -ForegroundColor Yellow
+        Write-Host "  ⚠️ defaultMode is set to 'bypassPermissions' — all Claude Code permission checks" -ForegroundColor Yellow
+        Write-Host "     are skipped. The guard hooks just installed (rm to trash, git backup, secret checks)" -ForegroundColor Yellow
+        Write-Host "     still work, but commands the hooks do not judge run without confirmation." -ForegroundColor Yellow
+        Write-Host "     To revert, set permissions.defaultMode in $SettingsPath to 'auto'." -ForegroundColor Yellow
     }
-    Write-Host "  감사 로그: $GuardLogPath"
+    Write-Host "  Audit log: $GuardLogPath"
 }
 
 function Uninstall-Hooks {
@@ -311,13 +311,13 @@ function Uninstall-Hooks {
                    "shims/rm", "shims/RmShim.psm1", "graft_sync_hidden.cjs")
     }
 
-    Write-Host "[1/2] settings.json 정밀 복원 (설치가 건드린 것만)..."
+    Write-Host "[1/2] Precisely restoring settings.json (only what the install touched)..."
     $dry = if ($DryRun) { "1" } else { "0" }
     $output = & $PyExe @($PyArgs) -X utf8 $MergeScriptPath --uninstall $SettingsPath $dry $manifestPath
     $output | ForEach-Object { Write-Host $_ }
 
     Write-Host ""
-    Write-Host "[2/2] 훅 파일 + guard.log + 매니페스트 제거..."
+    Write-Host "[2/2] Removing hook files + guard.log + manifest..."
     $targets = @()
     foreach ($f in $files) { $targets += (Join-Path $HooksDir $f) }
     $targets += (Join-Path $HooksDir "guard.log")   # 설치 셀프테스트가 생성
@@ -325,10 +325,10 @@ function Uninstall-Hooks {
     foreach ($target in $targets) {
         if (Test-Path $target) {
             if ($DryRun) {
-                Write-Host "  🧪 (dry-run) 제거 예정: $target"
+                Write-Host "  🧪 (dry-run) would remove: $target"
             } else {
                 Remove-Item -Force $target -ErrorAction SilentlyContinue
-                Write-Host "  🗑️  제거: $target"
+                Write-Host "  🗑️  Removed: $target"
             }
         }
     }
@@ -344,7 +344,7 @@ function Uninstall-Hooks {
     # refreshInterval' 을 식별할 근거를 잃는다.
     if (Test-Path $manifestPath) {
         if ($DryRun) {
-            Write-Host "  🧪 (dry-run) 제거 예정: $manifestPath"
+            Write-Host "  🧪 (dry-run) would remove: $manifestPath"
         } else {
             $payload = [ordered]@{}
             try {
@@ -358,10 +358,10 @@ function Uninstall-Hooks {
             if ($payload.Count -gt 0) {
                 # BOM 없이 쓴다. Windows PowerShell 5.1 의 Set-Content -Encoding UTF8 은 BOM 을 붙인다.
                 [IO.File]::WriteAllText($manifestPath, ($payload | ConvertTo-Json -Depth 20), (New-Object Text.UTF8Encoding $false))
-                Write-Host "  🧾 유지: $manifestPath (다른 워커의 영수증만 남김)"
+                Write-Host "  🧾 Kept: $manifestPath (only other workers' manifests remain)"
             } else {
                 Remove-Item -Force $manifestPath -ErrorAction SilentlyContinue
-                Write-Host "  🗑️  제거: $manifestPath"
+                Write-Host "  🗑️  Removed: $manifestPath"
             }
         }
     }

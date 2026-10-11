@@ -45,11 +45,11 @@ while [[ $# -gt 0 ]]; do
         # 온보딩이 고른 권한 모드. 안 주면 res/settings.json 의 값(auto)을 그대로 쓴다.
         --default-mode)
             if [[ -z "${2:-}" ]]; then
-                echo "--default-mode 에 값이 필요합니다." >&2; exit 1
+                echo "--default-mode requires a value." >&2; exit 1
             fi
             DEFAULT_MODE="$2"; shift 2 ;;
         --default-mode=*) DEFAULT_MODE="${1#*=}"; shift ;;
-        *) echo "알 수 없는 옵션: $1" >&2; exit 1 ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
 
@@ -59,8 +59,8 @@ if [[ -n "$DEFAULT_MODE" ]]; then
     case "$DEFAULT_MODE" in
         auto|bypassPermissions|default|acceptEdits|plan) ;;
         *)
-            echo "알 수 없는 defaultMode: '$DEFAULT_MODE'" >&2
-            echo "가능한 값: auto, bypassPermissions, default, acceptEdits, plan" >&2
+            echo "Unknown defaultMode: '$DEFAULT_MODE'" >&2
+            echo "Allowed values: auto, bypassPermissions, default, acceptEdits, plan" >&2
             exit 1 ;;
     esac
 fi
@@ -72,10 +72,10 @@ REAL_SETTINGS_PATH="$REAL_CLAUDE_DIR/settings.json"
 
 # --- uninstall 은 설치 로직을 타지 않고 실제 ~/.claude 를 대상으로 즉시 처리한다 ---
 if [[ "$UNINSTALL" -eq 1 ]]; then
-    echo "🧹 Claude Code 가드 훅 제거..."
-    [[ "$DRY_RUN" -eq 1 ]] && echo "  🧪 DRY RUN 모드 — 실제 파일은 전혀 제거되지 않습니다."
+    echo "🧹 Removing Claude Code guard hooks..."
+    [[ "$DRY_RUN" -eq 1 ]] && echo "  🧪 DRY RUN mode — no real files will be removed."
     if ! PY="$(resolve_python_command)"; then
-        echo "❌ Python 3을 찾을 수 없습니다." >&2
+        echo "❌ Python 3 not found." >&2
         print_python_install_hint
         exit 1
     fi
@@ -83,16 +83,16 @@ if [[ "$UNINSTALL" -eq 1 ]]; then
     uninstall_hooks "$PY" "$RES_DIR/hooks/merge_and_diff.py" "$REAL_CLAUDE_DIR" "$REAL_HOOKS_DIR" "$REAL_SETTINGS_PATH" "$DRY_RUN"
     echo ""
     if [[ "$DRY_RUN" -eq 1 ]]; then
-        echo "🧪 DRY RUN 완료 — 실제로 제거하려면 --dry-run 없이 다시 실행하세요."
+        echo "🧪 DRY RUN complete — to actually remove, run again without --dry-run."
     else
-        echo "✅ 제거 완료 — 설치가 건드린 부분만 정밀하게 되돌렸습니다 (사용자가 원래 갖고 있던 설정은 보존)."
+        echo "✅ Uninstall complete — reverted precisely what the install touched (your original settings are kept)."
     fi
     exit 0
 fi
 
-echo "🔧 Claude Code 사용자 레벨 훅/권한 설정 시작..."
+echo "🔧 Starting Claude Code user-level hook/permissions setup..."
 if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "  🧪 DRY RUN 모드 — 실제 파일은 전혀 변경/설치되지 않습니다."
+    echo "  🧪 DRY RUN mode — no real files will be changed or installed."
 fi
 
 WORK_HOME="$(resolve_install_home "$DRY_RUN" "$REAL_HOME" "settings.json")"
@@ -107,11 +107,11 @@ SETTINGS_PATH="$WORK_HOME/.claude/settings.json"
 
 # --- 1. python3 탐지 ---
 if ! PY="$(resolve_python_command)"; then
-    echo "❌ Python 3을 찾을 수 없습니다." >&2
+    echo "❌ Python 3 not found." >&2
     print_python_install_hint
     exit 1
 fi
-echo "  🐍 Python 실행 명령: $PY"
+echo "  🐍 Python command: $PY"
 
 # bash 3.2 (macOS 기본) 는 set -u 에서 빈 배열의 "${arr[@]}" 확장을 unbound variable 로
 # 취급하고, 이 오류는 set +e 로도 막을 수 없다. ${arr[@]+"${arr[@]}"} 로 감싼다.
@@ -122,7 +122,7 @@ fi
 
 # --- 2. 휴지통 도구 확인 (POSIX 전용 의존성) ---
 echo ""
-echo "[1/4] 휴지통 도구 확인..."
+echo "[1/4] Checking trash tool..."
 
 # res/hooks/shims/rm 과 같은 우선순위로 탐지해야 한다 (거기서 실제로 휴지통으로 옮긴다):
 #   trash-put (trash-cli) → trash (macOS 14.4+ 가 /usr/bin/trash 로 기본 제공)
@@ -140,29 +140,29 @@ resolve_trash_command() {
 
 HAS_TRASH=0
 if TRASH_CMD="$(resolve_trash_command)"; then
-    echo "  ✅ 휴지통 도구 확인됨: $TRASH_CMD"
+    echo "  ✅ Trash tool found: $TRASH_CMD"
     HAS_TRASH=1
 elif [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "  ℹ️ 휴지통 도구 미설치 상태입니다. (dry-run 이라 설치는 시도하지 않음)"
+    echo "  ℹ️ Trash tool is not installed. (dry-run, so not attempting install)"
 else
-    echo "  📦 trash-cli 설치 중..."
+    echo "  📦 Installing trash-cli..."
     set +e
     "$PY" -m pip install ${PIP_FLAGS[@]+"${PIP_FLAGS[@]}"} --user trash-cli 2>/dev/null || \
     "$PY" -m pip install ${PIP_FLAGS[@]+"${PIP_FLAGS[@]}"} trash-cli 2>/dev/null
     set -e
 
     if TRASH_CMD="$(resolve_trash_command)"; then
-        echo "  ✅ trash-cli 설치 완료: $TRASH_CMD"
+        echo "  ✅ trash-cli installed: $TRASH_CMD"
         HAS_TRASH=1
     else
-        echo "  ⚠️ 휴지통 도구 자동 설치 실패 — 수동 설치 필요: $PY -m pip install trash-cli" >&2
-        echo "     (설치 전까지 rm 은 경고를 남기고 '실제로' 삭제됩니다 — 되돌릴 수 없습니다)" >&2
+        echo "  ⚠️ Automatic trash tool install failed — install manually: $PY -m pip install trash-cli" >&2
+        echo "     (until installed, rm leaves a warning and 'really' deletes — this cannot be undone)" >&2
     fi
 fi
 
 # --- 3. 훅 파일 설치 (res/hooks/*.py 를 WORK_HOME 기준 HOOKS_DIR로 복사) ---
 echo ""
-echo "[2/4] PreToolUse Hook 설치 $( [[ "$DRY_RUN" -eq 1 ]] && echo '(임시 사본에만 — 실제 위치엔 안 씀)' )..."
+echo "[2/4] PreToolUse Hook install $( [[ "$DRY_RUN" -eq 1 ]] && echo '(temporary copy only — not written to the real location)' )..."
 
 install_hook_files "$HOOKS_DIR" \
     "$RES_DIR/hooks/danger_guard.py:danger_guard.py" \
@@ -170,23 +170,23 @@ install_hook_files "$HOOKS_DIR" \
 # 구버전이 심어둔 훅 파일을 걷어낸다. settings.json 쪽 등록 해제는 merge 가 한다.
 if [[ "$DRY_RUN" -eq 0 && -f "$HOOKS_DIR/secrets_guard.py" ]]; then
     rm -f "$HOOKS_DIR/secrets_guard.py"
-    echo "  🗑️  구버전 훅 제거: secrets_guard.py (더 이상 배포하지 않습니다)"
+    echo "  🗑️  Removed legacy hook: secrets_guard.py (no longer shipped)"
 fi
-echo "  ✅ Hook 파일 준비 완료: danger_guard.py, shims/rm"
+echo "  ✅ Hook files ready: danger_guard.py, shims/rm"
 
 # --- 4. settings.json 병합 계획 수립 및 실행 ---
 echo ""
-echo "[3/4] settings.json 병합 계획 수립 및 실행..."
+echo "[3/4] Planning and running the settings.json merge..."
 
 MANIFEST_PATH="$WORK_HOME/.claude/$MANIFEST_NAME"
 if ! invoke_settings_merge "$PY" "$RES_DIR/hooks/merge_and_diff.py" "$RES_DIR/settings.json" "$SETTINGS_PATH" "$DRY_RUN" "$PY" "$REAL_HOOKS_DIR" "$MANIFEST_PATH" "danger_guard.py,shims/rm" "$DEFAULT_MODE"; then
-    echo "  ❌ 병합 검증 실패 — 예상치 못한 최상위 키 변경이 감지되었습니다. 수동 확인이 필요합니다." >&2
+    echo "  ❌ Merge verification failed — unexpected top-level key changes detected. Manual review required." >&2
     exit 1
 fi
 
 # --- 5. 셀프테스트 ---
 echo ""
-echo "[4/4] 셀프테스트 실행..."
+echo "[4/4] Running self-test..."
 
 # git 관련 판정(스냅샷 백업, 기본 브랜치 force push 확인)은 여기서 돌리지 않는다. 둘 다 cwd 가
 # git 저장소인지에 따라 결과가 달라지는데, 설치는 저장소 밖에서도 실행된다(curl 부트스트랩).
@@ -196,21 +196,21 @@ echo "[4/4] 셀프테스트 실행..."
 # 유일한 방어선이므로 조용히 넘기지 않는다 (setup_hooks.ps1 과 같은 정책).
 SELF_TEST_FAILURES=0
 run_hook_self_test "$PY" "$HOOKS_DIR/danger_guard.py" \
-    'rm -rf temp/ → 통과(무판단) 기대 — 셰임 PATH 는 SessionStart 가 설정:::{"tool_name":"Bash","tool_input":{"command":"rm -rf temp/"}}' \
-    'rm -rf "$V/x" → 변수 확장을 깨지 않고 통과 기대:::{"tool_name":"Bash","tool_input":{"command":"rm -rf \"$V/x\""}}' \
-    'rm -rf ~ → deny 기대 (홈 디렉터리 전체):::{"tool_name":"Bash","tool_input":{"command":"rm -rf ~"}}' \
-    'find . -exec rm -f {} + → 통과 기대 (종전 ask):::{"tool_name":"Bash","tool_input":{"command":"find . -name x -exec rm -f {} +"}}' \
-    'ls -la → 통과(무판단) 기대:::{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' \
+    'rm -rf temp/ → expect pass (no decision) — SessionStart sets the shim PATH:::{"tool_name":"Bash","tool_input":{"command":"rm -rf temp/"}}' \
+    'rm -rf "$V/x" → expect pass without breaking variable expansion:::{"tool_name":"Bash","tool_input":{"command":"rm -rf \"$V/x\""}}' \
+    'rm -rf ~ → expect deny (entire home directory):::{"tool_name":"Bash","tool_input":{"command":"rm -rf ~"}}' \
+    'find . -exec rm -f {} + → expect pass (formerly ask):::{"tool_name":"Bash","tool_input":{"command":"find . -name x -exec rm -f {} +"}}' \
+    'ls -la → expect pass (no decision):::{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' \
     || SELF_TEST_FAILURES=$?
 if [[ "$SELF_TEST_FAILURES" -gt 0 ]]; then
-    echo "❌ 셀프테스트 $SELF_TEST_FAILURES 건 실패 — 가드 훅이 정상 동작하지 않습니다. 위 실패 항목을 확인하세요."
+    echo "❌ Self-test: $SELF_TEST_FAILURES failed — the guard hook is not working correctly. Check the failed items above."
     exit 1
 fi
 
 # --- 6. 리포트 ---
 DEP_WARNING=""
 if [[ "$HAS_TRASH" -eq 0 ]]; then
-    DEP_WARNING="휴지통 도구(trash-put / macOS trash)가 없어, rm 은 경고만 남기고 실제로 삭제됩니다 (복구 불가)."
+    DEP_WARNING="No trash tool (trash-put / macOS trash), so rm only leaves a warning and really deletes (unrecoverable)."
 fi
 print_setup_report "$DRY_RUN" "$REAL_SETTINGS_PATH" "$REAL_HOOKS_DIR/guard.log" "$DEP_WARNING" "$DEFAULT_MODE" \
     "$REAL_HOOKS_DIR/danger_guard.py" "$REAL_HOOKS_DIR/shims/rm"

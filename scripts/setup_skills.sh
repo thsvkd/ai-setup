@@ -10,5 +10,5 @@ if ! PY="$(resolve_python_command)"; then
     print_python_install_hint
     exit 1
 fi
-case " $* " in *" --uninstall "*) echo "🧹 번들 스킬 제거" ;; *) echo "🔧 번들 스킬" ;; esac
+case " $* " in *" --uninstall "*) echo "🧹 Removing bundled skills" ;; *) echo "🔧 Bundled skills" ;; esac
 "$PY" -X utf8 "$REPO_ROOT/res/skills/apply.py" --home "$HOME" "$@"

@@ -56,8 +56,8 @@ function Send-ClaudeTrash {
         # 있지 않지만 $Paths 는 Get-Item 의 FullName(절대경로)이라 대시로 시작하지 않는다.
         & $trash.Source @Paths
     }
-    else { throw '휴지통 도구를 찾지 못했습니다.' }
-    if ($LASTEXITCODE -ne 0) { throw "$($trash.Name) 이 종료 코드 $LASTEXITCODE 로 실패했습니다." }
+    else { throw 'No trash tool found.' }
+    if ($LASTEXITCODE -ne 0) { throw "$($trash.Name) failed with exit code $LASTEXITCODE." }
 }
 
 function Remove-Item {
@@ -124,7 +124,7 @@ function Remove-Item {
         foreach ($i in $items) {
             $full = $i.FullName
             if (Test-ClaudeRootPath $full) {
-                Write-Error "Remove-Item(shim): 루트/홈 디렉터리 전체($full) 삭제는 거부합니다."
+                Write-Error "Remove-Item(shim): refusing to delete the entire root/home directory ($full)."
                 return
             }
             if ($targets -notcontains $full) { $targets += $full }
@@ -134,7 +134,7 @@ function Remove-Item {
             Send-ClaudeTrash -Paths $targets
         }
         catch {
-            Write-Warning "Remove-Item(shim): 휴지통으로 옮기지 못해 실제 삭제합니다 — $($_.Exception.Message)"
+            Write-Warning "Remove-Item(shim): could not move to the trash; deleting for real - $($_.Exception.Message)"
             & $script:RealRemoveItem @PSBoundParameters
         }
     }

@@ -30,7 +30,7 @@ $apply = Join-Path $RepoRoot "res\omc\apply.py"
 
 $py = Resolve-PythonCommand
 if (-not $py) {
-    Write-Host "❌ Python을 찾을 수 없습니다." -ForegroundColor Red
+    Write-Host "❌ Python not found." -ForegroundColor Red
     Write-PythonInstallHint
     exit 1
 }
@@ -40,13 +40,13 @@ $pyArgs = @("-X", "utf8", $apply, "--home", $homeDir)
 if ($DryRun) { $pyArgs += "--dry-run" }
 
 if ($Uninstall) {
-    Write-Host "🧹 OMC HUD (캐시 TTL) 되돌리기"
+    Write-Host "🧹 Reverting OMC HUD (cache TTL)"
     & $py.Exe @($py.Args) @pyArgs --uninstall
     exit $LASTEXITCODE
 }
 
 if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
-    Write-Host "❌ claude CLI 를 찾을 수 없습니다. Claude Code 를 먼저 설치하세요." -ForegroundColor Red
+    Write-Host "❌ claude CLI not found. Install Claude Code first." -ForegroundColor Red
     exit 1
 }
 
@@ -67,9 +67,9 @@ $plugins = & claude plugin list 2>$null | Out-String
 $marketplaces = & claude plugin marketplace list 2>$null | Out-String
 $ErrorActionPreference = $prevEap
 
-Write-Host "🔧 OMC 플러그인"
+Write-Host "🔧 OMC plugin"
 if ($plugins -match "oh-my-claudecode@") {
-    Write-Host "  • 이미 설치됨: $OmcPlugin"
+    Write-Host "  • Already installed: $OmcPlugin"
 } else {
     if ($marketplaces -notmatch [regex]::Escape($OmcMarketplaceRepo)) {
         Invoke-Step @("plugin", "marketplace", "add", $OmcMarketplaceRepo)
@@ -77,11 +77,11 @@ if ($plugins -match "oh-my-claudecode@") {
     Invoke-Step @("plugin", "install", $OmcPlugin)
 }
 
-Write-Host "🔧 OMC HUD (캐시 TTL)"
+Write-Host "🔧 OMC HUD (cache TTL)"
 & $py.Exe @($py.Args) @pyArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host ""
-Write-Host "  ℹ️  CLAUDE.md 등 OMC 의 나머지 설정은 Claude Code 안에서 /oh-my-claudecode:omc-setup 으로 진행하세요."
-Write-Host "     그 과정에서 statusLine 이 다시 써지면 이 스크립트를 한 번 더 실행하면 됩니다."
+Write-Host "  ℹ️  For the rest of the OMC setup (CLAUDE.md, etc.), run /oh-my-claudecode:omc-setup inside Claude Code."
+Write-Host "     If that rewrites statusLine, just run this script once more."
 exit 0

@@ -220,10 +220,10 @@ def _git(args, cwd, env=None, timeout=60, stdin=None):
 
 def root_delete_reason(command):
     if ROOT_DELETE_RE.search(command):
-        return "루트/홈 디렉터리 전체를 삭제하려는 시도는 차단합니다."
+        return "Blocked: attempt to delete the entire root/home directory."
     for segment in SEGMENT_SPLIT_RE.split(command):
         if PS_DELETE_RE.search(segment) and PS_ROOT_TARGET_RE.search(segment):
-            return "드라이브 루트/홈 디렉터리 전체를 삭제하려는 시도는 차단합니다."
+            return "Blocked: attempt to delete the entire drive root/home directory."
     return None
 
 
@@ -299,8 +299,8 @@ def git_snapshot(command, cwd):
             if not ok:
                 include_ignored = False
                 notes.append(
-                    "%s 의 .gitignore 대상이 %d개%s라 스냅샷에서 제외했습니다 — 담으면 훅이 "
-                    "수십 초에서 수 분을 잡아먹습니다. 추적/미추적 파일은 그대로 백업했습니다."
+                    "%s has %d .gitignore'd entries%s, so they were left out of the snapshot; including them would "
+                    "make the hook take tens of seconds to several minutes. Tracked/untracked files were backed up as usual."
                     % (repo, count, ("" if size is None else " %.0fMB" % (size / 1024 / 1024))))
 
         fd, idx = tempfile.mkstemp(prefix="claude-backup-idx-")
@@ -335,8 +335,8 @@ def git_snapshot(command, cwd):
             ref = BACKUP_PREFIX + datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
             if _git(["update-ref", ref, commit], repo).returncode == 0:
                 _prune(repo)
-                notes.append("%s 의 미커밋 변경을 %s 에 백업했습니다 "
-                             "(git checkout %s -- . 로 복구)." % (repo, ref, ref))
+                notes.append("Backed up uncommitted changes in %s to %s "
+                             "(restore with git checkout %s -- .)." % (repo, ref, ref))
         finally:
             if os.path.exists(idx):
                 os.unlink(idx)
@@ -477,8 +477,8 @@ def _pin_remote(url, wide, names, cwd):
     """url 에서 사라질 원격 커밋이 전부 로컬에 있으면 고정한다. 반환: (ask 사유, 안내 문구들)."""
     remote_refs = _remote_refs(url, cwd)
     if remote_refs is None:
-        return ("원격(%s)을 조회하지 못해, 이 push 가 덮어쓰거나 지울 원격 커밋이 로컬에 남아 "
-                "있는지 확인할 수 없습니다. 계속할까요?" % url), []
+        return ("Could not query remote (%s), so it cannot be verified that the remote commits this push "
+                "would overwrite or delete are still present locally. Continue?" % url), []
     # git 이 짧은 대상 이름을 푸는 규칙(ref_rev_parse_rules)을 그대로 따른다.
     at_risk = {ref: sha for ref, sha in remote_refs.items()
                if wide or any(ref in (n, "refs/" + n, "refs/tags/" + n, "refs/heads/" + n,
@@ -491,8 +491,8 @@ def _pin_remote(url, wide, names, cwd):
     absent = {line.split()[0] for line in check.stdout.splitlines() if line.endswith(" missing")}
     missing = sorted(ref for ref, sha in at_risk.items() if sha in absent)
     if check.returncode != 0 or missing:
-        return ("원격 %s 의 %s 에 로컬에 없는 커밋이 있습니다. 이 push 는 그 커밋을 덮어쓰거나 지워 "
-                "되돌릴 수 없게 만듭니다(먼저 git fetch 하면 로컬에 보존됩니다). 계속할까요?"
+        return ("Remote %s has commits at %s that are not present locally. This push would overwrite or delete "
+                "them irreversibly (running git fetch first preserves them locally). Continue?"
                 % (url, ", ".join(missing or sorted(at_risk)))), []
 
     # 같은 이름의 로컬 ref 가 이미 같은 커밋을 쥐고 있으면 고정하지 않는다.
@@ -508,12 +508,12 @@ def _pin_remote(url, wide, names, cwd):
                               _pin_seq)
     tx = "".join("create %s%s %s\n" % (base, ref[len("refs/"):], sha) for ref, sha in pins.items())
     if _git(["update-ref", "--stdin"], cwd, stdin=tx).returncode != 0:
-        return ("원격 %s 의 덮어쓸 커밋을 로컬에 고정하지 못했습니다. 계속할까요?" % url), []
+        return ("Could not pin locally the commits on remote %s that this push would overwrite. Continue?" % url), []
     _prune(cwd)
     shown = sorted(pins)
-    listed = ", ".join(shown[:5]) + (" 외 %d개" % (len(shown) - 5) if len(shown) > 5 else "")
-    return None, ["push 전 원격 %s 의 %s 를 %s 아래에 고정했습니다 (되돌리기: git push --force "
-                  "%s %s<ref>:refs/<ref>, 예: %s%s:%s)."
+    listed = ", ".join(shown[:5]) + (" and %d more" % (len(shown) - 5) if len(shown) > 5 else "")
+    return None, ["Before the push, pinned remote %s refs %s under %s (to undo: git push --force "
+                  "%s %s<ref>:refs/<ref>, e.g. %s%s:%s)."
                   % (url, listed, base, url, base, base, shown[0][len("refs/"):], shown[0])]
 
 
@@ -535,7 +535,7 @@ def push_check(command, cwd):
         try:
             reason, n = _check_push(args, cdirs, base)
         except subprocess.TimeoutExpired:
-            reason, n = "원격 조회가 시간을 넘겨 이 push 가 되돌릴 수 있는지 확인하지 못했습니다. 계속할까요?", []
+            reason, n = "Remote query timed out, so it cannot be verified that this push is reversible. Continue?", []
         if reason:
             return reason, []
         notes += n
@@ -620,7 +620,7 @@ def main():
 
     if DISK_DESTROY_RE.search(command):
         log({"tool": tool_name, "command": command, "decision": "deny-disk-destroy"})
-        emit("deny", "디스크 레벨 파괴 명령은 되돌릴 수 없어 차단합니다.")
+        emit("deny", "Blocked: disk-level destructive commands are irreversible.")
 
     cwd = data.get("cwd") or os.getcwd()
 
@@ -628,7 +628,7 @@ def main():
         reason, notes = push_check(command, cwd)
     except Exception as exc:  # noqa: BLE001 — 가역성을 확인하지 못한 push 를 그냥 내보내지 않는다
         log({"decision": "guard-error", "error": repr(exc)})
-        reason, notes = ("push 가 되돌릴 수 있는지 확인하다 훅 오류가 났습니다(%r). 계속할까요?" % exc
+        reason, notes = ("A hook error occurred while checking whether the push is reversible (%r). Continue?" % exc
                          if _find_pushes(command) else None), []
     if reason:
         log({"tool": tool_name, "command": command, "decision": "ask-push-irreversible"})

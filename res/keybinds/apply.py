@@ -319,8 +319,8 @@ def strip_keybinds_from_manifest(home: Path) -> None:
 
 def invalid_newline_message(value: str) -> str:
     return (
-        f"--newline 값은 shift-enter 또는 ctrl-enter 여야 합니다 "
-        f"(받은 값: {value!s})."
+        f"--newline must be shift-enter or ctrl-enter "
+        f"(got: {value!s})."
     )
 
 
@@ -402,7 +402,7 @@ def apply_ide_keybindings(path: Path, chord: str, uninstall: bool, dry_run: bool
     existed = path.is_file()
     entries = load_ide_entries(path)
     if entries is None:
-        note_skipped(path, "keybindings.json 을 읽지 못해 건너뜁니다")
+        note_skipped(path, "cannot read keybindings.json, skipping")
         return False
 
     desired = desired_ide_binding(chord)
@@ -410,7 +410,7 @@ def apply_ide_keybindings(path: Path, chord: str, uninstall: bool, dry_run: bool
         new_entries = [e for e in entries if not is_managed_sendsequence(e)]
         changed = new_entries != entries
         if dry_run:
-            print(f"  {path} (keybindings.json) — 관리 sendSequence 제거")
+            print(f"  {path} (keybindings.json) — remove managed sendSequence")
             return False
         if changed:
             write_json(path, new_entries)
@@ -420,7 +420,7 @@ def apply_ide_keybindings(path: Path, chord: str, uninstall: bool, dry_run: bool
     foreign = [e for e in entries if not is_managed_sendsequence(e)]
     if len(managed) == 1 and bindings_equivalent(managed[0], desired):
         if dry_run:
-            print(f"  {path} (keybindings.json) — 이미 {desired['key']}")
+            print(f"  {path} (keybindings.json) — already {desired['key']}")
         return False
     new_entries = foreign + [desired]
     if dry_run:
@@ -440,10 +440,10 @@ def apply_claude_keybindings(path: Path, chord: str, uninstall: bool, dry_run: b
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            note_skipped(path, "Claude keybindings.json 을 읽지 못해 건너뜁니다")
+            note_skipped(path, "cannot read Claude keybindings.json, skipping")
             return [], {}
         if not isinstance(data, dict):
-            note_skipped(path, "Claude keybindings.json 최상위가 객체가 아니라 건너뜁니다")
+            note_skipped(path, "Claude keybindings.json top level is not an object, skipping")
             return [], {}
     else:
         data = {}
@@ -467,7 +467,7 @@ def apply_claude_keybindings(path: Path, chord: str, uninstall: bool, dry_run: b
                 chat[key] = value
                 changed = True
         if dry_run:
-            print(f"  {path} (Claude keybindings.json) — 설치가 넣은 키 제거 + 덮어쓴 값 복원")
+            print(f"  {path} (Claude keybindings.json) — remove keys added by the installer + restore overwritten values")
             return [], {}
         if changed:
             write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
@@ -485,8 +485,8 @@ def apply_claude_keybindings(path: Path, chord: str, uninstall: bool, dry_run: b
     prior = chat.get(want)
     if prior is not None and prior != "chat:newline" and want not in overwrote:
         overwrote[want] = prior
-        print(f"  ℹ️ Claude Chat[{want}] 의 기존 값 {prior!r} 을 줄바꿈으로 바꿉니다 "
-              f"(--uninstall 시 되돌립니다).")
+        print(f"  ℹ️ Replacing the existing value {prior!r} of Claude Chat[{want}] with newline "
+              f"(restored on --uninstall).")
     # 이미 사용자가 같은 값을 걸어 두었다면 우리가 넣은 것이 아니다 — 영수증에 적으면
     # uninstall 이 남의 바인딩을 지운다.
     added = [] if prior == "chat:newline" and want not in set(prev_keys or []) else [want]
@@ -762,7 +762,7 @@ def apply_codex_toml(path: Path, chord: str, uninstall: bool, dry_run: bool,
             edit_codex_insert_newline(text, None, set(prev_keys or []))
         )
         if dry_run:
-            print(f"  {path} (codex config.toml) — insert_newline 관리 키 제거")
+            print(f"  {path} (codex config.toml) — remove managed insert_newline key")
             return []
         if new_text != text and existed:
             write_text_atomic(path, new_text)
@@ -840,15 +840,15 @@ def apply_wt_settings(path: Path | None, chord: str, uninstall: bool, dry_run: b
     """
     if path is None or not path.is_file():
         if dry_run:
-            print("  Windows Terminal settings.json — 대상 없음, skip")
+            print("  Windows Terminal settings.json — no target, skip")
         return False
     try:
         data = parse_jsonc(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        note_skipped(path, "WT settings.json 을 읽지 못해 건너뜁니다")
+        note_skipped(path, "cannot read WT settings.json, skipping")
         return False
     if not isinstance(data, dict):
-        note_skipped(path, "WT settings.json 최상위가 객체가 아니라 건너뜁니다")
+        note_skipped(path, "WT settings.json top level is not an object, skipping")
         return False
 
     actions_key = "actions" if "actions" in data else ("keybindings" if "keybindings" in data else "actions")
@@ -889,8 +889,8 @@ def apply_wt_settings(path: Path | None, chord: str, uninstall: bool, dry_run: b
                     if is_managed_wt(a)
                     and _wt_keys(a).replace("return", "enter") == "shift+enter"]
         if leftover:
-            print("  ⚠️ Windows Terminal 에 사용자가 직접 건 Shift+Enter sendInput 이 있습니다 — "
-                  "줄바꿈이 두 번 될 수 있습니다. 지우지 않았으니 필요하면 직접 제거하세요.")
+            print("  ⚠️ Windows Terminal has a user-defined Shift+Enter sendInput — "
+                  "it may insert two newlines. It was not removed; delete it yourself if needed.")
 
     if dry_run:
         print(f"  {path} (Windows Terminal settings.json)")
@@ -919,7 +919,7 @@ def apply_tmux(path: Path, uninstall: bool, dry_run: bool, previously_added) -> 
         remove = set(added)
         if not remove:
             if dry_run:
-                print(f"  {path} (tmux.conf) — 우리가 넣은 줄 기록이 없어 건드리지 않습니다")
+                print(f"  {path} (tmux.conf) — no record of lines we added, leaving untouched")
             return []
         new_lines = []
         for line in text.splitlines(True):
@@ -929,7 +929,7 @@ def apply_tmux(path: Path, uninstall: bool, dry_run: bool, previously_added) -> 
             new_lines.append(line)
         new_text = "".join(new_lines)
         if dry_run:
-            print(f"  {path} (tmux.conf) — 설치가 넣은 extended-keys 줄 제거")
+            print(f"  {path} (tmux.conf) — remove extended-keys lines added by the installer")
             return []
         if new_text != text:
             write_text_atomic(path, new_text)
@@ -979,12 +979,12 @@ def print_warnings() -> None:
     detected = detect_terminal()
     if detected in ("gnome-terminal", "konsole"):
         print(
-            "⚠️ 이 터미널은 Shift+Enter 를 구분하지 못합니다. "
-            "Linux 완료 기준은 SSH 또는 외부 터미널 경로입니다."
+            "⚠️ This terminal cannot distinguish Shift+Enter. "
+            "On Linux, completion is judged via SSH or an external terminal."
         )
     print(
-        "⚠️ Grok /multiline 이 켜지면 Enter 와 Shift+Enter 의미가 반대입니다. "
-        "설치기는 그 토글을 바꾸지 않습니다."
+        "⚠️ When Grok /multiline is on, Enter and Shift+Enter have opposite meanings. "
+        "The installer does not change that toggle."
     )
 
 
@@ -1024,10 +1024,10 @@ def report_result(done_message: str) -> int:
     if not SKIPPED_TARGETS:
         print("✅ " + done_message)
         return 0
-    print("⚠️ 아래 대상은 파일을 읽지 못해 건너뛰었습니다 — 줄바꿈 키가 적용되지 않았습니다:")
+    print("⚠️ The following targets were skipped because the file could not be read — the newline key was not applied:")
     for target, reason in SKIPPED_TARGETS:
         print(f"  - {target} ({reason})")
-    print("   JSON 문법을 고친 뒤 다시 실행하세요. 나머지 대상은 처리했습니다.")
+    print("   Fix the JSON syntax and run again. The remaining targets were processed.")
     return 1
 
 
@@ -1059,9 +1059,9 @@ def run(args) -> int:
     prev_kb = manifest.get("keybinds") if isinstance(manifest.get("keybinds"), dict) else {}
 
     if args.uninstall:
-        print("🧹 줄바꿈 키바인딩 제거 (관리 항목만)...")
+        print("🧹 Removing newline keybindings (managed entries only)...")
         if args.dry_run:
-            print("  🧪 DRY RUN — 실제 파일은 전혀 제거되지 않습니다.")
+            print("  🧪 DRY RUN — no files are actually removed.")
         apply_ide_keybindings(vscode_path, "shift-enter", True, args.dry_run)
         apply_ide_keybindings(cursor_path, "shift-enter", True, args.dry_run)
         if claude_kb.is_file() or claude_apply:
@@ -1076,20 +1076,20 @@ def run(args) -> int:
         apply_tmux(tmux_conf, True, args.dry_run, prev_kb.get("tmux_added"))
         if not args.dry_run:
             strip_keybinds_from_manifest(home)
-        return report_result("키바인딩 제거 완료 — 사용자 원래 항목은 보존했습니다.")
+        return report_result("Keybindings removed — your original entries were preserved.")
 
     chord = resolve_chord(explicit, manifest)
-    print(f"🔧 줄바꿈 키바인딩 설치 ({chord})...")
+    print(f"🔧 Installing newline keybindings ({chord})...")
     if args.dry_run:
-        print("  🧪 DRY RUN — 실제 파일은 전혀 변경되지 않습니다.")
-        print(f"  계획: VS Code {vscode_path} (keybindings.json)")
-        print(f"  계획: Cursor {cursor_path} (keybindings.json)")
-        print(f"  계획: Claude {claude_kb} (keybindings.json)")
-        print(f"  계획: Codex {codex_toml} (config.toml)")
+        print("  🧪 DRY RUN — no files are actually changed.")
+        print(f"  Plan: VS Code {vscode_path} (keybindings.json)")
+        print(f"  Plan: Cursor {cursor_path} (keybindings.json)")
+        print(f"  Plan: Claude {claude_kb} (keybindings.json)")
+        print(f"  Plan: Codex {codex_toml} (config.toml)")
         if wt_path:
-            print(f"  계획: Windows Terminal {wt_path} (settings.json)")
+            print(f"  Plan: Windows Terminal {wt_path} (settings.json)")
         if not is_windows():
-            print(f"  계획: tmux {tmux_conf}")
+            print(f"  Plan: tmux {tmux_conf}")
 
     print_warnings()
 
@@ -1120,7 +1120,7 @@ def run(args) -> int:
             tmux_added = list(prev_kb.get("tmux_added") or [])
 
     if args.dry_run:
-        print("🧪 DRY RUN 완료 — keybindings.json / Codex config.toml 을 쓰지 않았습니다.")
+        print("🧪 DRY RUN complete — keybindings.json / Codex config.toml were not written.")
         return 0
 
     merge_manifest_keybinds(home, {
@@ -1136,7 +1136,7 @@ def run(args) -> int:
         "codex_keys_added": union_receipt(prev_kb.get("codex_keys_added"), codex_keys)
         if chord == prev_kb.get("newline_chord") else codex_keys,
     })
-    return report_result("줄바꿈 키바인딩 설치 완료.")
+    return report_result("Newline keybindings installed.")
 
 
 def parse_args(argv):

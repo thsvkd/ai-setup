@@ -80,7 +80,7 @@ def load_json_object(path: Path) -> dict:
     # utf-8-sig: Windows PowerShell 5.1 의 Set-Content -Encoding UTF8 은 BOM 을 붙인다.
     data = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(data, dict):
-        raise ValueError("최상위가 객체가 아닙니다")
+        raise ValueError("top level is not an object")
     return data
 
 
@@ -97,22 +97,22 @@ def install(claude_dir: Path, dry_run: bool) -> int:
         settings = load_json_object(settings_path)
         manifest = load_json_object(manifest_path)
     except ValueError as e:
-        print(f"❌ 설정 파일을 파싱할 수 없어 멈춥니다: {e}", file=sys.stderr)
+        print(f"❌ Cannot parse the settings file; aborting: {e}", file=sys.stderr)
         return 1
 
     status = settings.get("statusLine")
     if status is not None and not (isinstance(status, dict) and isinstance(status.get("command"), str)
                                    and status["command"]):
-        print("❌ statusLine 형식을 알 수 없어 멈춥니다. 직접 확인하세요.", file=sys.stderr)
+        print("❌ Unrecognized statusLine format; aborting. Check it yourself.", file=sys.stderr)
         return 1
     if status is not None and "omc-hud" not in status["command"]:
-        print(f"⚠️ statusLine 이 OMC HUD 가 아닙니다 ({status['command']}). 사용자 설정이라 건드리지 않습니다.")
+        print(f"⚠️ statusLine is not the OMC HUD ({status['command']}). It is a user setting, so it is left untouched.")
         return 0
 
     # 우리 래퍼가 들어 있는데 접두 표기로 벗겨 낼 수 없으면(앞에 사용자 텍스트가 붙은 경우)
     # 다시 감싸면 이중 래핑이 된다. 사용자가 손본 명령이므로 아무것도 쓰기 전에 멈춘다.
     if status is not None and TTL_SCRIPT in status["command"] and not PREFIX_RE.match(status["command"]):
-        print(f"❌ statusLine 에 캐시 TTL 래퍼가 알 수 없는 형태로 들어 있어 멈춥니다: {status['command']}",
+        print(f"❌ The statusLine contains the cache TTL wrapper in an unrecognized form; aborting: {status['command']}",
               file=sys.stderr)
         return 1
 
@@ -125,7 +125,7 @@ def install(claude_dir: Path, dry_run: bool) -> int:
         sources = [root / "scripts" / "lib" / "hud-wrapper-template.txt",
                    root / "scripts" / "lib" / "config-dir.mjs"] if root else []
         if sources and all(p.is_file() for p in sources):
-            changes.append(f"OMC HUD 래퍼 복사: {sources[0]} → {hud / 'omc-hud.mjs'}")
+            changes.append(f"Copy OMC HUD wrapper: {sources[0]} → {hud / 'omc-hud.mjs'}")
             if not dry_run:
                 (hud / "lib").mkdir(parents=True, exist_ok=True)
                 # 이미 있는 파일은 사용자(또는 OMC) 것이라 덮어쓰지 않는다. 복사한 것만 해시와 함께
@@ -138,9 +138,9 @@ def install(claude_dir: Path, dry_run: bool) -> int:
                         copied[name] = sha256(hud / name)
                 receipt["hud_copied"] = copied
         elif dry_run:
-            changes.append("OMC HUD 래퍼 복사 (플러그인 설치 후 결정)")
+            changes.append("Copy OMC HUD wrapper (decided after the plugin is installed)")
         else:
-            print("❌ OMC 플러그인 캐시에서 HUD 템플릿을 찾지 못했습니다. 플러그인 설치를 확인하세요.",
+            print("❌ Could not find the HUD template in the OMC plugin cache. Check the plugin installation.",
                   file=sys.stderr)
             return 1
 
@@ -150,17 +150,17 @@ def install(claude_dir: Path, dry_run: bool) -> int:
         settings["statusLine"] = status
         receipt["statusline_added"] = status["command"]
         receipt.setdefault("settings_created", not settings_path.is_file())
-        changes.append("statusLine 추가: OMC HUD")
+        changes.append("Add statusLine: OMC HUD")
 
-    changes.append(f"캐시 TTL 래퍼 복사: {hud / TTL_SCRIPT}")
+    changes.append(f"Copy cache TTL wrapper: {hud / TTL_SCRIPT}")
     # 이전 버전 접두가 있으면 벗겨 내고 현재 표기로 다시 붙인다 — 재설치가 곧 갱신이 되게.
     inner = status["command"]
     while PREFIX_RE.match(inner):  # 이전 버그가 남긴 이중 래핑도 한 겹으로 정리한다
         inner = PREFIX_RE.sub("", inner, count=1)
     wrapped = f'{launcher} "{ref}/{TTL_SCRIPT}" ' + inner
     if status["command"] != wrapped:
-        changes.append("statusLine.command 앞에 캐시 TTL 래퍼 연결 (session → cache)"
-                       if inner == status["command"] else "statusLine.command 의 캐시 TTL 래퍼 표기 갱신")
+        changes.append("Prepend cache TTL wrapper to statusLine.command (session → cache)"
+                       if inner == status["command"] else "Update the cache TTL wrapper notation in statusLine.command")
         status["command"] = wrapped
     if "refreshInterval" not in status:
         status["refreshInterval"] = REFRESH_SECONDS
@@ -170,7 +170,7 @@ def install(claude_dir: Path, dry_run: bool) -> int:
     for c in changes:
         print(f"  • {c}")
     if dry_run:
-        print(f"🧪 DRY RUN — {settings_path} 에 실제로 쓰지 않았습니다.")
+        print(f"🧪 DRY RUN — {settings_path} was not actually written.")
         return 0
 
     hud.mkdir(parents=True, exist_ok=True)
@@ -181,7 +181,7 @@ def install(claude_dir: Path, dry_run: bool) -> int:
         write_json(str(settings_path), settings)
     manifest["omc_hud"] = receipt
     write_json(str(manifest_path), manifest)
-    print(f"✅ OMC HUD 캐시 TTL 설정 완료: {settings_path}")
+    print(f"✅ OMC HUD cache TTL setup complete: {settings_path}")
     return 0
 
 
@@ -193,7 +193,7 @@ def uninstall(claude_dir: Path, dry_run: bool) -> int:
         settings = load_json_object(settings_path)
         manifest = load_json_object(manifest_path)
     except ValueError as e:
-        print(f"❌ 설정 파일을 파싱할 수 없어 멈춥니다: {e}", file=sys.stderr)
+        print(f"❌ Cannot parse the settings file; aborting: {e}", file=sys.stderr)
         return 1
     receipt = manifest.get("omc_hud") or {}
 
@@ -203,21 +203,21 @@ def uninstall(claude_dir: Path, dry_run: bool) -> int:
     if isinstance(status, dict) and isinstance(status.get("command"), str):
         if PREFIX_RE.match(status["command"]):
             status["command"] = PREFIX_RE.sub("", status["command"], count=1)
-            changes.append("statusLine.command 에서 캐시 TTL 래퍼 제거")
+            changes.append("Remove the cache TTL wrapper from statusLine.command")
         # 사용자가 나중에 바꾼 값은 사용자 것이다. 우리가 넣은 값 그대로일 때만 지운다.
         if receipt.get("refresh_interval_added") and status.get("refreshInterval") == REFRESH_SECONDS:
             del status["refreshInterval"]
-            changes.append("statusLine.refreshInterval 제거")
+            changes.append("Remove statusLine.refreshInterval")
         if receipt.get("statusline_added") and status == {"type": "command",
                                                           "command": receipt["statusline_added"]}:
             del settings["statusLine"]
             statusline_removed = True
-            changes.append("설치가 추가한 statusLine 제거")
+            changes.append("Remove the statusLine that install added")
     settings_changed = bool(changes)
     if isinstance(status, dict) and TTL_SCRIPT in str(status.get("command")):
         # 벗겨 내지 못한 래퍼가 남아 있다. 여기서 스크립트나 영수증을 지우면 HUD 가 빈 줄이 된다.
-        print(f"❌ statusLine 의 캐시 TTL 래퍼를 알 수 없는 형태라 벗겨 내지 못했습니다: {status['command']}\n"
-              "   직접 정리한 뒤 다시 실행하세요. 아무것도 바꾸지 않았습니다.", file=sys.stderr)
+        print(f"❌ Could not strip the cache TTL wrapper from statusLine because its form is unrecognized: {status['command']}\n"
+              "   Clean it up yourself and run again. Nothing was changed.", file=sys.stderr)
         return 1
 
     # 복사한 HUD 파일은 그것을 가리키던 statusLine 도 함께 치울 때, 그리고 복사한 파일이 모두
@@ -229,12 +229,12 @@ def uninstall(claude_dir: Path, dry_run: bool) -> int:
     if statusline_removed and copied and all(sha256(hud / n) == d for n, d in copied.items()):
         files += [hud / n for n in copied]
     files = [p for p in files if p.is_file()]
-    changes += [f"{p} 삭제" for p in files]
+    changes += [f"Delete {p}" for p in files]
 
-    for c in changes or ["(되돌릴 것 없음 — 이미 정리됨)"]:
+    for c in changes or ["(nothing to revert - already clean)"]:
         print(f"  • {c}")
     if dry_run:
-        print(f"🧪 DRY RUN — {settings_path} 에 실제로 쓰지 않았습니다.")
+        print(f"🧪 DRY RUN — {settings_path} was not actually written.")
         return 0
 
     if settings_changed:
