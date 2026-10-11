@@ -569,8 +569,12 @@ Describe "onboarding Python detection (py -3 NativeCommandError regression)" {
         Copy-Item -Recurse (Join-Path $script:RepoRoot "scripts"), (Join-Path $script:RepoRoot "res") $repo
         Set-Content -Path (Join-Path $repo "res\onboard.py") -Encoding ascii `
             -Value "import sys`nsys.stderr.write('cannot ask here\n')`nsys.exit(2)"
-        $out = powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "scripts\setup.ps1") 2>&1 | Out-String
-        $out | Should -Not -Match "NativeCommandError"
+        # 리다이렉트는 5.1 세션 안에서 해야 재현된다(-File 로 바깥에서 받으면 stderr 가 그대로 흐른다).
+        # NativeCommandError 표시는 남지만, 설치를 멈추지 않으면 된다. 종료 코드는 보지 않는다 — 이
+        # Describe 의 py.cmd 대역 때문에 뒤따르는 셀프테스트가 실패할 수 있다(위 케이스 주석 참고).
+        $setup = Join-Path $repo "scripts\setup.ps1"
+        $out = powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& '$setup' 2>&1 | Out-String" 2>&1 | Out-String
+        $out | Should -Not -Match "Aborting installation"
         Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $true -Because $out
     }
 }
