@@ -43,6 +43,9 @@ Remaining non-option arguments are passed to pytest as is (e.g. -k, -x, --lf).
 
 Environment variables:
   CLAUDE_TEST_PYTHON   interpreter path for pytest (skips auto-detection when set)
+
+The pytest interpreter needs pytest and send2trash, plus tomli on Python < 3.11
+(macOS ships python3 3.9).
 EOF
 }
 

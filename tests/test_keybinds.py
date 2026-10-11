@@ -623,6 +623,10 @@ def snapshot_tree(root: Path):
         # 설치 대상이 아니며 구현이 막을 수 없다 (호스트가 스크립트 종료 후에 씀).
         if p.name.startswith("StartupProfileData"):
             continue
+        # macOS 의 Apple python 은 바이트코드 캐시를 $HOME/Library/Caches/com.apple.python 에 쓴다.
+        # 인터프리터가 쓰는 캐시이지 설치 대상이 아니다.
+        if "/".join(p.relative_to(root).parts).startswith("home/Library/Caches/com.apple.python/"):
+            continue
         files[str(p.relative_to(root))] = p.read_bytes()
     return files
 
@@ -644,7 +648,10 @@ def manifest_chord(data: dict) -> str:
 
 
 def load_toml(path: Path):
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python < 3.11 (macOS 기본 python3 는 3.9): pip install tomli
+        import tomli as tomllib
     text = path.read_text(encoding="utf-8")
     return tomllib.loads(text), text
 
