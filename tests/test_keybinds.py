@@ -1564,7 +1564,7 @@ def test_does_not_claim_success_when_a_target_was_unreadable(kb_sandbox):
     kb_sandbox.vscode.write_text("{ not json at all", encoding="utf-8")
     proc = run_setup(["--keybinds"], kb_sandbox)
     assert proc.returncode != 0, f"succeeded although a target could not be read:\n{combined_output(proc)}"
-    assert "skipped" in combined_output(proc), combined_output(proc)
+    assert "could not be read" in combined_output(proc), combined_output(proc)
 
 
 @tmux_only

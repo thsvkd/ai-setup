@@ -251,7 +251,7 @@ def test_bypass_choice_shows_warning(tmp_path):
         keys=[ENTER, DOWN, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER],
     )
     text = screen.decode(errors="replace")
-    assert "permission prompts" in text and "skip" in text, text
+    assert "bypassPermissions skips all of Claude Code's permission prompts" in text, text
 
 
 @posix_only

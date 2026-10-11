@@ -980,7 +980,7 @@ def print_warnings() -> None:
     if detected in ("gnome-terminal", "konsole"):
         print(
             "⚠️ This terminal cannot distinguish Shift+Enter. "
-            "On Linux, completion is judged via SSH or an external terminal."
+            "On Linux, use SSH or an external terminal for Shift+Enter."
         )
     print(
         "⚠️ When Grok /multiline is on, Enter and Shift+Enter have opposite meanings. "

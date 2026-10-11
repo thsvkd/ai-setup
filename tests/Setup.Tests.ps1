@@ -419,7 +419,8 @@ Describe "Windows .ps1 encoding regression (BOM)" {
         $out = powershell.exe -ExecutionPolicy Bypass -File $script:Setup -Help 2>&1 | Out-String
         $ec = $LASTEXITCODE
         $ec | Should -Be 0
-        $out | Should -Match "Usage"
+        # 비ASCII 줄로 확인해야 BOM 없이 ANSI 로 읽혀 깨진 경우를 잡는다.
+        $out | Should -Match "claude-code-setup — Claude Code user-level setup"
     }
 }
 
