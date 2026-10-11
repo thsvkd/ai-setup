@@ -198,7 +198,15 @@ function Invoke-Onboarding {
 
     $answersPath = [System.IO.Path]::GetTempFileName()
     try {
-        & $py.Exe @($py.Args) -X utf8 $onboard --out $answersPath --project-dir (Get-Location).Path
+        # 5.1 은 출력이 리다이렉트되면(ISE·원격·`2>&1 | Tee`) 네이티브 stderr 를 오류 레코드로 바꾸고,
+        # Stop 이면 거기서 설치가 죽는다. 온보딩은 '물을 수 없음'(exit 2)을 stderr 로 알리므로
+        # 판정은 종료 코드로만 한다.
+        $ErrorActionPreference = "Continue"
+        try {
+            & $py.Exe @($py.Args) -X utf8 $onboard --out $answersPath --project-dir (Get-Location).Path
+        } finally {
+            $ErrorActionPreference = "Stop"
+        }
         $status = $LASTEXITCODE
 
         if ($status -eq 2) { return $null }   # 대화형 불가 — 예전 기본값 그대로

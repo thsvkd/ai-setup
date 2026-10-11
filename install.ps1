@@ -228,6 +228,7 @@ Environment variables:
 
     $tmp = Join-Path $env:TEMP ("claude-code-setup-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    $code = 0
     try {
         $zip = Join-Path $tmp "repo.zip"
         $url = "https://github.com/$repo/archive/$ref.zip"
@@ -266,9 +267,15 @@ Environment variables:
             $fwd['Harness'] = $Harness
         }
         & $setup @fwd
+        $code = $LASTEXITCODE
     } finally {
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
     }
+    # 파일로 실행됐으면 setup 의 종료 코드를 그대로 넘긴다 — 온보딩이 깨져 중단돼도 exit 0 이면
+    # 자동화는 성공으로 본다. irm | iex·scriptblock 으로 실행되면 exit 가 사용자의 셸을 닫으므로
+    # $LASTEXITCODE 로만 남긴다.
+    if ($PSCommandPath) { exit $code }
+    $global:LASTEXITCODE = $code
 }
 
 Invoke-Install @PSBoundParameters

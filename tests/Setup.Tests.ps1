@@ -146,6 +146,34 @@ Describe "install.ps1 bootstrap" {
         $r.Output | Should -Not -Match "Unknown option"
         $r.Output | Should -Match "Download failed"
     }
+
+    # 온보딩이 깨져 setup.ps1 이 중단돼도 install.ps1 이 exit 0 이면 자동화는 성공으로 본다.
+    # 다운로드만 대역으로 바꾼다 — 같은 이름의 함수가 cmdlet 보다 먼저 해석된다.
+    It "a file run exits with the exit code of the downloaded setup.ps1" {
+        $sb = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-inst-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        $src = Join-Path $sb "src\claude-code-setup-main\scripts"
+        New-Item -ItemType Directory -Force -Path $src | Out-Null
+        Set-Content -Path (Join-Path $src "setup.ps1") -Value "exit 3" -Encoding ascii
+        $zip = Join-Path $sb "repo.zip"
+        Compress-Archive -Path (Join-Path $sb "src\*") -DestinationPath $zip
+        $mock = "function Invoke-WebRequest { param(`$Uri, `$OutFile, `$UseBasicParsing, `$Headers) Copy-Item '$zip' `$OutFile }"
+        $text = (Get-Content (Join-Path $script:RepoRoot "install.ps1") -Raw).Replace(
+            "Set-StrictMode -Version Latest", "Set-StrictMode -Version Latest`r`n$mock")
+        $inst = Join-Path $sb "install.ps1"
+        [System.IO.File]::WriteAllText($inst, $text, (New-Object System.Text.UTF8Encoding $false))
+        $oldTemp, $oldUP, $oldTok = $env:TEMP, $env:USERPROFILE, $env:GITHUB_TOKEN
+        $env:TEMP = $sb
+        $env:USERPROFILE = $sb
+        $env:GITHUB_TOKEN = "unused"
+        try {
+            $out = pwsh -NoProfile -File $inst -NoOnboard 2>&1 | Out-String
+            $ec = $LASTEXITCODE
+        } finally {
+            $env:TEMP, $env:USERPROFILE, $env:GITHUB_TOKEN = $oldTemp, $oldUP, $oldTok
+            Remove-Item -Recurse -Force $sb -ErrorAction SilentlyContinue
+        }
+        $ec | Should -Be 3 -Because $out
+    }
 }
 
 # S2: 기존 Pester 스위트는 -Help / -DryRun 만 밟고 실제 설치 경로를 한 번도 실행하지 않았다.
@@ -527,6 +555,23 @@ Describe "onboarding Python detection (py -3 NativeCommandError regression)" {
         $out | Should -Not -Match "Python not found"
         Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $true `
             -Because "the original crash died before the hooks were installed; if the file remains, onboarding detection survived"
+    }
+
+    # 5.1 은 출력이 리다이렉트되면 네이티브 stderr 를 오류 레코드로 바꾼다. 온보딩이 '물을 수 없음'(2)을
+    # stderr 로 알리는 순간 $ErrorActionPreference=Stop 이 설치를 죽이면, 기본값 설치가 중단으로 둔갑한다.
+    It "on powershell.exe 5.1 an onboarding that cannot ask and says so on stderr still installs the defaults" -Skip:(-not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) {
+        if (-not $script:realPython) {
+            Set-ItResult -Skipped -Because "a real python must be on PATH so the stub py can run the onboarding stub"
+            return
+        }
+        $repo = Join-Path $script:sandbox "repo"
+        New-Item -ItemType Directory -Force -Path $repo | Out-Null
+        Copy-Item -Recurse (Join-Path $script:RepoRoot "scripts"), (Join-Path $script:RepoRoot "res") $repo
+        Set-Content -Path (Join-Path $repo "res\onboard.py") -Encoding ascii `
+            -Value "import sys`nsys.stderr.write('cannot ask here\n')`nsys.exit(2)"
+        $out = powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "scripts\setup.ps1") 2>&1 | Out-String
+        $out | Should -Not -Match "NativeCommandError"
+        Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $true -Because $out
     }
 }
 
