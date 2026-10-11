@@ -12,9 +12,11 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def check_path(path):
-    # Reject ancestor symlinks and Windows junctions as well as file links.
-    if os.path.normcase(str(path.resolve())) != os.path.normcase(str(path.absolute())):
+def check_path(path, home):
+    # Reject ancestor symlinks and Windows junctions as well as file links, but only below home.
+    # Links above it (macOS /var -> /private/var, a symlinked /home) are not the user's to preserve.
+    inside = home.resolve() / path.relative_to(home)
+    if os.path.normcase(str(inside.resolve())) != os.path.normcase(str(inside)):
         raise ValueError(f"Preserved linked path: {path}")
 
 
@@ -45,8 +47,8 @@ def apply(home, dry_run=False, uninstall=False):
     base = home / ".claude"
     skills = base / "skills"
     receipt = base / ".claude-code-setup-skills.json"
-    check_path(skills)
-    check_path(receipt)
+    check_path(skills, home)
+    check_path(receipt, home)
     files = read_receipt(receipt)
     before = dict(files)
     sources = {f"{p.parent.name}/SKILL.md": p for p in Path(__file__).parent.glob("*/SKILL.md")}
@@ -56,7 +58,7 @@ def apply(home, dry_run=False, uninstall=False):
     try:
         for relative in sorted(targets):
             target = skills / relative
-            check_path(target)
+            check_path(target, home)
             current = target.read_bytes() if target.exists() else None
             owned = relative in files
             if owned and current is not None and digest(current) != files[relative]:

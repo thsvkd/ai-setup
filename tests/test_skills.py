@@ -128,6 +128,22 @@ def test_linked_skill_directory_is_not_changed(tmp_path):
     assert not receipt(tmp_path).exists()
 
 
+def test_home_reached_through_a_link_still_installs(tmp_path):
+    """macOS 의 /var -> /private/var 처럼 홈 위쪽의 링크는 사용자가 만든 링크가 아니다.
+    mktemp 홈에서 설치 전체가 'Preserved linked path' 로 실패했다."""
+    real = tmp_path / "real"
+    real.mkdir()
+    home = tmp_path / "home"
+    if sys.platform == "win32":
+        result = subprocess.run(["cmd", "/c", "mklink", "/J", str(home), str(real)], capture_output=True)
+        assert result.returncode == 0
+    else:
+        home.symlink_to(real, target_is_directory=True)
+    result = run_worker(home)
+    assert result.returncode == 0, result.stdout
+    assert installed(real).read_bytes() == SOURCE.read_bytes()
+
+
 def run_setup(home, *args):
     env = dict(os.environ)
     env.update(USERPROFILE=str(home), HOME=str(home), CI="1")
