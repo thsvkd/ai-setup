@@ -57,6 +57,22 @@ Describe "setup.ps1 dispatcher" {
         Test-Path (Join-Path $env:USERPROFILE ".claude\settings.json") | Should -Be $false
     }
 
+    # 병합은 영수증을 보고 예전 설치가 넣은 항목을 걷어낸다. dry-run 이 영수증을 임시 홈에 복사하지
+    # 않으면 계획에서 빠져, 미리 본 것과 실제 설치가 달라진다.
+    It "-Hooks -DryRun plans the receipt-based retirement and writes nothing" {
+        $claude = Join-Path $env:USERPROFILE ".claude"
+        New-Item -ItemType Directory -Force -Path $claude | Out-Null
+        $settings = Join-Path $claude "settings.json"
+        $receipt = Join-Path $claude ".claude-code-setup.json"
+        Set-Content -Path $settings -Encoding ascii -Value '{"autoMode": {"allow": ["$defaults", "old exception"]}}'
+        Set-Content -Path $receipt -Encoding ascii -Value '{"version": 1, "added_auto_allow": ["$defaults", "old exception"]}'
+        $before = (Get-Content $settings -Raw) + (Get-Content $receipt -Raw)
+        $r = Invoke-Script $script:Setup @("-Hooks", "-DryRun")
+        $r.ExitCode | Should -Be 0 -Because $r.Output
+        $r.Output | Should -Match "no longer shipped"
+        ((Get-Content $settings -Raw) + (Get-Content $receipt -Raw)) | Should -Be $before
+    }
+
     It "-Uninstall -DryRun on clean profile exits 0" {
         $r = Invoke-Script $script:SetupHooks @("-Uninstall", "-DryRun")
         $r.ExitCode | Should -Be 0

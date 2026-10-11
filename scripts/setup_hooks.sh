@@ -95,7 +95,8 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "  🧪 DRY RUN mode — no real files will be changed or installed."
 fi
 
-WORK_HOME="$(resolve_install_home "$DRY_RUN" "$REAL_HOME" "settings.json")"
+# 영수증도 함께 복사한다 — 병합은 영수증을 보고 예전 설치가 넣은 항목을 걷어내므로, 없으면 dry-run 계획이 실제와 달라진다.
+WORK_HOME="$(resolve_install_home "$DRY_RUN" "$REAL_HOME" "settings.json" "$MANIFEST_NAME")"
 CLEANUP_DIR=""
 if [[ "$DRY_RUN" -eq 1 ]]; then
     CLEANUP_DIR="$WORK_HOME"

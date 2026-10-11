@@ -75,7 +75,8 @@ if ($DryRun) {
     Write-Host "  🧪 DRY RUN mode — no real files will be changed or installed." -ForegroundColor Magenta
 }
 
-$installHome = Resolve-InstallHome -DryRun:$DryRun -RealHome $RealUserHome -SeedFiles @("settings.json")
+# 영수증도 함께 복사한다 — 병합은 영수증을 보고 예전 설치가 넣은 항목을 걷어내므로, 없으면 dry-run 계획이 실제와 달라진다.
+$installHome = Resolve-InstallHome -DryRun:$DryRun -RealHome $RealUserHome -SeedFiles @("settings.json", $MANIFEST_NAME)
 $WorkHome = $installHome.WorkHome
 $hooksDir = Join-Path $WorkHome ".claude\hooks"
 $settingsPath = Join-Path $WorkHome ".claude\settings.json"

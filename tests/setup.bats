@@ -43,6 +43,21 @@ teardown() {
     [ ! -e "$HOME/.claude/settings.json" ]
 }
 
+# 병합은 영수증을 보고 예전 설치가 넣은 항목을 걷어낸다. dry-run 이 영수증을 임시 홈에 복사하지
+# 않으면 계획에서 빠져, 미리 본 것과 실제 설치가 달라진다.
+@test "setup.sh --hooks --dry-run plans the receipt-based retirement and writes nothing" {
+    mkdir -p "$HOME/.claude"
+    printf '{"autoMode": {"allow": ["$defaults", "old exception"]}}\n' > "$HOME/.claude/settings.json"
+    printf '{"version": 1, "added_auto_allow": ["$defaults", "old exception"]}\n' > "$HOME/.claude/.claude-code-setup.json"
+    before_settings="$(cat "$HOME/.claude/settings.json")"
+    before_receipt="$(cat "$HOME/.claude/.claude-code-setup.json")"
+    run bash "$REPO_ROOT/scripts/setup.sh" --hooks --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"no longer shipped"* ]]
+    [ "$(cat "$HOME/.claude/settings.json")" = "$before_settings" ]
+    [ "$(cat "$HOME/.claude/.claude-code-setup.json")" = "$before_receipt" ]
+}
+
 @test "setup_hooks.sh --uninstall --dry-run on clean HOME succeeds and writes nothing" {
     run bash "$REPO_ROOT/scripts/setup_hooks.sh" --uninstall --dry-run
     [ "$status" -eq 0 ]
