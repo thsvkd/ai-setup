@@ -188,7 +188,7 @@ fi
 echo ""
 echo "[4/4] Running self-test..."
 
-# git 스냅샷 백업은 여기서 돌리지 않는다. 결과가 cwd 가
+# git 스냅샷 백업은 여기서 돌리지 않는다. cwd 가
 # git 저장소인지에 따라 결과가 달라지는데, 설치는 저장소 밖에서도 실행된다(curl 부트스트랩).
 # 스냅샷은 cwd 저장소에 실제로 백업 ref 를 만들어 dry-run 도 깨뜨린다. 이 경로는
 # tests/test_git_snapshot.py 가 임시 저장소를 만들어 검증한다.

@@ -159,6 +159,8 @@ Describe "install.ps1 bootstrap" {
         $mock = "function Invoke-WebRequest { param(`$Uri, `$OutFile, `$UseBasicParsing, `$Headers) Copy-Item '$zip' `$OutFile }"
         $text = (Get-Content (Join-Path $script:RepoRoot "install.ps1") -Raw).Replace(
             "Set-StrictMode -Version Latest", "Set-StrictMode -Version Latest`r`n$mock")
+        # 대역이 안 들어가면 진짜 저장소를 내려받아 설치한다 — 그 전에 멈춘다.
+        $text | Should -Match "function Invoke-WebRequest"
         $inst = Join-Path $sb "install.ps1"
         [System.IO.File]::WriteAllText($inst, $text, (New-Object System.Text.UTF8Encoding $false))
         $oldTemp, $oldUP, $oldTok = $env:TEMP, $env:USERPROFILE, $env:GITHUB_TOKEN

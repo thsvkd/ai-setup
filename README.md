@@ -246,7 +246,7 @@ Claude Code 의 체크포인팅(`/rewind`)은 [공식 문서상](https://code.cl
 | `Remove-Item`/`del`/`rd` + 드라이브 루트(`C:\`)·`$env:USERPROFILE`·`$HOME` | ⛔ **차단** |
 | `mkfs*`/`newfs_*`/`fdisk`/`gdisk`/`sgdisk`/`parted`/`wipefs`, `dd of=/dev/*`, `diskutil erase*`, `/dev/sd*` 리다이렉트 | ⛔ **차단** |
 | `format <드라이브>:`, `diskpart`, `Clear-Disk`/`Initialize-Disk`/`Remove-Partition`/`Clear-Volume` | ⛔ **차단** |
-| `git push` — force push·원격 브랜치 삭제·`--mirror` 포함 | ✅ **판정하지 않음** — auto mode 분류기의 `Git Destructive` 규칙이 공유 브랜치(`main`, 기본 브랜치, `release/*` 등)의 force push 와 원격 브랜치 삭제를 막고, 자기 커밋만 있는 개인 브랜치의 force push 와 `--force-with-lease` 는 허용한다. 원격 히스토리를 확실히 지키려면 원격의 브랜치 보호(GitHub rulesets 의 force push·삭제 차단)를 쓴다 |
+| `git push` — force push·원격 브랜치 삭제·`--mirror` 포함 | ✅ **판정하지 않음** — auto mode 분류기의 `Git Destructive` 규칙이 공유 브랜치(`main`, 기본 브랜치, `release/*` 등)의 맨 force push 와 원격 브랜치·태그 삭제를 막는다. 자기 커밋만 있는 개인 브랜치의 force push 는 허용하고, `--force-with-lease` 는 파괴로 간주하지 않되 남의 작업을 지우는 것이 분명하면 막는다. 사용자가 대상을 명시하면 풀리는 soft-deny 다. 원격 히스토리를 확실히 지키려면 원격의 브랜치 보호(GitHub rulesets 의 force push·삭제 차단)를 쓴다 |
 | 그 외 전부 | ✅ 통과 (판단 안 함) |
 
 차단 규칙은 **명령 자리**에서 시작할 때만 잡는다. `grep -rn "rm -rf /" docs/` 처럼 위험한 문자열을 데이터로 다루는 명령은 막지 않는다 — 종전 오탐이 대부분 이 부류였다.
@@ -261,7 +261,7 @@ Claude Code 의 체크포인팅(`/rewind`)은 [공식 문서상](https://code.cl
 
 그래서 push 는 auto mode 분류기에 맡긴다. 기본 규칙 `Git Destructive` 가 의미 수준에서 공유 브랜치 force push 와 원격 브랜치 삭제를 막는다(`claude auto-mode defaults` 로 규칙 원문을 확인할 수 있다). 다른 권한 모드에서는 push 를 확인하는 것이 없으므로, 중요한 저장소는 원격의 브랜치 보호로 지킨다. 훅이 남기는 것은 되돌리는 수단(휴지통, git 스냅샷)과 되돌릴 수 없는 두 부류의 차단뿐이다.
 
-**업그레이드 시 자동 마이그레이션**: 예전 버전은 `Bash(git push *)`·`Bash(git push --force*)`·`Bash(git push -f*)`·`Bash(git reset --hard *)`(및 PowerShell 짝)을 `deny`로, `Bash(git push *)`(및 PowerShell 짝)을 `ask`로 배포했다. 병합 엔진은 원래 '추가만' 하므로 그 규칙들이 기존 설치본에 그대로 남고, deny/ask가 훅보다 우선하니 **새로 설치한 사람에게는 동작하고 업그레이드한 사람에게는 조용히 죽는** 상태가 된다. 그래서 설치 중에 매니페스트가 *이 설치가 넣었다*고 기록한 규칙만 제거하고, 무엇을 지웠는지 설치 리포트에 출력한다. 같은 문자열이라도 매니페스트에 없으면 사용자가 직접 넣은 규칙일 수 있으므로 지우지 않고 경고만 출력한다(매니페스트가 없던 2026-07-04 이전 설치본이 여기에 해당한다). 예전 버전이 `autoMode.allow` 에 넣은 'danger_guard 가 확인한 push 는 허용' 예외도 같은 방식으로 걷어낸다 — 훅이 push 를 판정하지 않게 된 지금 그 예외는 거짓 전제로 `Git Destructive` 규칙을 약하게 만든다. 예전 설치기가 매니페스트 근거 없이 지운 규칙은 매니페스트의 `removed_legacy` 에 남아 있어 `--uninstall` 시 복원된다.
+**업그레이드 시 자동 마이그레이션**: 예전 버전은 `Bash(git push *)`·`Bash(git push --force*)`·`Bash(git push -f*)`·`Bash(git reset --hard *)`(및 PowerShell 짝)을 `deny`로, `Bash(git push *)`(및 PowerShell 짝)을 `ask`로 배포했다. 병합 엔진은 원래 '추가만' 하므로 그 규칙들이 기존 설치본에 그대로 남고, deny/ask가 훅보다 우선하니 **새로 설치한 사람에게는 동작하고 업그레이드한 사람에게는 조용히 죽는** 상태가 된다. 그래서 설치 중에 매니페스트가 *이 설치가 넣었다*고 기록한 규칙만 제거하고, 무엇을 지웠는지 설치 리포트에 출력한다. 같은 문자열이라도 매니페스트에 없으면 사용자가 직접 넣은 규칙일 수 있으므로 지우지 않는다(매니페스트가 없던 2026-07-04 이전 설치본이 여기에 해당한다). 그중 스냅샷 백업을 막는 `reset --hard` deny 규칙만 경고를 출력한다 — push 규칙은 이제 훅과 충돌하지 않는다. 예전 버전이 `autoMode.allow` 에 넣은 'danger_guard 가 확인한 push 는 허용' 예외도 같은 방식으로 걷어낸다 — 훅이 push 를 판정하지 않게 된 지금 그 예외는 거짓 전제로 `Git Destructive` 규칙을 약하게 만든다. 예전 설치기가 매니페스트 근거 없이 지운 규칙은 매니페스트의 `removed_legacy` 에 남아 있어 `--uninstall` 시 복원된다.
 
 **훅이 죽어도 잃는 것은 복구 수단이지 실행 권한이 아니다.** 훅이 예외로 죽으면 Claude Code는 판정 없이 명령을 실행한다(fail-open). 종전에는 이때 확인으로 승격했지만 실측상 그 확인은 전부 마찰이기만 했으므로, 이제 내부 오류는 `guard.log`에 `guard-error`로 남기고 조용히 통과시킨다. 설치 후 셀프테스트가 통과했는지 확인하는 것이 그만큼 더 중요하다.
 

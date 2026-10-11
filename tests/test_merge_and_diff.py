@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 MERGE = ROOT / "res" / "hooks" / "merge_and_diff.py"
 FRAGMENT = ROOT / "res" / "settings.json"
@@ -38,10 +40,9 @@ def test_merge_into_empty(tmp_path):
     assert proc.returncode == 0
     assert result["permissions"]["defaultMode"] == "auto"
     assert "Bash" in result["permissions"]["allow"]
-    # force push/reset --hard 를 permissions.deny 로 막지 않는다 — 훅(danger_guard.py)이 브랜치
-    # 이름 기준 ask/통과와 백업-후-허용을 직접 판단하므로, 여기서 deny/ask 로 선점하면 훅의
-    # 판정(allow)이 permission 규칙에 의해 항상 밀린다(Claude Code 는 deny/ask 규칙이 훅보다
-    # 우선한다). 그래서 settings.json 자체에는 git 관련 deny/ask 항목이 없어야 한다.
+    # reset --hard 를 permissions.deny 로 막지 않는다 — 훅(danger_guard.py)이 스냅샷을 남긴 뒤
+    # 통과시키는데, deny 는 훅보다 우선한다. push 는 auto mode 분류기가 맡는다. 그래서
+    # settings.json 자체에는 git 관련 deny/ask 항목이 없어야 한다.
     assert "deny" not in result["permissions"] or not any(
         "git" in rule for rule in result["permissions"].get("deny", [])
     )
@@ -633,6 +634,43 @@ def test_retired_hook_registration_is_pruned(tmp_path):
     assert any("danger_guard.py" in c for c in cmds)
 
 
+def test_receipt_forgets_retired_rules_already_gone_so_a_user_copy_survives(tmp_path):
+    """예전 설치기가 지운 규칙이 영수증의 '우리가 더한 것'에 남아 있으면, 사용자가 나중에 같은 규칙을
+    직접 넣었을 때 다음 설치가 그것을 지운다."""
+    target = tmp_path / "settings.json"
+    target.write_text(json.dumps({"permissions": {"allow": ["Bash"]}}), encoding="utf-8")
+    manifest = _receipt_that_added(tmp_path, {"ask": ["Bash(git push *)"]})
+    run_merge(target, manifest_path=manifest)
+    s = json.loads(target.read_text(encoding="utf-8"))
+    s["permissions"].setdefault("ask", []).append("Bash(git push *)")   # 사용자가 직접 넣는다
+    target.write_text(json.dumps(s), encoding="utf-8")
+    _, result = run_merge(target, manifest_path=manifest)
+    assert "Bash(git push *)" in result["permissions"]["ask"]
+    _, result = run_uninstall(target, manifest)
+    assert "Bash(git push *)" in result["permissions"]["ask"]
+
+
+def test_uninstall_does_not_restore_a_removed_legacy_rule_the_receipt_says_was_ours(tmp_path):
+    target = tmp_path / "settings.json"
+    manifest = tmp_path / "manifest.json"
+    target.write_text(json.dumps({"permissions": {"allow": ["Bash"]}}), encoding="utf-8")
+    manifest.write_text(json.dumps({"version": 1, "added_allow": ["Bash"], "added_deny": ["Bash(git push *)"],
+                                    "removed_legacy": {"deny": ["Bash(git push *)"]}}), encoding="utf-8")
+    run_merge(target, manifest_path=manifest)
+    _, result = run_uninstall(target, manifest)
+    assert "Bash(git push *)" not in (result or {}).get("permissions", {}).get("deny", [])
+
+
+@pytest.mark.parametrize("receipt", ["[]", "null", '"text"'])
+def test_a_receipt_that_is_not_an_object_is_treated_as_missing(tmp_path, receipt):
+    target = tmp_path / "settings.json"
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(receipt, encoding="utf-8")
+    proc, result = run_merge(target, manifest_path=manifest)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert isinstance(json.loads(manifest.read_text(encoding="utf-8")), dict)
+
+
 # --- autoMode.allow ---
 # 예전 버전은 '훅이 가역성을 확인한 push 는 허용'이라는 auto mode 예외를 넣었다. 훅이 push 를 판정하지
 # 않게 된 지금 그 예외는 거짓 전제로 Git Destructive 규칙을 약하게 만든다. 설치는 autoMode 를 더하지
@@ -645,6 +683,18 @@ def test_install_adds_no_auto_mode(tmp_path):
     proc, result = run_merge(tmp_path / "settings.json")
     assert proc.returncode == 0, proc.stdout
     assert "autoMode" not in result
+
+
+def test_old_push_exception_already_removed_by_hand_is_forgotten(tmp_path):
+    """설정에서는 이미 손으로 지웠고 영수증에만 남은 경우. 남은 "$defaults" 를 걷고 영수증도 비운다."""
+    target = tmp_path / "settings.json"
+    target.write_text(json.dumps({"autoMode": {"allow": ["$defaults"]}}), encoding="utf-8")
+    manifest = _receipt_that_added(tmp_path, {"auto_allow": ["$defaults", OLD_PUSH_EXCEPTION]})
+    _, result = run_merge(target, manifest_path=manifest)
+    assert "autoMode" not in result
+    assert json.loads(manifest.read_text(encoding="utf-8"))["added_auto_allow"] == []
+    _, again = run_merge(target, manifest_path=manifest)
+    assert again == result
 
 
 def test_old_push_exception_and_its_defaults_are_retired(tmp_path):

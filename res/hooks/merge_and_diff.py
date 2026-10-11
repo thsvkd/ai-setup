@@ -62,9 +62,11 @@ def load_manifest(path):
         return {}
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except (OSError, ValueError):
         return {}
+    # 목록·null 같은 JSON 도 '깨진 영수증'이다. 그대로 돌려주면 병합이 중간에 죽는다.
+    return data if isinstance(data, dict) else {}
 
 
 def fold_receipt(previous: dict, current: dict) -> dict:
@@ -100,7 +102,9 @@ def fold_receipt(previous: dict, current: dict) -> dict:
 
     # 구버전 규칙 제거는 '첫 설치'에서만 일어난다 — 두 번째 실행은 이미 지워진 상태라 제거할
     # 것이 없어 빈 dict 를 낸다. 덮어쓰면 uninstall 이 무엇을 되돌려야 하는지 잊어버린다.
-    legacy = {k: list(v) for k, v in (previous.get("removed_legacy") or {}).items()}
+    # 영수증이 우리가 넣었다고 말하는 규칙은 예전 설치기가 지웠더라도 uninstall 이 되살리지 않는다.
+    legacy = {k: [r for r in v if r not in (previous.get("added_" + k) or [])]
+              for k, v in (previous.get("removed_legacy") or {}).items()}
     for key, rules in (current.get("removed_legacy") or {}).items():
         merged = legacy.setdefault(key, [])
         for rule in rules:
@@ -194,16 +198,19 @@ LEGACY_PERMISSION_RULES = {
 
 def retire_list(perms: dict, key: str, frag_perms: dict, previous: dict, changes: list) -> list:
     """예전 설치가 더했고 지금 조각에서 빠진 규칙을 걷어낸다. 영수증에 있는 것만 지운다.
-    반환: 걷어낸 규칙 — 영수증의 '우리가 더한 것' 목록에서도 빠진다."""
+
+    반환: 영수증의 '우리가 더한 것'에서 뺄 규칙 전부. 이미 설정에 없는 것도 포함한다 — 남겨 두면
+    사용자가 나중에 같은 문자열을 직접 넣었을 때 다음 설치가 그것을 우리 것으로 보고 지운다."""
     keep = set(frag_perms.get(key) or [])
     current = perms.get(key) or []
-    gone = [r for r in previous.get("added_" + key) or [] if r in current and r not in keep]
+    stale = [r for r in previous.get("added_" + key) or [] if r not in keep]
+    gone = [r for r in stale if r in current]
     if gone:
         perms[key] = [x for x in current if x not in gone]
         if not perms[key]:
             del perms[key]
         changes.append(f"permissions.{key}: -{gone} (no longer shipped)")
-    return gone
+    return stale
 
 
 def warn_legacy_rules(perms: dict, frag_perms: dict) -> None:
@@ -277,14 +284,20 @@ def retire_auto_allow(existing: dict, fragment: dict, previous: dict, changes: l
     판정하지 않게 된 지금 그 예외는 거짓 전제로 Git Destructive 규칙을 약하게 만든다. 우리가 함께
     넣은 "$defaults" 는 사용자 규칙이 남아 있으면 남긴다 — 빠지면 그 목록이 기본 allow 목록을 대체한다."""
     keep = ((fragment.get("autoMode") or {}).get("allow")) or []
-    auto = existing.get("autoMode")
-    if not isinstance(auto, dict) or not isinstance(auto.get("allow"), list):
-        return []
     added = previous.get("added_auto_allow") or []
-    gone = [x for x in added if x in auto["allow"] and x not in keep and x != "$defaults"]
+    auto = existing.get("autoMode")
+    if not isinstance(auto, dict) or "allow" not in auto:
+        # 지울 것이 없다. 영수증에서는 우리 것을 잊는다(autoMode 자체가 형식에 어긋나면 손대지 않는다).
+        return [x for x in added if x not in keep] if auto is None or isinstance(auto, dict) else []
+    if not isinstance(auto["allow"], list):
+        return []
+    # 이미 설정에 없는 항목도 영수증에서는 뺀다(retire_list 와 같은 이유).
+    stale = [x for x in added if x not in keep and x != "$defaults"]
+    gone = [x for x in stale if x in auto["allow"]]
     rest = [x for x in auto["allow"] if x not in gone]
     if rest == ["$defaults"] and "$defaults" in added and "$defaults" not in keep:
         gone.append("$defaults")
+        stale.append("$defaults")
         rest = []
     if gone:
         auto["allow"] = rest
@@ -293,7 +306,7 @@ def retire_auto_allow(existing: dict, fragment: dict, previous: dict, changes: l
         if not auto:
             del existing["autoMode"]
         changes.append(f"autoMode.allow: -{gone} (no longer shipped)")
-    return gone
+    return stale
 
 
 def revert_auto_allow(existing: dict, receipt: dict) -> list:
