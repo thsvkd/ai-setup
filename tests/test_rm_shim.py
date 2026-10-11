@@ -10,6 +10,7 @@
 """
 import os
 import shutil
+import site
 import subprocess
 from pathlib import Path
 
@@ -20,13 +21,18 @@ SHIM_DIR = REPO / "res" / "hooks" / "shims"
 BASE = REPO / ".tmp-rmshim"
 
 
+def bash_receives_env(bash="bash"):
+    """bash 가 넘겨준 환경을 받는가. Windows 의 WSL bash 는 받지 않는다."""
+    probe = subprocess.run([bash, "-c", 'printf %s "$RMSHIM_PROBE"'], capture_output=True,
+                           env=dict(os.environ, RMSHIM_PROBE="ok"))
+    return probe.stdout == b"ok"
+
+
 @pytest.fixture(scope="module", autouse=True)
 def base_dir():
     # 이 모듈의 bash 는 넘겨준 환경(PATH·HOME·D)을 받는다고 가정하고 rm 을 돌린다. Windows 에서
     # `bash` 가 WSL 로 잡히면 환경이 넘어가지 않아 엉뚱한 곳을 지운다. 그러면 아무것도 돌리지 않는다.
-    probe = subprocess.run(["bash", "-c", 'printf %s "$RMSHIM_PROBE"'], capture_output=True,
-                           env=dict(os.environ, RMSHIM_PROBE="ok"))
-    if probe.stdout != b"ok":
+    if not bash_receives_env():
         pytest.fail("bash does not receive the environment we pass (WSL bash?) - not running the rm tests: %r"
                     % shutil.which("bash"))
     shutil.rmtree(str(BASE), ignore_errors=True)
@@ -45,6 +51,12 @@ def make_fixture(d):
     os.symlink("a.txt", str(d / "link"))
 
 
+def path_without_shims():
+    """PATH 에서 셰임 디렉터리를 뺀다. 훅이 설치된 세션에서는 ~/.claude/hooks/shims 가 맨 앞에 있다."""
+    return os.pathsep.join(x for x in os.environ["PATH"].split(os.pathsep)
+                           if os.path.basename(x.rstrip("/\\")) != "shims")
+
+
 def observe(script, use_shim):
     """스크립트를 돌리고 (종료 코드, 남은 파일 목록)을 돌려준다."""
     d = BASE / ("shim" if use_shim else "real")
@@ -52,6 +64,7 @@ def observe(script, use_shim):
     env = dict(os.environ)
     env.pop("CLAUDE_NO_TRASH", None)
     env["D"] = str(d)
+    env["PATH"] = path_without_shims()
     if use_shim:
         env["PATH"] = str(SHIM_DIR) + os.pathsep + env["PATH"]
     proc = subprocess.run(["bash", "-c", script], cwd=str(d), env=env,
@@ -121,6 +134,27 @@ def run_via_shim(script, **kwargs):
     return proc
 
 
+def test_env_probe_rejects_a_bash_that_drops_the_environment(tmp_path):
+    """가드 자체의 검증. WSL bash 처럼 환경을 버리는 bash 를 걸러내지 못하면 모듈이 실제 홈을 지운다."""
+    if os.name == "nt":
+        pytest.skip("a fake bash script needs a POSIX shell to run it")
+    fake = tmp_path / "bash"
+    fake.write_text('#!/bin/sh\nexec env -i /bin/sh "$@"\n', encoding="utf-8")
+    fake.chmod(0o755)
+    assert bash_receives_env()
+    assert not bash_receives_env(str(fake))
+
+
+def test_shim_guard_stops_before_rm_when_rm_is_not_the_shim():
+    """가드 자체의 검증. rm 이 셰임이 아니면 아무것도 지우지 않고 97 로 끝나야 한다."""
+    target = BASE / "guard-target"
+    target.write_text("x", encoding="utf-8")
+    env = dict(os.environ, T=str(target), PATH=path_without_shims())
+    proc = subprocess.run(["bash", "-c", SHIM_GUARD + 'rm -f "$T"'], env=env, capture_output=True)
+    assert proc.returncode == 97
+    assert target.is_file()
+
+
 def _guarded_home():
     """tmp 밖의 가짜 홈. 셰임은 tmp 아래의 HOME 은 보호하지 않으므로 BASE 아래에 둔다."""
     home = BASE / "guarded-home"
@@ -165,14 +199,21 @@ def test_tmp_targets_are_really_deleted(tmp_path):
 
 @pytest.mark.skipif(shutil.which("trash-put") is None, reason="trash-put not installed")
 def test_deleted_content_is_recoverable():
+    # 휴지통도 실제 홈의 것을 쓰지 않는다. 같은 파일 시스템의 가짜 홈을 주면 trash-cli 는 그 아래
+    # Trash 를 쓴다.
     d = BASE / "rec"
     make_fixture(d)
-    env = dict(os.environ)
+    home = BASE / "trash-home"
+    # `pip --user` 로 깔린 trash-cli 는 HOME 을 바꾸면 자기 모듈을 못 찾는다. 모듈 위치만 알려 준다.
+    env = dict(os.environ, HOME=str(home), XDG_DATA_HOME=str(home / ".local" / "share"),
+               PYTHONUSERBASE=site.getuserbase())
+    env.pop("CLAUDE_NO_TRASH", None)
     env["PATH"] = str(SHIM_DIR) + os.pathsep + env["PATH"]
-    subprocess.run(["bash", "-c", "rm -rf sub"], cwd=str(d), env=env, capture_output=True)
+    run_via_shim("rm -rf sub", cwd=str(d), env=env)
     assert not (d / "sub").exists()
-    listing = subprocess.run(["trash-list"], capture_output=True, text=True, encoding="utf-8").stdout
+    listing = subprocess.run(["trash-list"], capture_output=True, text=True, encoding="utf-8", env=env).stdout
     assert str(d / "sub") in listing
+    assert (home / ".local" / "share" / "Trash" / "files" / "sub").is_dir()
 
 
 def test_macos_builtin_trash_is_used_when_trash_put_is_absent(tmp_path):

@@ -42,6 +42,19 @@ Get-ChildItem -Recurse -Force -Name | Sort-Object | ForEach-Object { Write-Outpu
         $out = & (Join-Path $PSHOME 'pwsh') -NoProfile -Command $body 2>&1
         return (($out | Where-Object { $_ -match '^(F:|<<ERR>>)' }) -join "`n")
     }
+
+    # 셰임이 실제로 잡혔는지, 홈이 샌드박스인지 같은 세션에서 확인하고, 아니면 아무것도 지우지 않고 97 로 끝낸다.
+    function Invoke-Guarded([string]$module, [bool]$posixHome, [string]$sandbox, [string]$script) {
+        $out = & (Join-Path $PSHOME 'pwsh') -NoProfile -Command @"
+`$ErrorActionPreference='Stop'
+Import-Module '$module' -Force -DisableNameChecking -Global
+if ((Get-Command Remove-Item).Source -ne 'RmShim') { exit 97 }
+if ('$posixHome' -eq 'True' -and `$HOME -ne '$sandbox') { exit 97 }
+`$ErrorActionPreference='Continue'
+$script
+"@ 2>&1 | Out-String
+        return [pscustomobject]@{ Out = $out; Rc = $LASTEXITCODE }
+    }
 }
 
 AfterAll {
@@ -112,19 +125,22 @@ Describe 'refuses to delete the entire root/home' {
         $env:HOME = $sandbox
         $env:PATH = $fakeBin + [System.IO.Path]::PathSeparator + $env:PATH
         try {
-            # 셰임이 실제로 잡혔는지, 홈이 샌드박스인지 같은 세션에서 확인하고, 아니면 아무것도 지우지 않고 97 로 끝낸다.
-            $out = & (Join-Path $PSHOME 'pwsh') -NoProfile -Command @"
-`$ErrorActionPreference='Stop'
-Import-Module '$ModulePath' -Force -DisableNameChecking -Global
-if ((Get-Command Remove-Item).Source -ne 'RmShim') { exit 97 }
-if ('$posixHome' -eq 'True' -and `$HOME -ne '$sandbox') { exit 97 }
-`$ErrorActionPreference='Continue'
-$script
-"@ 2>&1 | Out-String
-            $rc = $LASTEXITCODE
+            $r = Invoke-Guarded $ModulePath $posixHome $sandbox $script
         } finally { $env:USERPROFILE = $old[0]; $env:HOME = $old[1]; $env:PATH = $old[2] }
-        $rc | Should -Not -Be 97 -Because "the shim and the sandbox home must be in effect: $out"
-        $out | Should -Match 'refusing'
+        $r.Rc | Should -Not -Be 97 -Because "the shim and the sandbox home must be in effect: $($r.Out)"
+        $r.Out | Should -Match 'refusing'
+        (Test-Path -LiteralPath (Join-Path $sandbox 'keep')) | Should -BeTrue
+    }
+
+    # 가드 자체의 검증. 셰임이 잡히지 않으면 원본 Remove-Item 이 지우기 전에 97 로 끝나야 한다.
+    It 'the guard stops before deleting when the shim is not loaded' {
+        $sandbox = Join-Path $Base 'guard-check'
+        New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
+        'x' | Set-Content -LiteralPath (Join-Path $sandbox 'keep')
+        $empty = Join-Path $Base 'NotTheShim.psm1'
+        '# Remove-Item 을 가리지 않는 빈 모듈' | Set-Content -LiteralPath $empty
+        $r = Invoke-Guarded $empty $false $sandbox "Remove-Item -LiteralPath '$sandbox' -Recurse -Force"
+        $r.Rc | Should -Be 97
         (Test-Path -LiteralPath (Join-Path $sandbox 'keep')) | Should -BeTrue
     }
 }
@@ -137,12 +153,24 @@ Describe 'deleted content can be recovered' {
         }
         $dir = Join-Path $Base 'rec'
         New-Fixture $dir
-        & (Join-Path $PSHOME 'pwsh') -NoProfile -Command @"
+        # 휴지통도 실제 홈의 것을 쓰지 않는다. `pip --user` 로 깔린 trash-cli 가 모듈을 찾도록
+        # PYTHONUSERBASE 만 실제 위치로 둔다.
+        $trashHome = Join-Path $Base 'trash-home'
+        $userBase = (& python3 -c 'import site; print(site.getuserbase())' | Out-String).Trim()
+        $old = @($env:HOME, $env:XDG_DATA_HOME, $env:PYTHONUSERBASE)
+        $env:HOME = $trashHome
+        $env:XDG_DATA_HOME = Join-Path $trashHome '.local/share'
+        $env:PYTHONUSERBASE = $userBase
+        try {
+            & (Join-Path $PSHOME 'pwsh') -NoProfile -Command @"
 Import-Module '$ModulePath' -Force -DisableNameChecking -Global
 Set-Location -LiteralPath '$dir'
 Remove-Item sub -Recurse -Force
 "@ | Out-Null
+            $listing = & trash-list | Out-String
+        } finally { $env:HOME = $old[0]; $env:XDG_DATA_HOME = $old[1]; $env:PYTHONUSERBASE = $old[2] }
         (Test-Path -LiteralPath (Join-Path $dir 'sub')) | Should -BeFalse
-        (& trash-list | Out-String) | Should -BeLike ("*" + (Join-Path $dir 'sub') + "*")
+        $listing | Should -BeLike ("*" + (Join-Path $dir 'sub') + "*")
+        (Test-Path -LiteralPath (Join-Path $trashHome '.local/share/Trash/files/sub')) | Should -BeTrue
     }
 }
