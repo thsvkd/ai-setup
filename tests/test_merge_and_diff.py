@@ -634,78 +634,69 @@ def test_retired_hook_registration_is_pruned(tmp_path):
 
 
 # --- autoMode.allow ---
-# 훅이 가역성을 확인한 force push 를 auto mode 분류기가 다시 막지 않도록 허용 예외를 더한다.
-# 목록에 "$defaults" 가 없으면 Claude Code 가 기본 allow 목록을 통째로 대체한다.
+# 예전 버전은 '훅이 가역성을 확인한 push 는 허용'이라는 auto mode 예외를 넣었다. 훅이 push 를 판정하지
+# 않게 된 지금 그 예외는 거짓 전제로 Git Destructive 규칙을 약하게 만든다. 설치는 autoMode 를 더하지
+# 않고, 영수증이 우리가 넣었다고 말하는 항목만 걷어낸다.
 
-def _frag_auto_allow():
-    return json.loads(FRAGMENT.read_text(encoding="utf-8"))["autoMode"]["allow"]
+OLD_PUSH_EXCEPTION = "Reversible git push (clears only Git Destructive): ..."
 
 
-def test_auto_allow_is_created_with_defaults_when_absent(tmp_path):
+def test_install_adds_no_auto_mode(tmp_path):
     proc, result = run_merge(tmp_path / "settings.json")
     assert proc.returncode == 0, proc.stdout
-    assert result["autoMode"]["allow"] == _frag_auto_allow()
-    assert result["autoMode"]["allow"][0] == "$defaults"
-
-
-def test_auto_allow_keeps_user_list_and_choice_to_drop_defaults(tmp_path):
-    target = tmp_path / "settings.json"
-    target.write_text(json.dumps({"autoMode": {"allow": ["mine"], "environment": ["env"]}}),
-                      encoding="utf-8")
-    proc, result = run_merge(target)
-    assert proc.returncode == 0, proc.stdout      # 기존 autoMode 를 '예상 밖 변경'으로 보면 설치가 실패한다
-    rules = [r for r in _frag_auto_allow() if r != "$defaults"]
-    assert result["autoMode"]["allow"] == ["mine"] + rules
-    assert result["autoMode"]["environment"] == ["env"]
-
-
-def test_uninstall_removes_only_auto_allow_it_added_even_after_reinstall(tmp_path):
-    target = tmp_path / "settings.json"
-    manifest = tmp_path / "manifest.json"
-    target.write_text(json.dumps({"autoMode": {"environment": ["env"]}}), encoding="utf-8")
-    run_merge(target, manifest_path=manifest)
-    run_merge(target, manifest_path=manifest)            # 멱등 재실행도 영수증을 잊지 않아야 한다
-    _, result = run_uninstall(target, manifest)
-    assert result["autoMode"] == {"environment": ["env"]}
-
-    target.write_text("{}", encoding="utf-8")
-    manifest.unlink()
-    run_merge(target, manifest_path=manifest)
-    _, result = run_uninstall(target, manifest)
     assert "autoMode" not in result
 
 
-def test_uninstall_keeps_defaults_when_user_added_rules_after_install(tmp_path):
+def test_old_push_exception_and_its_defaults_are_retired(tmp_path):
+    """우리가 넣은 항목만 남았으면 "$defaults" 와 빈 autoMode 까지 걷어낸다. 다른 하위 키는 남긴다."""
+    target = tmp_path / "settings.json"
+    target.write_text(json.dumps({"autoMode": {"allow": ["$defaults", OLD_PUSH_EXCEPTION],
+                                               "environment": ["env"]}}), encoding="utf-8")
+    manifest = _receipt_that_added(tmp_path, {"auto_allow": ["$defaults", OLD_PUSH_EXCEPTION]})
+    proc, result = run_merge(target, manifest_path=manifest)
+    assert proc.returncode == 0, proc.stdout     # autoMode 가 바뀌어도 '예상 밖 변경'으로 실패하면 안 된다
+    assert result["autoMode"] == {"environment": ["env"]}
+    assert json.loads(manifest.read_text(encoding="utf-8"))["added_auto_allow"] == []
+
+    target.write_text(json.dumps({"autoMode": {"allow": ["$defaults", OLD_PUSH_EXCEPTION]}}), encoding="utf-8")
+    manifest = _receipt_that_added(tmp_path, {"auto_allow": ["$defaults", OLD_PUSH_EXCEPTION]})
+    _, result = run_merge(target, manifest_path=manifest)
+    assert "autoMode" not in result
+
+
+def test_retiring_keeps_user_rules_and_the_defaults_they_rely_on(tmp_path):
     """"$defaults" 가 빠지면 남은 사용자 규칙이 기본 allow 목록을 통째로 대체한다."""
     target = tmp_path / "settings.json"
-    manifest = tmp_path / "manifest.json"
-    target.write_text("{}", encoding="utf-8")
-    run_merge(target, manifest_path=manifest)
-    s = json.loads(target.read_text(encoding="utf-8"))
-    s["autoMode"]["allow"].append("mine")
-    target.write_text(json.dumps(s), encoding="utf-8")
-    _, result = run_uninstall(target, manifest)
+    target.write_text(json.dumps({"autoMode": {"allow": ["$defaults", OLD_PUSH_EXCEPTION, "mine"]}}),
+                      encoding="utf-8")
+    manifest = _receipt_that_added(tmp_path, {"auto_allow": ["$defaults", OLD_PUSH_EXCEPTION]})
+    _, result = run_merge(target, manifest_path=manifest)
     assert result["autoMode"]["allow"] == ["$defaults", "mine"]
 
 
-def test_auto_allow_text_from_an_older_install_is_replaced_not_kept(tmp_path):
-    """예외 문구를 좁혀도 합집합 병합만 하면 옛 넓은 문구가 옆에 남아 계속 열려 있다."""
-    old = "Reversible git push (old, broader wording)"
+def test_auto_allow_without_a_receipt_is_left_alone(tmp_path):
+    """영수증이 없으면 같은 문구라도 사용자가 직접 넣은 것일 수 있다."""
     target = tmp_path / "settings.json"
-    target.write_text(json.dumps({"autoMode": {"allow": ["$defaults", old, "mine"]}}), encoding="utf-8")
-    manifest = _receipt_that_added(tmp_path, {"auto_allow": ["$defaults", old]})
-    proc, result = run_merge(target, manifest_path=manifest)
-    assert proc.returncode == 0, proc.stdout
-    assert old not in result["autoMode"]["allow"]
-    assert "mine" in result["autoMode"]["allow"]          # 영수증에 없는 사용자 규칙은 남는다
-    for rule in _frag_auto_allow():
-        assert rule in result["autoMode"]["allow"]
-    assert old not in json.loads(manifest.read_text(encoding="utf-8"))["added_auto_allow"]
+    original = {"autoMode": {"allow": ["$defaults", OLD_PUSH_EXCEPTION]}}
+    target.write_text(json.dumps(original), encoding="utf-8")
+    _, result = run_merge(target, manifest_path=tmp_path / "manifest.json")
+    assert result["autoMode"] == original["autoMode"]
+
+
+def test_uninstall_removes_only_auto_allow_an_old_install_added(tmp_path):
+    target = tmp_path / "settings.json"
+    target.write_text(json.dumps({"permissions": {"allow": ["Bash"]},
+                                  "autoMode": {"allow": ["$defaults", OLD_PUSH_EXCEPTION, "mine"]}}),
+                      encoding="utf-8")
+    manifest = _receipt_that_added(tmp_path, {"allow": ["Bash"], "auto_allow": ["$defaults", OLD_PUSH_EXCEPTION]})
+    _, result = run_uninstall(target, manifest)
+    assert result["autoMode"]["allow"] == ["$defaults", "mine"]
 
 
 def test_malformed_auto_mode_is_left_untouched(tmp_path):
     target = tmp_path / "settings.json"
     target.write_text(json.dumps({"autoMode": {"allow": "not a list"}}), encoding="utf-8")
-    proc, result = run_merge(target)
+    manifest = _receipt_that_added(tmp_path, {"auto_allow": ["$defaults", OLD_PUSH_EXCEPTION]})
+    proc, result = run_merge(target, manifest_path=manifest)
     assert proc.returncode == 0, proc.stdout
     assert result["autoMode"] == {"allow": "not a list"}

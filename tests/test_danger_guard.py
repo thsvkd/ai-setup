@@ -1,9 +1,9 @@
 """danger_guard.py 정책 테스트 (Bash + PowerShell 툴 공용).
 
-이 훅의 계약은 셋뿐이다.
-  1) 되돌릴 수 없는 두 부류만 deny — 루트/홈 전체 삭제, 디스크 파괴.
-  2) 로컬에 없는 원격 커밋을 지우는 push(기본 브랜치 force push, --mirror, 원격 브랜치 삭제)만 ask.
-  3) 그 외에는 명령을 '한 글자도 바꾸지 않고' 통과시킨다. Bash 셰임 PATH 는 SessionStart 가
+이 훅의 계약은 둘뿐이다.
+  1) 되돌릴 수 없는 두 부류만 deny — 루트/홈 전체 삭제, 디스크 파괴. push 는 판정하지 않는다
+     (auto mode 의 Git Destructive 규칙이 맡는다. tests/test_git_snapshot.py 참고).
+  2) 그 외에는 명령을 '한 글자도 바꾸지 않고' 통과시킨다. Bash 셰임 PATH 는 SessionStart 가
      CLAUDE_ENV_FILE 로 설정하고, PowerShell 삭제에만 모듈 Import 선행 한 줄을 붙인다.
 
 그래서 이 파일의 절반은 '무엇을 막는가'가 아니라 '무엇을 막지 않는가'다. 종전 가드가

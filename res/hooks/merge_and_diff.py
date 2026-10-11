@@ -177,26 +177,17 @@ def merge_list(perms, key, incoming, changes):
     return added
 
 
-# 예전 버전의 res/settings.json 이 배포했던 permissions 규칙. Claude Code 는 permissions 의 deny/ask
-# 를 PreToolUse 훅의 판정보다 우선 적용하므로, 이게 남아 있으면 danger_guard 의 git 정책이 통째로
-# 무력화된다. 영수증이 '우리가 넣었다'고 말하는 것은 retire_list 가 걷어낸다. 영수증에 없는 것은
-# 사용자가 직접 쓴 같은 문자열일 수 있어 지우지 않고 알리기만 한다(영수증이 없던 2026-07-04 이전
-# 설치본이 여기에 해당한다).
+# 예전 버전의 res/settings.json 이 배포했던 permissions 규칙. Claude Code 는 permissions 의 deny 를
+# PreToolUse 훅보다 우선 적용하므로, 이게 남아 있으면 reset --hard 전에 스냅샷을 남기고 실행하는
+# danger_guard 의 정책이 무력화된다. 영수증이 '우리가 넣었다'고 말하는 것은 retire_list 가
+# 걷어낸다. 영수증에 없는 것은 사용자가 직접 쓴 같은 문자열일 수 있어 지우지 않고 알리기만 한다
+# (영수증이 없던 2026-07-04 이전 설치본이 여기에 해당한다).
 LEGACY_PERMISSION_RULES = {
+    # 예전 조각은 git push 규칙도 deny/ask 로 배포했다. 훅이 push 를 판정하지 않는 지금 그 규칙은
+    # 훅과 충돌하지 않으므로 경고하지 않는다(영수증에 있으면 retire_list 가 걷어낸다).
     "deny": [
-        "Bash(git push *)",
-        "Bash(git push --force*)",
-        "Bash(git push -f*)",
         "Bash(git reset --hard *)",
-        "PowerShell(git push *)",
-        "PowerShell(git push --force*)",
-        "PowerShell(git push -f*)",
         "PowerShell(git reset --hard *)",
-    ],
-    # 7377065~c73cf92 사이의 조각이 ask 로 배포했다. 남아 있으면 fast-forward push 까지 매번 묻는다.
-    "ask": [
-        "Bash(git push *)",
-        "PowerShell(git push *)",
     ],
 }
 
@@ -280,44 +271,29 @@ def merge_env(existing: dict, fragment: dict, changes: list) -> dict:
 
 
 def retire_auto_allow(existing: dict, fragment: dict, previous: dict, changes: list) -> list:
-    """예전 설치가 autoMode.allow 에 더했고 지금 조각에서 빠진 항목(문구가 바뀐 예외 등)을 걷어낸다.
-    합집합 병합만 하면 옛 문구가 새 문구 옆에 남아, 좁혀 놓은 예외가 옛 넓은 예외로 계속 열려 있다."""
+    """예전 설치가 autoMode.allow 에 더했고 지금 조각에서 빠진 항목을 걷어낸다.
+
+    예전 버전은 'danger_guard 가 가역성을 확인한 push 는 허용'이라는 예외를 넣었다. 훅이 push 를
+    판정하지 않게 된 지금 그 예외는 거짓 전제로 Git Destructive 규칙을 약하게 만든다. 우리가 함께
+    넣은 "$defaults" 는 사용자 규칙이 남아 있으면 남긴다 — 빠지면 그 목록이 기본 allow 목록을 대체한다."""
     keep = ((fragment.get("autoMode") or {}).get("allow")) or []
     auto = existing.get("autoMode")
     if not isinstance(auto, dict) or not isinstance(auto.get("allow"), list):
         return []
-    gone = [x for x in previous.get("added_auto_allow") or []
-            if x in auto["allow"] and x not in keep and x != "$defaults"]
+    added = previous.get("added_auto_allow") or []
+    gone = [x for x in added if x in auto["allow"] and x not in keep and x != "$defaults"]
+    rest = [x for x in auto["allow"] if x not in gone]
+    if rest == ["$defaults"] and "$defaults" in added and "$defaults" not in keep:
+        gone.append("$defaults")
+        rest = []
     if gone:
-        auto["allow"] = [x for x in auto["allow"] if x not in gone]
+        auto["allow"] = rest
+        if not rest:
+            del auto["allow"]
+        if not auto:
+            del existing["autoMode"]
         changes.append(f"autoMode.allow: -{gone} (no longer shipped)")
     return gone
-
-
-def merge_auto_allow(existing: dict, fragment: dict, changes: list) -> list:
-    """autoMode.allow(auto mode 분류기의 허용 예외)에 조각의 규칙을 합집합으로 더한다.
-    실제로 추가한 항목을 반환한다 (uninstall 정밀 복원의 근거).
-
-    목록에 "$defaults" 가 없으면 Claude Code 는 기본 allow 목록을 통째로 대체한다. 그래서 목록이
-    없을 때 만들면서 "$defaults" 를 함께 넣고, 사용자가 이미 목록을 갖고 있으면 그 선택(기본값을
-    빼고 쓰는 것 포함)을 존중해 "$defaults" 는 더하지 않는다."""
-    incoming = ((fragment.get("autoMode") or {}).get("allow")) or []
-    if not incoming:
-        return []
-    auto = existing.get("autoMode", {})
-    if not isinstance(auto, dict) or not isinstance(auto.get("allow", []), list):
-        # 형식이 어긋난 사용자 값을 덮어쓰면 uninstall 이 원래 값을 되살릴 수 없다 — 건드리지 않는다.
-        # changes 에 넣으면 설치기가 '변경 있음'으로 보고 실행할 때마다 백업을 만든다.
-        print("  ⚠️ autoMode.allow: unexpected format (not an object/list); skipping merge")
-        return []
-    has_list = isinstance(auto.get("allow"), list)
-    current = list(auto["allow"]) if has_list else []
-    added = [x for x in incoming if x not in current and not (has_list and x == "$defaults")]
-    if added:
-        auto["allow"] = current + added
-        existing["autoMode"] = auto
-        changes.append(f"autoMode.allow: +{added}")
-    return added
 
 
 def revert_auto_allow(existing: dict, receipt: dict) -> list:
@@ -388,7 +364,6 @@ def merge(existing: dict, fragment: dict, previous: dict = None):
     receipt["added_scalars"] = merge_scalars(existing, fragment, changes)
     receipt["added_env"] = merge_env(existing, fragment, changes)
     receipt["retired"]["auto_allow"] = retire_auto_allow(existing, fragment, previous, changes)
-    receipt["added_auto_allow"] = merge_auto_allow(existing, fragment, changes)
 
     frag_perms = fragment.get("permissions", {})
     if frag_perms:
@@ -531,10 +506,10 @@ def top_level_diff(before: dict, after: dict):
         # '예상치 못한 변경' 위반 검사에서 제외한다. 사용자의 기존 env 키/값 보존은 merge_env 가 보장한다.
         if k in ("permissions", "hooks", "env"):
             continue
-        if k == "autoMode" and isinstance(before[k], dict) and isinstance(after.get(k), dict):
-            # merge_auto_allow 는 allow 만 바꾼다. 그 밖의 autoMode 하위 키는 그대로여야 한다.
+        if k == "autoMode" and isinstance(before[k], dict) and isinstance(after.get(k, {}), dict):
+            # retire_auto_allow 는 allow 만 바꾸고, 비면 autoMode 까지 지운다. 그 밖의 하위 키는 그대로여야 한다.
             same = {x: v for x, v in before[k].items() if x != "allow"} == \
-                {x: v for x, v in after[k].items() if x != "allow"}
+                {x: v for x, v in after.get(k, {}).items() if x != "allow"}
             (preserved if same else violated).append(k)
             continue
         (preserved if after.get(k) == before.get(k) else violated).append(k)

@@ -1,17 +1,11 @@
 {
-  "_comment": "실제 Claude Code settings.json 조각(SSoT). 여기 보이는 구조가 그대로 병합·설치된다. 설치 시 {{PY}}는 감지된 python 실행 명령(python / py -3 등)으로, {{HOOKS_DIR}}는 유저 훅 디렉터리(예: ~/.claude/hooks)로 치환된다. merge_and_diff.py가 permissions/hooks를 외과적으로 병합하고, model/effortLevel/language(스칼라)와 env 하위의 우리 관리 키(CLAUDE_CODE_SCROLL_SPEED, Windows 설치에서만 GRAFT_TEST_SYNC_RUN)는 '없을 때만' 추가하고, autoMode.allow 는 합집합으로 더한다(목록이 없을 때만 $defaults 를 함께 넣는다)(기존 값이 있으면 사용자 선택을 그대로 보존 — allow/deny 와 동일한 union 철학). env 객체 자체와 사용자의 기존 env 키/값, 그 외 최상위 키(statusLine 등)는 100% 보존한다. PowerShell 규칙/matcher는 Windows용이며 POSIX에선 무해(inert)하다. 이 _comment 키는 병합 시 무시되어 대상 settings.json에는 들어가지 않는다.",
+  "_comment": "실제 Claude Code settings.json 조각(SSoT). 여기 보이는 구조가 그대로 병합·설치된다. 설치 시 {{PY}}는 감지된 python 실행 명령(python / py -3 등)으로, {{HOOKS_DIR}}는 유저 훅 디렉터리(예: ~/.claude/hooks)로 치환된다. merge_and_diff.py가 permissions/hooks를 외과적으로 병합하고, model/effortLevel/language(스칼라)와 env 하위의 우리 관리 키(CLAUDE_CODE_SCROLL_SPEED, Windows 설치에서만 GRAFT_TEST_SYNC_RUN)는 '없을 때만' 추가하고, 예전 설치가 넣은 autoMode.allow 항목은 설치 영수증을 근거로 걷어낸다(기존 값이 있으면 사용자 선택을 그대로 보존 — allow/deny 와 동일한 union 철학). env 객체 자체와 사용자의 기존 env 키/값, 그 외 최상위 키(statusLine 등)는 100% 보존한다. PowerShell 규칙/matcher는 Windows용이며 POSIX에선 무해(inert)하다. 이 _comment 키는 병합 시 무시되어 대상 settings.json에는 들어가지 않는다.",
   "model": "opus",
   "effortLevel": "xhigh",
   "language": "korean",
   "env": {
     "CLAUDE_CODE_SCROLL_SPEED": "3",
     "GRAFT_TEST_SYNC_RUN": "{{HOOKS_DIR}}/graft_sync_hidden.cjs"
-  },
-  "autoMode": {
-    "allow": [
-      "$defaults",
-      "Reversible git push (clears only Git Destructive): a directly invoked `git push` in the session's working repository, to a remote name that was already configured when the session started (not added, renamed or repointed during it), that force-updates a branch with --force, -f, --force-with-lease or a +refspec, or deletes a branch with --delete or :branch. For these commands the user's danger_guard PreToolUse hook queries the remote, asks the user whenever a remote commit the push would overwrite or delete is missing locally, and otherwise pins those commits under refs/claude-backups/ so the remote can be restored. Every other rule (Data Exfiltration, Credential Leakage, Code That Leaks When Run, Production Deploy, Unverifiable Deletion Scope for variable ref names) still judges the push as if this exception did not exist. It does not cover --mirror or --prune; tags; deploy or publication branches (production, prod-*, release, release-*, release/*, gh-pages); pushes wrapped in sh -c/bash -c, git aliases or scripts; pushes run with --git-dir, GIT_DIR, GIT_WORK_TREE or `git -c` remote overrides; pushes to a URL or another repository; ref deletion through gh, APIs or other tools; or a push the user forbade or declined in the hook's prompt."
-    ]
   },
   "permissions": {
     "defaultMode": "auto",
