@@ -1,4 +1,4 @@
-# claude-code-setup
+# ai-setup
 
 Claude Code를 **실수해도 되돌릴 수 있게** 만드는 사용자 레벨 설정 모음. 명령 한 줄로 Windows / macOS / Linux에 설치한다.
 
@@ -27,12 +27,12 @@ gh auth login -h github.com
 
 macOS / Linux:
 ```sh
-curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh
+curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh
 ```
 
 Windows — Git Bash가 아니라 PowerShell에서 실행한다(Git Bash로 설치하면 Windows 휴지통 연동이 빠진다):
 ```powershell
-irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1 | iex
+irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1 | iex
 ```
 
 **3. 고르기** — 실행하면 무엇을 설치할지 묻는다. 방향키로 고르고 Enter.
@@ -74,12 +74,12 @@ irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubuserco
 
 플래그 넘기는 법 — POSIX는 `sh -s --` 뒤에 붙인다:
 ```sh
-curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --hooks --dry-run
+curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh -s -- --hooks --dry-run
 ```
 
 PowerShell은 `| iex`로는 인자를 넘길 수 없어서 scriptblock으로 감싼다:
 ```powershell
-& ([scriptblock]::Create((irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -Hooks -DryRun
+& ([scriptblock]::Create((irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1))) -Hooks -DryRun
 ```
 
 레포를 clone했다면 `bash scripts/setup.sh --dry-run` / `.\scripts\setup.ps1 -DryRun`처럼 직접 실행해도 된다.
@@ -89,10 +89,10 @@ PowerShell은 `| iex`로는 인자를 넘길 수 없어서 scriptblock으로 감
 ## 제거
 
 ```sh
-curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh -s -- --uninstall
+curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh -s -- --uninstall
 ```
 ```powershell
-& ([scriptblock]::Create((irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -Uninstall
+& ([scriptblock]::Create((irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1))) -Uninstall
 ```
 
 설치가 추가한 훅·권한·키바인딩·수정되지 않은 관리 스킬만 빼고, 원래 있던 설정은 그대로 둔다. 바뀌는 파일은 `<파일>.bak.<타임스탬프>`로 백업된다.

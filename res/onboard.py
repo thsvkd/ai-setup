@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""claude-code-setup 대화형 온보딩 — 무엇을 어떻게 설치할지 고르게 한다.
+"""ai-setup 대화형 온보딩 — 무엇을 어떻게 설치할지 고르게 한다.
 
 scripts/setup.sh (와 setup.ps1) 가 **인자 없이** 호출됐을 때만 실행된다. 플래그가
 명시됐다면 사용자가 이미 뜻을 밝힌 것이므로 온보딩을 띄우지 않는다.
@@ -144,7 +144,7 @@ def attach_terminal():
 
 def ask_all(tui, project_dir):
     """선택 결과 dict 를 반환. 사용자가 취소하면 None."""
-    tui.intro("claude-code-setup — Claude Code safety setup")
+    tui.intro("ai-setup — Claude Code safety setup")
 
     scope = tui.select(
         "What would you like to install?",

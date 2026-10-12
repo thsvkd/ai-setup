@@ -31,7 +31,7 @@ source "$SCRIPT_DIR/lib/setup_common.sh"
 
 print_usage() {
     cat <<'EOF'
-claude-code-setup — run the test suites
+ai-setup — run the test suites
 
 Usage: bash scripts/test.sh [options] [pytest args...]
   (no options)    run all of pytest + bats + Pester with the installed runners

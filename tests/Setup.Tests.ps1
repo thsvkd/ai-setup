@@ -167,7 +167,7 @@ Describe "install.ps1 bootstrap" {
     # 다운로드만 대역으로 바꾼다 — 같은 이름의 함수가 cmdlet 보다 먼저 해석된다.
     It "a file run exits with the exit code of the downloaded setup.ps1" {
         $sb = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-inst-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
-        $src = Join-Path $sb "src\claude-code-setup-main\scripts"
+        $src = Join-Path $sb "src\ai-setup-main\scripts"
         New-Item -ItemType Directory -Force -Path $src | Out-Null
         Set-Content -Path (Join-Path $src "setup.ps1") -Value "exit 3" -Encoding ascii
         $zip = Join-Path $sb "repo.zip"
@@ -466,7 +466,7 @@ Describe "Windows .ps1 encoding regression (BOM)" {
         $ec = $LASTEXITCODE
         $ec | Should -Be 0
         # 비ASCII 줄로 확인해야 BOM 없이 ANSI 로 읽혀 깨진 경우를 잡는다.
-        $out | Should -Match "claude-code-setup — Claude Code user-level setup"
+        $out | Should -Match "ai-setup — Claude Code user-level setup"
     }
 }
 

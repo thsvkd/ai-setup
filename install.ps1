@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    claude-code-setup 원격 설치 부트스트랩 (Windows PowerShell)
+    ai-setup 원격 설치 부트스트랩 (Windows PowerShell)
 .DESCRIPTION
     GitHub 에서 레포 전체를 임시 디렉터리로 내려받아 scripts\setup.ps1 을 실행한다.
     (setup.ps1 은 res\ 와 scripts\lib\ 등 형제 파일이 있어야 동작하므로 이 부트스트랩이 필요하다.)
@@ -12,10 +12,10 @@
     **셋 다** 에 넣어야 한다. 한 곳만 빠뜨려도 조용히 무시된다
     (install.sh 는 "$@" 로 전부 넘기므로 이 비대칭이 POSIX 쪽에선 안 보인다).
 .EXAMPLE
-    irm https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1 | iex
+    irm https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1 | iex
 .EXAMPLE
     # 플래그를 넘기려면 scriptblock 형태로:
-    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.ps1))) -DryRun
+    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1))) -DryRun
 .NOTES
     환경변수로 대상 레포/브랜치를 바꿀 수 있다: $env:CLAUDE_SETUP_REPO, $env:CLAUDE_SETUP_REF
     비공개(private) 레포라면 $env:GITHUB_TOKEN (또는 $env:GH_TOKEN) 에 PAT 을 넣어두면
@@ -192,7 +192,7 @@ function Invoke-Install {
 
     if ($Help) {
         Write-Host @"
-claude-code-setup remote install bootstrap (Windows)
+ai-setup remote install bootstrap (Windows)
 
 Usage:
   irm .../install.ps1 | iex                                              # interactive onboarding → install what you pick
@@ -210,7 +210,7 @@ Run without flags to get an onboarding that picks the install scope and permissi
 Without a console (CI, etc.) onboarding is skipped and a full install runs.
 
 Environment variables:
-  `$env:CLAUDE_SETUP_REPO (default thsvkd/claude-code-setup), `$env:CLAUDE_SETUP_REF (default main)
+  `$env:CLAUDE_SETUP_REPO (default thsvkd/ai-setup), `$env:CLAUDE_SETUP_REF (default main)
   `$env:GITHUB_TOKEN / `$env:GH_TOKEN — PAT for downloading private repos (used automatically if set)
 "@
         return
@@ -223,16 +223,16 @@ Environment variables:
         throw "Unknown option: $($unknownArgs -join ' ')"
     }
 
-    $repo = if ($env:CLAUDE_SETUP_REPO) { $env:CLAUDE_SETUP_REPO } else { "thsvkd/claude-code-setup" }
+    $repo = if ($env:CLAUDE_SETUP_REPO) { $env:CLAUDE_SETUP_REPO } else { "thsvkd/ai-setup" }
     $ref = if ($env:CLAUDE_SETUP_REF) { $env:CLAUDE_SETUP_REF } else { "main" }
 
-    $tmp = Join-Path $env:TEMP ("claude-code-setup-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    $tmp = Join-Path $env:TEMP ("ai-setup-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
     $code = 0
     try {
         $zip = Join-Path $tmp "repo.zip"
         $url = "https://github.com/$repo/archive/$ref.zip"
-        Write-Host "⬇️  claude-code-setup downloading ($repo@$ref)..." -ForegroundColor Cyan
+        Write-Host "⬇️  ai-setup downloading ($repo@$ref)..." -ForegroundColor Cyan
         # 비공개 레포면 PAT 로 인증한다. github.com 아카이브 URL 은 Authorization 헤더를 받아준다.
         $token = Resolve-GitHubToken
         $iwr = @{ Uri = $url; OutFile = $zip; UseBasicParsing = $true }

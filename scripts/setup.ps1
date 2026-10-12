@@ -53,7 +53,7 @@ $PSNativeCommandUseErrorActionPreference = $false
 
 function Show-Usage {
     Write-Host @"
-claude-code-setup — Claude Code user-level setup
+ai-setup — Claude Code user-level setup
 
 Usage: .\setup.ps1 [options]
   (no options)  pick install scope/permission mode in interactive onboarding, then run
@@ -352,7 +352,7 @@ $env:PYTHONUNBUFFERED = '1'
 
 Write-Host ""
 Write-Host $G.Start -ForegroundColor DarkGray -NoNewline
-Write-Host "  claude-code-setup"
+Write-Host "  ai-setup"
 
 # 워커가 throw 로 끝나도(셀프테스트 실패 등) 끝줄을 찍고 실패 코드로 나간다.
 try {

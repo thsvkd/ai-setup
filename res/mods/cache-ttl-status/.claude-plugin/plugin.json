@@ -2,7 +2,7 @@
   "name": "cache-ttl-status",
   "version": "0.1.0",
   "description": "Show the prompt cache time left (cache:57m) as a status line under the prompt",
-  "author": { "name": "claude-code-setup" },
+  "author": { "name": "ai-setup" },
   "userConfig": {
     "ttl": {
       "type": "string",

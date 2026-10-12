@@ -38,7 +38,7 @@ $PSNativeCommandUseErrorActionPreference = $false
 
 if ($Help) {
     Write-Host @"
-claude-code-setup — run the test suites
+ai-setup — run the test suites
 
 Usage: .\test.ps1 [options]
   (no options)   run all of pytest + Pester + bats with the installed runners

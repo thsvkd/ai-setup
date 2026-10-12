@@ -26,7 +26,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 print_usage() {
     cat <<'EOF'
-claude-code-setup — Claude Code user-level setup
+ai-setup — Claude Code user-level setup
 
 Usage: bash setup.sh [options]
   (no options)  pick install scope/permission mode in interactive onboarding, then run
@@ -318,7 +318,7 @@ ui_close() {
         printf '%s  %s\n\n' "$(ui_paint 90 "$G_END")" "$what complete"
     fi
 }
-printf '\n%s  %s\n' "$(ui_paint 90 "$G_START")" "$(ui_paint 1 "claude-code-setup")"
+printf '\n%s  %s\n' "$(ui_paint 90 "$G_START")" "$(ui_paint 1 "ai-setup")"
 trap ui_close EXIT
 
 # uninstall: --keybinds --uninstall 은 키바인드만. 아니면 훅 다음 키바인드.

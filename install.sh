@@ -1,5 +1,5 @@
 #!/bin/sh
-# install.sh — claude-code-setup 원격 설치 부트스트랩 (macOS / Linux / Git Bash)
+# install.sh — ai-setup 원격 설치 부트스트랩 (macOS / Linux / Git Bash)
 #
 # 이 한 파일만 curl 로 받아 실행하면, GitHub 에서 레포 전체를 임시 디렉터리로
 # 내려받아 scripts/setup.sh 를 실행한다. (setup.sh 는 res/ 와 scripts/lib/ 등
@@ -7,7 +7,7 @@
 #
 # 사용법 (버전 태그로 고정 권장):
 #   curl --proto '=https' --tlsv1.2 -fsSL \
-#     https://raw.githubusercontent.com/thsvkd/claude-code-setup/main/install.sh | sh
+#     https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh
 #   curl ... | sh -s -- --dry-run     # 미리보기
 #   curl ... | sh -s -- --hooks       # 전역 가드/권한만
 #
@@ -16,7 +16,7 @@
 # 동작한다. 터미널이 없으면 온보딩은 조용히 건너뛰고 예전처럼 전체 설치가 진행된다.
 #
 # 환경변수:
-#   CLAUDE_SETUP_REPO=owner/repo   대상 레포 (기본 thsvkd/claude-code-setup)
+#   CLAUDE_SETUP_REPO=owner/repo   대상 레포 (기본 thsvkd/ai-setup)
 #   CLAUDE_SETUP_REF=main          브랜치/태그 (기본 main; 배포 시 vX.Y.Z 태그 권장)
 #                                  feature/foo 처럼 슬래시가 든 브랜치명도 그대로 쓸 수 있다.
 #   GITHUB_TOKEN / GH_TOKEN        비공개(private) 레포 다운로드용 PAT. 둘 다 없으면
@@ -29,7 +29,7 @@ set -eu
 
 print_help() {
     cat <<'EOF'
-claude-code-setup remote install bootstrap
+ai-setup remote install bootstrap
 
 Usage:
   curl -fsSL .../install.sh | sh                 # interactive onboarding → install what you pick
@@ -50,7 +50,7 @@ It works even when piped (stdin is the script body) by opening the controlling t
 without a terminal (CI, etc.) it does a full install without onboarding.
 
 Environment variables:
-  CLAUDE_SETUP_REPO=owner/repo   target repo (default thsvkd/claude-code-setup)
+  CLAUDE_SETUP_REPO=owner/repo   target repo (default thsvkd/ai-setup)
   CLAUDE_SETUP_REF=main          branch/tag (default main). Slashes are fine, as in
                                  feature/foo, and so is refs/heads/feature/foo.
   GITHUB_TOKEN / GH_TOKEN        PAT for private repos. Falls back to `gh auth token` if unset.
@@ -172,7 +172,7 @@ main() {
         esac
     done
 
-    REPO="${CLAUDE_SETUP_REPO:-thsvkd/claude-code-setup}"
+    REPO="${CLAUDE_SETUP_REPO:-thsvkd/ai-setup}"
     REF="${CLAUDE_SETUP_REF:-main}"
 
     if ! need_cmd bash; then
@@ -202,7 +202,7 @@ main() {
     TARBALL="https://github.com/$REPO/archive/$REF.tar.gz"
     TARFILE="$TMP/repo.tar.gz"
 
-    echo "⬇️  claude-code-setup downloading ($REPO@$REF)..."
+    echo "⬇️  ai-setup downloading ($REPO@$REF)..."
     # 파이프(curl | tar) 대신 파일로 받는다. 파이프였다면 pipeline 의 종료 상태가 tar 의
     # 것이라 curl 의 404 가 "Unexpected EOF" 로 둔갑해 원인을 알 수 없었다.
     if ! fetch "$TARBALL" "$TARFILE"; then

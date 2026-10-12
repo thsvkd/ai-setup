@@ -159,7 +159,7 @@ def curl_stub(tmp_path, stub_bin):
     tarball = tmp_path / "repo.tar.gz"
     with tarfile.open(tarball, "w:gz") as tar:
         for item in ("install.sh", "scripts", "res"):
-            tar.add(ROOT / item, arcname=f"claude-code-setup-main/{item}")
+            tar.add(ROOT / item, arcname=f"ai-setup-main/{item}")
     curl = stub_bin / "curl"
     curl.write_text(
         "#!/bin/sh\n"

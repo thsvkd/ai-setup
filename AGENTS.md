@@ -2,7 +2,7 @@
 
 ## 개요
 
-Claude Code·Codex·Grok·OpenCode 하네스와 Windows 네이티브·WSL·Linux·macOS 를 대상으로 개발 환경 설정(안전 훅, 프로젝트 지침, 줄바꿈 키)을 설치·관리한다. 구현 중심은 아직 Claude Code이고 `claude-code-setup` -> `harness-setup` 전환이 진행 중이다. 이 파일은 `res/AGENTS.md` base 의 인스턴스이므로 base 를 고치면 함께 본다.
+Claude Code·Codex·Grok·OpenCode 하네스와 Windows 네이티브·WSL·Linux·macOS 를 대상으로 개발 환경 설정(안전 훅, 프로젝트 지침, 줄바꿈 키)을 설치·관리한다. 구현 중심은 아직 Claude Code이고 `claude-code-setup` -> `ai-setup` 전환이 진행 중이다. 이 파일은 `res/AGENTS.md` base 의 인스턴스이므로 base 를 고치면 함께 본다.
 
 ## 원칙
 
