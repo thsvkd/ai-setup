@@ -55,6 +55,24 @@ teardown() {
     [[ "$output" == *"--doctor runs alone"* ]]
 }
 
+@test "update-ai.sh passes options through to the Python implementation" {
+    run bash "$REPO_ROOT/scripts/update-ai.sh" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--allow-interrupt"* ]]
+    run bash "$REPO_ROOT/scripts/update-ai.sh" --only nope
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"unknown target"* ]]
+}
+
+@test "update-ai.sh --check reads versions without updating (covers: AI-7)" {
+    printf '#!/bin/sh\necho "agy $*" >> "%s/calls.log"\necho "agy 1.2.3"\n' "$SANDBOX" > "$SANDBOX/bin/agy"
+    chmod +x "$SANDBOX/bin/agy"
+    run bash "$REPO_ROOT/scripts/update-ai.sh" --check --only agy
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"1.2.3"* ]]
+    [ "$(cat "$SANDBOX/calls.log")" = "agy --version" ]
+}
+
 @test "setup.sh --hooks --dry-run does not create ~/.claude/settings.json" {
     run bash "$REPO_ROOT/scripts/setup.sh" --hooks --dry-run
     [ "$status" -eq 0 ]

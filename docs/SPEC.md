@@ -44,6 +44,8 @@
 ## 데이터 계약
 
 - `res/catalog.json` 항목: `id`, `kind`(`harness`/`tool`), `skills`(선택, 도구와 함께 설치할 `sources.json` 형식 항목), `detect`(실행 파일 이름과 버전 인자), `install`·`uninstall`(플랫폼별 명령 목록, 설치 방식별로 짝을 이룬다), `update`, `plugin_update`(선택), `requires`(예: `node>=20`), `sudo`(bool).
+  - `packages`: 설치 방식별 패키지 이름(`npm`, `winget`, `brew`, `brew_cask`, `deb`). update-ai 는 찾은 실행 파일이 실제로 그 방식으로 깔린 것일 때만 그 방식으로 올린다(npm 은 `node_modules/<pkg>` 안에 있을 때, winget 은 `WinGet` 경로, brew 는 brew prefix 아래). 패키지 목록 조회는 기본 `update` 명령이 없는 도구의 마지막 확인에만 쓴다.
+  - `detect.sessions`(선택): 실행 중인 세션 판정 보정. `match` 는 실행 파일 이름이 다른 세션(`/opt/Orca/orca-ide`, qemu 로 도는 grok)을, `ignore` 는 세션이 아닌 상주 프로세스(데몬·데스크톱 앱: `herdr server`, `graft mcp`, codex app-server 데몬, Claude Desktop)를 명령줄 부분 문자열로 적는다.
 - 영수증 `harness_installs`·`tool_installs` 는 항목마다 실제로 쓴 설치 방식을 기록하고, uninstall 은 그 방식에 짝지은 `uninstall` 명령을 쓴다.
 - `res/plugins/plugins.json` 항목: `marketplace`(github `owner/repo`), `plugin`(`name@marketplace`), `default`(bool), `provides_skills`(선택, 플러그인으로 옮겨 간 스킬 이름).
 - `res/skills/sources.json` 항목: `repo`(`owner/repo`), `ref`(태그·브랜치·SHA), `skills`(목록), `default`(bool).

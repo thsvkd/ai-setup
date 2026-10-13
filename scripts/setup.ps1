@@ -202,7 +202,8 @@ if ($Doctor) {
     $py = Resolve-PythonForOnboard
     if (-not $py) { Write-Host "Python 3.8+ is required." -ForegroundColor Red; exit 2 }
     $homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
-    & $py.Exe @($py.Args) -X utf8 (Join-Path $RepoRoot "res\doctor\doctor.py") --home $homeDir
+    # -B: 바이트코드 캐시도 쓰지 않는다(doctor 는 읽기 전용).
+    & $py.Exe @($py.Args) -B -X utf8 (Join-Path $RepoRoot "res\doctor\doctor.py") --home $homeDir
     exit $LASTEXITCODE
 }
 

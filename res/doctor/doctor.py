@@ -64,14 +64,26 @@ def platform_key():
     return "macos" if sys.platform == "darwin" else "linux"
 
 
+def on_wsl():
+    try:
+        with open("/proc/version", encoding="utf-8", errors="replace") as handle:
+            return "microsoft" in handle.read().lower()
+    except OSError:
+        return False
+
+
 def locations(name):
-    """PATH 순서대로 name 실행 파일을 찾는다. 같은 디렉터리·같은 실체(심볼릭 링크)는 한 번만 센다."""
+    """PATH 순서대로 name 실행 파일을 찾는다. 같은 디렉터리·같은 실체(심볼릭 링크)는 한 번만 센다.
+
+    WSL 은 Windows PATH(/mnt/c/...)를 이어 붙인다. 그쪽은 다른 실행 환경이라 세지 않는다.
+    """
+    skip_windows = os.name != "nt" and on_wsl()
     exts = [""]
     if os.name == "nt":
         exts = [e.lower() for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if e]
     seen_dirs, seen_real, found = set(), set(), []
     for directory in os.environ.get("PATH", "").split(os.pathsep):
-        if not directory:
+        if not directory or (skip_windows and re.match(r"^/mnt/[a-z]/", directory)):
             continue
         key = os.path.normcase(os.path.abspath(directory))
         if key in seen_dirs:

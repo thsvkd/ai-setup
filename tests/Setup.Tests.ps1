@@ -130,6 +130,18 @@ Describe "setup.ps1 dispatcher" {
         $r.ExitCode | Should -Be 1
     }
 
+    It "Update-Ai.ps1 passes -Help, -Only and the long notation through to Python" {
+        $updateAi = Join-Path $script:RepoRoot "scripts\Update-Ai.ps1"
+        $r = Invoke-Script $updateAi @("-Help")
+        $r.ExitCode | Should -Be 0
+        $r.Output | Should -Match "--allow-interrupt"
+        $r = Invoke-Script $updateAi @("-Only", "nope")
+        $r.ExitCode | Should -Be 2
+        $r.Output | Should -Match "unknown target"
+        $r = Invoke-ScriptInline $updateAi "--only nope"
+        $r.ExitCode | Should -Be 2
+    }
+
     # 조용히 무시하면 오타(--keybind)가 '전체 설치' 로 둔갑한다.
     It "an unknown option exits 1 and shows the usage too" {
         $r = Invoke-ScriptInline $script:Setup "--keybind"

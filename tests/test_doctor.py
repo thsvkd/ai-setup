@@ -38,7 +38,8 @@ def run_doctor(home, path_dirs):
     keep = [os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")] if WINDOWS else []
     env["PATH"] = os.pathsep.join([str(d) for d in path_dirs] + keep)
     return subprocess.run(
-        [sys.executable, "-X", "utf8", str(DOCTOR)],
+        # setup.sh/ps1 과 같이 -B 로 돌린다(macOS 의 Xcode python 은 바이트코드를 ~/Library/Caches 에 쓴다).
+        [sys.executable, "-B", "-X", "utf8", str(DOCTOR)],
         capture_output=True, text=True, encoding="utf-8", env=env, timeout=60,
     )
 

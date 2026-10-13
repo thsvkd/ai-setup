@@ -226,7 +226,8 @@ if [[ "$RUN_DOCTOR" -eq 1 ]]; then
         exit 2
     fi
     set +e
-    "$PY" -X utf8 "$REPO_ROOT/res/doctor/doctor.py" --home "$HOME" | ui_format
+    # -B: macOS 의 Xcode python 은 표준 라이브러리 바이트코드를 ~/Library/Caches 에 쓴다. 읽기 전용 약속을 지킨다.
+    "$PY" -B -X utf8 "$REPO_ROOT/res/doctor/doctor.py" --home "$HOME" | ui_format
     status="${PIPESTATUS[0]}"
     set -e
     exit "$status"

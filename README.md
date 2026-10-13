@@ -71,6 +71,7 @@ irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubuserco
 | `--output-style` | `-OutputStyle` | [fluent-korean](https://github.com/snflkd/fluent-korean) 플러그인 설치 + 출력 스타일을 `fluent-korean`으로 지정. 전체 설치에는 포함되지 않는다 |
 | `--no-onboard` | `-NoOnboard` | 질문 없이 전체 설치 |
 | `--uninstall` | `-Uninstall` | 설치한 것만 골라 되돌리기 |
+| `--doctor` | `-Doctor` | 읽기 전용 점검: 하네스·도구 설치와 버전, PATH 중복 설치, 은퇴한 훅의 잔존, 하네스 설정의 평문 시크릿 위치(키 이름만), lock 밖 스킬. 다른 옵션과 함께 쓸 수 없다 |
 | `--help` | `-Help` | 도움말 |
 
 플래그 넘기는 법 — POSIX는 `sh -s --` 뒤에 붙인다:
@@ -84,6 +85,22 @@ PowerShell은 `| iex`로는 인자를 넘길 수 없어서 scriptblock으로 감
 ```
 
 레포를 clone했다면 `bash scripts/setup.sh --dry-run` / `.\scripts\setup.ps1 -DryRun`처럼 직접 실행해도 된다.
+
+### update-ai
+
+설치된 하네스(claude, codex, grok, opencode, gemini, agy, copilot)와 도구(Orca, herdr, graft), 그 플러그인을 한 번에 최신으로 올린다. 설치되지 않은 것은 건너뛰고 새로 설치하지 않는다. npm·winget·brew·deb 중 실제로 설치한 방식으로 올린다.
+
+```sh
+bash scripts/update-ai.sh --check            # 현재·최신 버전만 본다
+bash scripts/update-ai.sh                    # 전부 올린다
+bash scripts/update-ai.sh --only claude,codex
+```
+```powershell
+.\scripts\Update-Ai.ps1 -Check
+.\scripts\Update-Ai.ps1 -Only claude,codex
+```
+
+실행 중인 세션이 있는 대상은 건드리지 않고 실패로 남긴다. 세션을 끊어도 되면 `--allow-interrupt` / `-AllowInterrupt` 를 준다. 하나가 실패해도 나머지를 계속하고 마지막에 exit 1 로 끝난다.
 
 ---
 
