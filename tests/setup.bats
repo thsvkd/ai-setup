@@ -37,6 +37,24 @@ teardown() {
     [[ "$output" == *"Unknown option"* ]]
 }
 
+# doctor 는 읽기 전용 단독 실행이다. lock 밖 스킬로 경고(exit 1)를 확정해, 종료 코드가
+# ui_format 파이프를 지나도 살아남는지와 홈이 그대로인지를 함께 본다.
+@test "setup.sh --doctor reports a stray skill with exit 1 and writes nothing (covers: AI-1, AI-6)" {
+    mkdir -p "$HOME/.agents/skills/stray"
+    printf '{"version": 3, "skills": {}}\n' > "$HOME/.agents/.skill-lock.json"
+    before="$(find "$HOME" | sort)"
+    run bash "$REPO_ROOT/scripts/setup.sh" --doctor
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"stray"* ]]
+    [ "$(find "$HOME" | sort)" = "$before" ]
+}
+
+@test "setup.sh --doctor refuses other options instead of silently dropping them" {
+    run bash "$REPO_ROOT/scripts/setup.sh" --doctor --uninstall
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"--doctor runs alone"* ]]
+}
+
 @test "setup.sh --hooks --dry-run does not create ~/.claude/settings.json" {
     run bash "$REPO_ROOT/scripts/setup.sh" --hooks --dry-run
     [ "$status" -eq 0 ]

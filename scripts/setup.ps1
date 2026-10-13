@@ -15,6 +15,7 @@
     powershell -ExecutionPolicy Bypass -File setup.ps1 -Mods                 # Claude Code mod 만
     powershell -ExecutionPolicy Bypass -File setup.ps1 -DryRun               # 미리보기 (전체)
     powershell -ExecutionPolicy Bypass -File setup.ps1 -NoOnboard            # 온보딩 끄기
+    powershell -ExecutionPolicy Bypass -File setup.ps1 -Doctor               # 읽기 전용 점검
 #>
 
 [CmdletBinding(PositionalBinding = $false)]
@@ -31,6 +32,7 @@ param(
     [switch]$Uninstall,
     [switch]$DryRun,
     [switch]$NoOnboard,
+    [switch]$Doctor,
     [Alias("h")]
     [switch]$Help,
     # setup.sh 와 같은 `--dry-run` 식 긴 표기를 받아내는 자리.
@@ -76,6 +78,9 @@ Usage: .\setup.ps1 [options]
                 (permissions, user entries and the OMC/fluent-korean plugins are kept)
   -DryRun       print the change plan only, without changing anything
   -NoOnboard    run with defaults without interactive onboarding
+  -Doctor       read-only health report: installed harnesses/tools and versions, duplicate installs,
+                retired hooks still wired, plaintext secrets (key names only), skills outside the lock.
+                Runs alone and changes nothing. Exit 1 when it finds a problem
   -Help         this help
 
 What onboarding lets you choose:
@@ -90,7 +95,7 @@ What onboarding lets you choose:
 
 The same long options as setup.sh are accepted too:
   --hooks  --agentsmd  --harness L  --skills  --keybinds  --omc  --output-style  --mods  --newline VAL  --uninstall  --dry-run
-  --no-onboard  --help
+  --no-onboard  --doctor  --help
 "@
 }
 
@@ -112,6 +117,7 @@ for ($i = 0; $i -lt $Rest.Count; $i++) {
         '^--uninstall$'          { $Uninstall = $true }
         '^--dry-run$'            { $DryRun = $true }
         '^--no-onboard$'         { $NoOnboard = $true }
+        '^--doctor$'             { $Doctor = $true }
         '^--newline=(.*)$'       { $Newline = $Matches[1]; $newlineGiven = $true }
         '^--harness=(.*)$'       { $Harness = @($Matches[1]); $harnessGiven = $true }
         '^--harness$' {
@@ -184,6 +190,20 @@ function Resolve-PythonForOnboard {
         if ($ok) { return $c }
     }
     return $null
+}
+
+# doctor 는 읽기 전용이라 설치 흐름(온보딩·영수증·배너)과 섞지 않고 단독으로 끝낸다.
+if ($Doctor) {
+    $otherArgs = @($PSBoundParameters.Keys | Where-Object { $_ -notin @("Doctor", "Rest") }).Count + @($Rest | Where-Object { $_ -ne "--doctor" }).Count
+    if ($otherArgs -gt 0) {
+        Write-Host "--doctor runs alone; drop the other options." -ForegroundColor Red
+        exit 1
+    }
+    $py = Resolve-PythonForOnboard
+    if (-not $py) { Write-Host "Python 3.8+ is required." -ForegroundColor Red; exit 2 }
+    $homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
+    & $py.Exe @($py.Args) -X utf8 (Join-Path $RepoRoot "res\doctor\doctor.py") --home $homeDir
+    exit $LASTEXITCODE
 }
 
 # 온보딩 종료 코드: 0=선택 완료, 1=프롬프트가 깨짐, 2=대화형 불가(콘솔 없음/CI), 130=사용자 취소.

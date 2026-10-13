@@ -1,0 +1,105 @@
+[
+  {
+    "id": "claude",
+    "kind": "harness",
+    "detect": {"bin": "claude", "version_args": ["--version"]},
+    "install": {
+      "linux": [{"method": "native", "cmd": "curl -fsSL https://claude.ai/install.sh | bash"}],
+      "macos": [{"method": "native", "cmd": "curl -fsSL https://claude.ai/install.sh | bash"}],
+      "windows": [{"method": "native", "cmd": "irm https://claude.ai/install.ps1 | iex"}]
+    }
+  },
+  {
+    "id": "codex",
+    "kind": "harness",
+    "detect": {"bin": "codex", "version_args": ["--version"]},
+    "install": {
+      "linux": [{"method": "native", "cmd": "curl -fsSL https://chatgpt.com/codex/install.sh | sh"}],
+      "macos": [{"method": "native", "cmd": "curl -fsSL https://chatgpt.com/codex/install.sh | sh"}],
+      "windows": [{"method": "native", "cmd": "irm https://chatgpt.com/codex/install.ps1 | iex"}]
+    }
+  },
+  {
+    "id": "grok",
+    "kind": "harness",
+    "detect": {"bin": "grok", "version_args": ["--version"]},
+    "install": {
+      "linux": [{"method": "native", "cmd": "curl -fsSL https://x.ai/cli/install.sh | bash"}],
+      "macos": [{"method": "native", "cmd": "curl -fsSL https://x.ai/cli/install.sh | bash"}],
+      "windows": [{"method": "native", "cmd": "irm https://x.ai/cli/install.ps1 | iex"}]
+    }
+  },
+  {
+    "id": "opencode",
+    "kind": "harness",
+    "detect": {"bin": "opencode", "version_args": ["--version"]},
+    "install": {
+      "linux": [{"method": "native", "cmd": "curl -fsSL https://opencode.ai/install | bash"}],
+      "macos": [{"method": "native", "cmd": "curl -fsSL https://opencode.ai/install | bash"}],
+      "windows": [{"method": "npm", "cmd": "npm install -g opencode-ai"}]
+    }
+  },
+  {
+    "id": "gemini",
+    "kind": "harness",
+    "detect": {"bin": "gemini", "version_args": ["--version"]},
+    "requires": "node>=20",
+    "install": {
+      "linux": [{"method": "npm", "cmd": "npm install -g @google/gemini-cli"}],
+      "macos": [{"method": "npm", "cmd": "npm install -g @google/gemini-cli"}],
+      "windows": [{"method": "npm", "cmd": "npm install -g @google/gemini-cli"}]
+    }
+  },
+  {
+    "id": "agy",
+    "kind": "harness",
+    "detect": {"bin": "agy", "version_args": ["--version"]},
+    "install": {
+      "linux": [{"method": "native", "cmd": "curl -fsSL https://antigravity.google/cli/install.sh | bash"}],
+      "macos": [{"method": "native", "cmd": "curl -fsSL https://antigravity.google/cli/install.sh | bash"}],
+      "windows": [{"method": "native", "cmd": "irm https://antigravity.google/cli/install.ps1 | iex"}]
+    }
+  },
+  {
+    "id": "copilot",
+    "kind": "harness",
+    "detect": {"bin": "copilot", "version_args": ["--version"]},
+    "requires": "node>=22",
+    "install": {
+      "linux": [{"method": "npm", "cmd": "npm install -g @github/copilot"}],
+      "macos": [{"method": "npm", "cmd": "npm install -g @github/copilot"}],
+      "windows": [{"method": "winget", "cmd": "winget install GitHub.Copilot"}]
+    }
+  },
+  {
+    "id": "orca",
+    "kind": "tool",
+    "detect": {"bin": "orca", "version_args": ["--version"]},
+    "install": {
+      "linux": [{"method": "deb", "cmd": "download orca-ide_<version>_<arch>.deb from https://github.com/stablyai/orca/releases and run: sudo apt install ./orca-ide_<version>_<arch>.deb"}],
+      "macos": [{"method": "brew", "cmd": "brew install --cask stablyai/orca/orca"}],
+      "windows": [{"method": "winget", "cmd": "winget install StablyAI.Orca"}]
+    }
+  },
+  {
+    "id": "herdr",
+    "kind": "tool",
+    "detect": {"bin": "herdr", "version_args": ["--version"]},
+    "install": {
+      "linux": [{"method": "native", "cmd": "curl -fsSL https://herdr.dev/install.sh | sh"}],
+      "macos": [{"method": "native", "cmd": "curl -fsSL https://herdr.dev/install.sh | sh"}],
+      "windows": [{"method": "native", "cmd": "irm https://herdr.dev/install.ps1 | iex"}]
+    }
+  },
+  {
+    "id": "graft",
+    "kind": "tool",
+    "detect": {"bin": "graft", "version_args": ["--version"]},
+    "requires": "node>=20",
+    "install": {
+      "linux": [{"method": "npm", "cmd": "npm install -g @nanonets/graft"}],
+      "macos": [{"method": "npm", "cmd": "npm install -g @nanonets/graft"}],
+      "windows": [{"method": "npm", "cmd": "npm install -g @nanonets/graft"}]
+    }
+  }
+]

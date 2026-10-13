@@ -101,6 +101,35 @@ Describe "setup.ps1 dispatcher" {
         $r.Output | Should -Match "shift-enter"
     }
 
+    # doctor 는 읽기 전용 단독 실행이다. lock 밖 스킬로 경고(exit 1)를 확정한다.
+    It "-Doctor and --doctor report a stray skill with exit 1 and write nothing (covers: AI-1, AI-6)" {
+        $skills = Join-Path $env:USERPROFILE ".agents\skills\stray"
+        New-Item -ItemType Directory -Force -Path $skills | Out-Null
+        Set-Content -Path (Join-Path $env:USERPROFILE ".agents\.skill-lock.json") -Encoding ascii -Value '{"version": 3, "skills": {}}'
+        # 자식 pwsh 자신이 프로필 아래에 시작 캐시(AppData\Local\Microsoft\PowerShell)를 쓴다.
+        # doctor 가 아니라 테스트가 띄운 인터프리터의 흔적이므로 그 경로만 비교에서 뺀다.
+        $listHome = {
+            (Get-ChildItem -Recurse -Force $env:USERPROFILE | ForEach-Object FullName |
+                Where-Object { $_ -notmatch '[\\/]AppData([\\/]Local([\\/]Microsoft([\\/]PowerShell([\\/].*)?)?)?)?$' } |
+                Sort-Object) -join "`n"
+        }
+        $before = & $listHome
+        $r = Invoke-Script $script:Setup @("-Doctor")
+        $r.ExitCode | Should -Be 1 -Because $r.Output
+        $r.Output | Should -Match "stray"
+        $r = Invoke-ScriptInline $script:Setup "--doctor"
+        $r.ExitCode | Should -Be 1 -Because $r.Output
+        (& $listHome) | Should -Be $before
+    }
+
+    It "-Doctor refuses other options instead of silently dropping them" {
+        $r = Invoke-Script $script:Setup @("-Doctor", "-Uninstall")
+        $r.ExitCode | Should -Be 1
+        $r.Output | Should -Match "--doctor runs alone"
+        $r = Invoke-ScriptInline $script:Setup "--doctor --hooks"
+        $r.ExitCode | Should -Be 1
+    }
+
     # 조용히 무시하면 오타(--keybind)가 '전체 설치' 로 둔갑한다.
     It "an unknown option exits 1 and shows the usage too" {
         $r = Invoke-ScriptInline $script:Setup "--keybind"

@@ -18,6 +18,7 @@
 #   bash setup.sh --newline ctrl-enter   # 줄바꿈 키를 Ctrl+Enter 로
 #   bash setup.sh --dry-run              # 미리보기 (전체, 온보딩 없음)
 #   bash setup.sh --no-onboard           # 온보딩을 끄고 예전 기본 동작
+#   bash setup.sh --doctor               # 읽기 전용 점검 (아무것도 바꾸지 않음)
 #
 set -euo pipefail
 
@@ -50,6 +51,9 @@ Usage: bash setup.sh [options]
                 (permissions, user entries and the OMC/fluent-korean plugins are kept)
   --dry-run     print the change plan only, without changing anything
   --no-onboard  run with defaults without interactive onboarding
+  --doctor      read-only health report: installed harnesses/tools and versions, duplicate installs,
+                retired hooks still wired, plaintext secrets (key names only), skills outside the lock.
+                Runs alone and changes nothing. Exit 1 when it finds a problem
   --help, -h    this help
 
 What onboarding lets you choose:
@@ -74,6 +78,7 @@ RUN_MODS=0
 DRY_RUN=0
 UNINSTALL=0
 NO_ONBOARD=0
+RUN_DOCTOR=0
 # 온보딩이 채우는 값들. 비어 있으면 워커가 각자의 기본값을 쓴다.
 DEFAULT_MODE=""
 FORCE_AGENTSMD=0
@@ -82,6 +87,7 @@ NEWLINE_CHORD=""
 NEWLINE_GIVEN=0
 
 HAD_ARGS=0
+ARG_COUNT=$#
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --hooks) RUN_HOOKS=1; HAD_ARGS=1; shift ;;
@@ -108,6 +114,7 @@ while [[ $# -gt 0 ]]; do
         --uninstall) UNINSTALL=1; HAD_ARGS=1; shift ;;
         --dry-run) DRY_RUN=1; HAD_ARGS=1; shift ;;
         --no-onboard) NO_ONBOARD=1; HAD_ARGS=1; shift ;;
+        --doctor) RUN_DOCTOR=1; HAD_ARGS=1; shift ;;
         --help|-h) print_usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; echo ""; print_usage >&2; exit 1 ;;
     esac
@@ -207,6 +214,23 @@ ui_format() {
 
 # 워커가 찍는 python 출력이 파이프 너머에서 블록 버퍼링되면 stderr 경고와 순서가 뒤바뀐다.
 export PYTHONUNBUFFERED=1
+
+# doctor 는 읽기 전용이라 설치 흐름(온보딩·영수증·배너)과 섞지 않고 단독으로 끝낸다.
+if [[ "$RUN_DOCTOR" -eq 1 ]]; then
+    if [[ "$ARG_COUNT" -gt 1 ]]; then
+        echo "--doctor runs alone; drop the other options." >&2
+        exit 1
+    fi
+    if ! PY="$(resolve_python_command)"; then
+        echo "Python 3 is required." >&2
+        exit 2
+    fi
+    set +e
+    "$PY" -X utf8 "$REPO_ROOT/res/doctor/doctor.py" --home "$HOME" | ui_format
+    status="${PIPESTATUS[0]}"
+    set -e
+    exit "$status"
+fi
 
 # 인자가 하나도 없을 때만 온보딩을 띄운다.
 #
