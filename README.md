@@ -7,6 +7,7 @@ Claude Code를 **실수해도 되돌릴 수 있게** 만드는 사용자 레벨 
 - ⛔ **되돌릴 수 없는 것만 차단** — 루트/홈 전체 삭제, 디스크 포맷. 그 밖에는 작업을 막지 않는다
 - ⏎ **줄바꿈 키 통일** — Claude Code·Codex·Grok CLI에서 Shift+Enter(또는 Ctrl+Enter)로 줄바꿈
 - 🎨 **design-lab** — 디자인 시안마다 풀 앱을 체험하고 선택·의견을 남기는 갤러리 제작 스킬
+- 📊 **tailnet-report** — 실측한 근거로 보고서를 HTML 페이지로 만들어 tailnet에만 게시하는 스킬
 - 📄 **AGENTS.md** — 프로젝트에 에이전트용 작업 규칙 파일을 깔아 준다
 
 기존 설정은 덮어쓰지 않고 필요한 항목만 끼워 넣으며, `--uninstall`로 설치가 넣은 항목만 골라 뺄 수 있다.
@@ -109,6 +110,7 @@ curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercon
 | `~/.claude/hooks/` | 가드 훅 `danger_guard.py`, 삭제를 휴지통으로 돌리는 셰임(`shims/rm`, `shims/RmShim.psm1`), Windows 휴지통 헬퍼와 graft 동기화 래퍼 |
 | `./AGENTS.md`, `./CLAUDE.md` | 프로젝트 작업 규칙. `CLAUDE.md`는 `@AGENTS.md` 한 줄짜리(하네스에 `claude`가 있을 때만). 이미 있으면 건너뜀 |
 | `~/.claude/skills/design-lab/SKILL.md` | 시안 갤러리·풀 앱 체험·모바일·라이트/다크·선택/의견·브라우저 검증 절차 |
+| `~/.claude/skills/tailnet-report/SKILL.md` | 근거 수집·사실 자료 고정·visual-explainer로 페이지 작성·브라우저 검증·`tailscale serve` 게시 절차 |
 | 줄바꿈 키 | `~/.claude/keybindings.json`, `~/.codex/config.toml`, VS Code·Cursor `keybindings.json`(에디터가 없어도 만든다), `~/.tmux.conf`(POSIX만), Windows Terminal(`ctrl-enter`일 때만) |
 | OMC (`--omc`일 때만) | oh-my-claudecode 플러그인, `~/.claude/hud/omc-hud-ttl.mjs`, `settings.json`의 `statusLine` 래퍼와 `refreshInterval` |
 | mod (`--mods`일 때만) | `~/.claude/mods/bash-diff-filter/`, `~/.claude/mods/cache-ttl-status/`, `settings.json`의 `env.CLAUDE_CODE_PLUGIN_DIRS` |
@@ -128,6 +130,11 @@ curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercon
 설치한다. Claude Code에서 `/design-lab 예약 앱 시안 3개를 비교할 갤러리를 만들어줘`로
 사용하거나, 시안 비교를 요청하면 관련 설명에 따라 자동으로 불러올 수 있다.
 개인 스킬 경로와 호출 방식은 [Claude Code 공식 문서](https://code.claude.com/docs/en/skills)를 따른다.
+
+같은 방식으로 [tailnet-report](res/skills/tailnet-report/SKILL.md)도 설치된다. `/tailnet-report 이 서비스가 어떻게 배포되어 돌고 있는지 tailnet 페이지로 보여줘`처럼
+요청하면 운영 서버를 실측해 사실 자료를 만들고, 그 자료로 페이지를 만들어 `tailscale serve`로 tailnet에만 게시한다.
+페이지 디자인은 외부 스킬 [visual-explainer](https://github.com/nicobailon/visual-explainer)(MIT)에 맡기므로 먼저
+`npx skills add nicobailon/visual-explainer#v0.12.0 -g`로 설치해 둔다. 이 설치기는 아직 외부 스킬을 설치하지 않는다.
 
 각 시안은 동일한 데이터와 핵심 흐름을 가진 풀 앱이며, 모바일·라이트/다크 테마와
 시안 선택·의견 입력을 포함한다. 디자인 미리보기 요청 자체로 실제 결제나 운영 데이터

@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKER = ROOT / "res" / "skills" / "apply.py"
 SOURCE = ROOT / "res" / "skills" / "design-lab" / "SKILL.md"
 RELATIVE = "design-lab/SKILL.md"
+REPORT_RELATIVE = "tailnet-report/SKILL.md"
 
 
 def installed(home):
@@ -20,6 +21,12 @@ def installed(home):
 
 def receipt(home):
     return home / ".claude" / ".claude-code-setup-skills.json"
+
+
+def claims(home):
+    # 영수증의 files 맵을 돌려준다(없으면 빈 맵). 번들 스킬이 여럿이므로 호출부가 항목을 고른다.
+    path = receipt(home)
+    return json.loads(path.read_text(encoding="utf-8"))["files"] if path.exists() else {}
 
 
 def run_worker(home, *args):
@@ -33,6 +40,8 @@ def test_install_reinstall_uninstall_and_user_files(tmp_path):
     home = tmp_path / "home"
     assert run_worker(home).returncode == 0
     assert installed(home).read_bytes() == SOURCE.read_bytes()
+    report = home / ".claude" / "skills" / REPORT_RELATIVE
+    assert report.read_bytes() == (ROOT / "res" / "skills" / REPORT_RELATIVE).read_bytes()
     initial_receipt = receipt(home).read_bytes()
     assert run_worker(home).returncode == 0
     assert receipt(home).read_bytes() == initial_receipt
@@ -43,6 +52,7 @@ def test_install_reinstall_uninstall_and_user_files(tmp_path):
     other.write_text("user skill", encoding="utf-8")
     assert run_worker(home, "--uninstall").returncode == 0
     assert not installed(home).exists()
+    assert not report.exists()
     assert not receipt(home).exists()
     assert note.read_text() == "user notes"
     assert other.read_text() == "user skill"
@@ -72,7 +82,7 @@ def test_preexisting_skill_is_not_claimed_or_removed(tmp_path, same_content):
     result = run_worker(tmp_path)
     assert result.returncode == (0 if same_content else 1)
     assert target.read_bytes() == content
-    assert not receipt(tmp_path).exists()
+    assert RELATIVE not in claims(tmp_path)
     assert run_worker(tmp_path, "--uninstall").returncode == 0
     assert target.read_bytes() == content
 
@@ -81,13 +91,15 @@ def test_edited_managed_skill_is_preserved_on_install_and_uninstall(tmp_path):
     assert run_worker(tmp_path).returncode == 0
     target = installed(tmp_path)
     target.write_text("user edit", encoding="utf-8")
-    manifest = receipt(tmp_path).read_bytes()
-    for args in [(), ("--uninstall",)]:
+    before = claims(tmp_path)
+    manifest = before[RELATIVE]
+    # 재설치는 영수증을 그대로 두고, 제거는 손대지 않은 스킬만 빼고 편집된 스킬의 항목을 남긴다.
+    for args, expected in [((), before), (("--uninstall",), {RELATIVE: manifest})]:
         result = run_worker(tmp_path, *args)
         assert result.returncode == 1
         assert "preserv" in result.stdout.lower()
         assert target.read_bytes() == b"user edit"
-        assert receipt(tmp_path).read_bytes() == manifest
+        assert claims(tmp_path) == expected
 
 
 def test_upgrade_of_unmodified_managed_skill(tmp_path):
@@ -288,6 +300,7 @@ def test_receipt_failure_rolls_back_skill_content(tmp_path, monkeypatch, upgrade
         apply(tmp_path)
     assert (target.read_bytes() if target.exists() else None) == original
     assert (receipt(tmp_path).read_bytes() if receipt(tmp_path).exists() else None) == old_receipt
+    assert not (tmp_path / ".claude" / "skills" / REPORT_RELATIVE).exists()
     monkeypatch.setitem(namespace, "atomic_write", write)
     assert apply(tmp_path) == 0
     assert apply(tmp_path, uninstall=True) == 0
