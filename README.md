@@ -67,7 +67,7 @@ irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubuserco
 | `--keybinds` | `-Keybinds` | 줄바꿈 키바인딩만 설치 |
 | `--newline <값>` | `-Newline <값>` | 줄바꿈 키: `shift-enter`(기본) 또는 `ctrl-enter` |
 | `--omc` | `-Omc` | oh-my-claudecode 플러그인 설치 + HUD에 프롬프트 캐시 TTL 표시. 전체 설치에는 포함되지 않는다 |
-| `--mods` | `-Mods` | Claude Code mod 설치(`bash-diff-filter`, `cache-ttl-status`). Claude Code v2.1.290 이상. 전체 설치에는 포함되지 않는다 |
+| `--mods` | `-Mods` | Claude Code mod 설치(`bash-diff-filter`, `cache-ttl-status`, `korean-reply-rewrite`). Claude Code v2.1.290 이상. 전체 설치에는 포함되지 않는다 |
 | `--output-style` | `-OutputStyle` | [fluent-korean](https://github.com/snflkd/fluent-korean) 플러그인 설치 + 출력 스타일을 `fluent-korean`으로 지정. 전체 설치에는 포함되지 않는다 |
 | `--no-onboard` | `-NoOnboard` | 질문 없이 전체 설치 |
 | `--uninstall` | `-Uninstall` | 설치한 것만 골라 되돌리기 |
@@ -130,7 +130,7 @@ curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercon
 | `~/.claude/skills/tailnet-report/SKILL.md` | 근거 수집·사실 자료 고정·visual-explainer로 페이지 작성·브라우저 검증·`tailscale serve` 게시 절차 |
 | 줄바꿈 키 | `~/.claude/keybindings.json`, `~/.codex/config.toml`, VS Code·Cursor `keybindings.json`(에디터가 없어도 만든다), `~/.tmux.conf`(POSIX만), Windows Terminal(`ctrl-enter`일 때만) |
 | OMC (`--omc`일 때만) | oh-my-claudecode 플러그인, `~/.claude/hud/omc-hud-ttl.mjs`, `settings.json`의 `statusLine` 래퍼와 `refreshInterval` |
-| mod (`--mods`일 때만) | `~/.claude/mods/bash-diff-filter/`, `~/.claude/mods/cache-ttl-status/`, `settings.json`의 `env.CLAUDE_CODE_PLUGIN_DIRS` |
+| mod (`--mods`일 때만) | `~/.claude/mods/bash-diff-filter/`, `~/.claude/mods/cache-ttl-status/`, `~/.claude/mods/korean-reply-rewrite/`, `settings.json`의 `env.CLAUDE_CODE_PLUGIN_DIRS` |
 | 출력 스타일 (`--output-style`일 때만) | fluent-korean 플러그인, `~/.claude/settings.json`의 `outputStyle` = `fluent-korean:fluent-korean`. 원래 값은 영수증에 남기고 `--uninstall`이 우리가 넣은 값 그대로일 때만 되돌린다(플러그인은 유지). 새 세션부터 적용된다 |
 
 필요한 것 — 모든 OS에서 **Python 3.9+**(훅이 `python3`, Windows에서는 `python`으로 실행된다). 휴지통 도구는 macOS 14.4+ 기본 `/usr/bin/trash`, Linux `trash-cli`, Windows `send2trash`를 쓰며, 없으면 설치 중에 pip로 설치를 시도한다.
@@ -372,6 +372,7 @@ VS Code / Cursor `keybindings.json` 경로는 OS별로 다르다 — Windows `%A
 | --- | --- |
 | `bash-diff-filter` | Bash 실행 뒤 보여 주는 '바뀐 파일' diff에서 OMC HUD가 렌더마다 다시 쓰는 `.omc/state/hud-stdin-cache.json`(세션별 경로 포함)을 뺀다. 걸러내는 대상은 Bash 결과의 `bashEditDiff` 필드이며, 이 필드는 원래 모델에 전달되지 않으므로 화면 표시만 바뀐다. `OMC_STATE_DIR`로 OMC 상태를 프로젝트 밖에 두면 이 파일은 애초에 표시되지 않으므로 거르지 않는다. |
 | `cache-ttl-status` | 프롬프트 캐시 잔여 시간(`cache:57m`, 1분 미만은 초, 만료되면 `cache:cold`)을 **프롬프트 아래 상태 줄**에 띄운다. mod API는 statusLine의 `prompt_cache.expires_at`을 주지 않으므로, 메인 대화의 요청이 캐시를 읽거나 쓴 시각에 TTL을 더해 계산한다(서브에이전트 요청은 제외). TTL은 mod 설정 `ttl`(`1h` 기본, `5m`)로 시작하고, 모델을 바꾸면 엔진이 알려 주는 실제 값으로 갱신한다. 계산값이므로 실제 만료 시각과 몇 초 어긋날 수 있다. |
+| `korean-reply-rewrite` | 한국어로 물었는데 메인 루프가 영어로 답하면, 그 응답 블록을 저장 직전에 Haiku로 한국어로 번역해 기록과 다음 요청에 넣는다. 영어 응답이 기록에 쌓이면 이후 응답도 영어로 굳기 때문에, 영어 선례를 남기지 않는 것이 목적이다. 프롬프트에서 한글 단어가 영어 단어보다 적거나 영어·영작·번역·커밋·PR을 언급했으면 바꾸지 않는다. 화면이 없는 `claude -p` 실행, 서브에이전트 응답, thinking은 건드리지 않는다. 짝이 맞는 ```` ``` ```` 펜스 코드와 인라인 코드는 자리표시자로 빼 두었다가 그대로 되돌리며(`~~~` 펜스·들여쓰기 코드·닫히지 않은 펜스는 번역 지시로만 보호한다), 번역이 실패하거나 잘리거나 자리표시자가 어긋나면 원문을 그대로 둔다. 터미널에는 스트리밍과 번역이 끝날 때까지(긴 답은 수십 초) 영어 원문이 보였다가 저장되면 번역본으로 바뀐다. 영어 블록마다 Haiku 호출이 한 번 는다. |
 
 - `--omc`의 HUD 래퍼(`session:` 자리에 `cache:`)와는 별개다. 둘 다 설치하면 TTL이 HUD 안과 프롬프트 아래 두 곳에 보인다.
 - 테스트(`*.test.ts`)와 엔진이 로드 때 만드는 타입(`.claude-plugin/types/`)은 복사하지 않는다. 같은 이름의 폴더에 내용이 다른 파일이 있으면 덮어쓰지 않고 멈춘다.
@@ -467,6 +468,7 @@ res/
     apply.py                # 번들 mod 를 ~/.claude/mods 에 복사 + CLAUDE_CODE_PLUGIN_DIRS 등록 / uninstall
     bash-diff-filter/       # Bash 변경 파일 표시에서 OMC HUD 캐시를 빼는 mod (claude plugin test 로 검증)
     cache-ttl-status/       # 프롬프트 캐시 잔여 시간을 프롬프트 아래 상태 줄에 띄우는 mod
+    korean-reply-rewrite/   # 한국어 프롬프트 뒤 영어 응답을 한국어로 바꿔 저장하는 mod
   hooks/
     danger_guard.py         # 위험 명령 가드 (Bash + PowerShell, 전 플랫폼 공용)
     shims/rm                # 삭제 → 휴지통 (POSIX 셸·Git Bash)

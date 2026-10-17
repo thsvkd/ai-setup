@@ -6,6 +6,8 @@ scripts/setup_mods.sh(.ps1) 가 호출한다. 번들:
   bash-diff-filter  OMC HUD 가 렌더마다 프로젝트에 쓰는 .omc/state/hud-stdin-cache.json 을
                     Bash 의 '바뀐 파일' 표시에서 뺀다.
   cache-ttl-status  프롬프트 캐시 잔여 시간(cache:57m)을 프롬프트 아래 상태 줄에 띄운다.
+  korean-reply-rewrite  한국어 프롬프트 뒤 메인 루프의 영어 응답 블록을 저장 직전에 한국어로
+                    바꿔, 쌓인 영어 기록이 이후 응답을 영어로 끌고 가지 않게 한다.
 
 CLAUDE_CODE_PLUGIN_DIRS 는 ~/.claude/settings.json 의 env 에서 읽힌다(프로젝트 설정은 아님)
 (https://code.claude.com/docs/en/plugins/mods/reference#settings-and-environment-variables).
@@ -28,7 +30,7 @@ from merge_and_diff import backup_file, write_json  # noqa: E402
 
 MANIFEST_NAME = ".claude-code-setup.json"
 ENV_KEY = "CLAUDE_CODE_PLUGIN_DIRS"
-MODS = ("bash-diff-filter", "cache-ttl-status")
+MODS = ("bash-diff-filter", "cache-ttl-status", "korean-reply-rewrite")
 # 엔진이 mod 를 로드할 때마다 이 폴더에 타입 선언과 tsconfig 를 새로 써 넣는다. 우리 파일이 아니다.
 GENERATED = ".claude-plugin/types"
 # 엔진은 mod 루트에도 위 tsconfig 를 상속하는 한 줄짜리 tsconfig.json 을 둔다.

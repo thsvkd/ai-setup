@@ -454,9 +454,10 @@ Describe "real install path (S2)" {
             $after = Get-Content (Join-Path $claudeDir "settings.json") -Raw | ConvertFrom-Json
             $after.statusLine.command | Should -Match "omc-hud-ttl.mjs"
             # 목록 구분자는 OS 의 경로 구분자다(apply.py 의 os.pathsep — Windows ';', 그 외 ':').
-            $after.env.CLAUDE_CODE_PLUGIN_DIRS | Should -Be ((Join-Path $claudeDir "mods\bash-diff-filter") + [System.IO.Path]::PathSeparator + (Join-Path $claudeDir "mods\cache-ttl-status"))
+            $after.env.CLAUDE_CODE_PLUGIN_DIRS | Should -Be ((Join-Path $claudeDir "mods\bash-diff-filter") + [System.IO.Path]::PathSeparator + (Join-Path $claudeDir "mods\cache-ttl-status") + [System.IO.Path]::PathSeparator + (Join-Path $claudeDir "mods\korean-reply-rewrite"))
             Test-Path (Join-Path $claudeDir "mods\bash-diff-filter\hooks\register.ts") | Should -Be $true
             Test-Path (Join-Path $claudeDir "mods\cache-ttl-status\hooks\register.ts") | Should -Be $true
+            Test-Path (Join-Path $claudeDir "mods\korean-reply-rewrite\hooks\register.ts") | Should -Be $true
 
             (Invoke-Script $script:Setup @("-Uninstall")).ExitCode | Should -Be 0
             Test-Path (Join-Path $claudeDir "settings.json") | Should -Be $false

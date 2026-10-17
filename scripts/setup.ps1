@@ -73,6 +73,7 @@ Usage: .\setup.ps1 [options]
   -Mods         install Claude Code mods (~/.claude/mods, v2.1.290 or later)
                 · bash-diff-filter: hides OMC HUD cache files from the Bash changed-files display
                 · cache-ttl-status: shows the remaining prompt-cache time in a status line below the prompt
+                · korean-reply-rewrite: after a Korean prompt, stores English replies in Korean so later replies stay Korean
                 (not included in the default install without a scope)
   -Uninstall    remove guard hooks + managed keybindings/skills + cache TTL HUD + outputStyle + mod settings
                 (permissions, user entries and the OMC/fluent-korean plugins are kept)

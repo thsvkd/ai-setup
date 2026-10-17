@@ -43,7 +43,7 @@ def write_settings(home, data):
     (claude(home) / "settings.json").write_text(json.dumps(data), encoding="utf-8")
 
 
-MOD_NAMES = ("bash-diff-filter", "cache-ttl-status")
+MOD_NAMES = ("bash-diff-filter", "cache-ttl-status", "korean-reply-rewrite")
 
 
 def mod_dir(home, name):
@@ -195,7 +195,7 @@ def test_same_path_with_different_notation_is_not_added_twice(home):
     variant = first.upper() if os.name == "nt" else first + "/"
     write_settings(home, {"env": {KEY: variant}})
     assert apply(home).returncode == 0
-    assert settings(home)["env"][KEY] == os.pathsep.join([variant, mod_dir(home, MOD_NAMES[1])])
+    assert settings(home)["env"][KEY] == os.pathsep.join([variant] + [mod_dir(home, n) for n in MOD_NAMES[1:]])
 
 
 def test_reinstall_after_env_block_removal_lets_uninstall_remove_env(home):
