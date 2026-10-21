@@ -349,7 +349,7 @@ function Uninstall-Hooks {
             $payload = [ordered]@{}
             try {
                 $m = Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-                foreach ($key in @("keybinds", "omc_hud", "output_style", "mods")) {
+                foreach ($key in @("keybinds", "omc_hud", "output_style", "mods", "tool_installs", "tool_attempts")) {
                     if ($m -and $m.PSObject.Properties.Name -contains $key -and $m.$key) {
                         $payload[$key] = $m.$key
                     }

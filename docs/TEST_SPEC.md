@@ -37,7 +37,7 @@
 | AI-15 | WHEN 선택한 하네스가 없으면 THE SYSTEM SHALL 현재 플랫폼의 카탈로그 설치 명령을 호출하고 성공하면 영수증에 기록한다 | | 미착수 |
 | AI-16 | WHEN 하네스의 선행 조건(예: Node 버전)이 맞지 않으면 THE SYSTEM SHALL 설치하지 않고 필요한 조건을 안내한다 | | 미착수 |
 | AI-17 | WHEN `--dry-run` 과 함께 설치 단계를 실행하면 THE SYSTEM SHALL 호출할 명령만 출력하고 아무것도 실행하지 않는다 | | 미착수 |
-| AI-18 | WHEN `--tools orca` 를 macOS·Windows·Linux 에서 실행하면 THE SYSTEM SHALL 각각 brew cask(tap stablyai/orca), winget `StablyAI.Orca`, GitHub 릴리스 패키지 경로를 선택한다 | | 미착수 |
+| AI-18 | WHEN `--tools orca` 를 macOS·Windows·Linux 에서 실행하면 THE SYSTEM SHALL 공식 `/Applications/Orca.app`, Windows 사용자 설치본, 공식 deb 경로를 선택한다 (2026-10-21 플랫폼별 설치 방식 적용) | `test_official_package_selection` | GREEN (플랫폼별 선택 검증) |
 | AI-34 | WHEN `--install-harness`·`--tools` 를 `--uninstall` 과 함께 실행하면 THE SYSTEM SHALL 영수증에 기록된 항목만 기록된 설치 방식의 제거 명령으로 지우고, 원래 있던 항목과 설정·인증 디렉터리는 남긴다 | | 미착수 |
 | AI-35 | WHEN sudo 가 필요한 설치 명령을 실행하기 전이면 THE SYSTEM SHALL 명령 전체를 출력하고, 표준 입력이 TTY 가 아니면 실행하지 않고 건너뛴 것으로 보고한다 | | 미착수 |
 | AI-36 | WHEN 인자 없이 비대화형으로 실행하면 THE SYSTEM SHALL 새 단계를 하나도 실행하지 않는다 | | 미착수 |

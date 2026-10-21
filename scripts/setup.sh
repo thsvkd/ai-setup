@@ -36,6 +36,8 @@ Usage: bash setup.sh [options]
   --harness L   harnesses to install instructions for (comma-separated: claude,codex,grok,opencode,all)
                 choosing claude also installs CLAUDE.md. Default is all.
   --skills      install bundled skills only (~/.claude/skills)
+  --tools orca  install the official Orca package and its bundled skills only
+                may be combined with --dry-run or --uninstall
   --keybinds    install newline keybindings only (VS Code/Cursor/Claude/Codex/tmux)
   --newline VAL newline key (shift-enter | ctrl-enter). Default shift-enter
   --omc         install the oh-my-claudecode plugin + show cache TTL in the HUD
@@ -80,6 +82,7 @@ DRY_RUN=0
 UNINSTALL=0
 NO_ONBOARD=0
 RUN_DOCTOR=0
+TOOLS=""
 # 온보딩이 채우는 값들. 비어 있으면 워커가 각자의 기본값을 쓴다.
 DEFAULT_MODE=""
 FORCE_AGENTSMD=0
@@ -94,6 +97,13 @@ while [[ $# -gt 0 ]]; do
         --hooks) RUN_HOOKS=1; HAD_ARGS=1; shift ;;
         --agentsmd) RUN_AGENTSMD=1; HAD_ARGS=1; shift ;;
         --skills) RUN_SKILLS=1; HAD_ARGS=1; shift ;;
+        --tools)
+            if [[ -z "${2:-}" ]]; then echo "--tools requires orca." >&2; exit 1; fi
+            TOOLS="$2"; HAD_ARGS=1; shift 2 ;;
+        --tools=*)
+            TOOLS="${1#*=}"
+            if [[ -z "$TOOLS" ]]; then echo "--tools requires orca." >&2; exit 1; fi
+            HAD_ARGS=1; shift ;;
         --keybinds) RUN_KEYBINDS=1; HAD_ARGS=1; shift ;;
         --omc) RUN_OMC=1; HAD_ARGS=1; shift ;;
         --output-style) RUN_OUTPUT_STYLE=1; HAD_ARGS=1; shift ;;
@@ -232,6 +242,19 @@ if [[ "$RUN_DOCTOR" -eq 1 ]]; then
     status="${PIPESTATUS[0]}"
     set -e
     exit "$status"
+fi
+
+# 도구만 설치할 때 기본 훅·AGENTS.md 설치로 흘러가지 않게 별도로 끝낸다.
+if [[ -n "$TOOLS" ]]; then
+    if [[ "$TOOLS" != "orca" || "$RUN_HOOKS$RUN_AGENTSMD$RUN_KEYBINDS$RUN_SKILLS$RUN_OMC$RUN_OUTPUT_STYLE$RUN_MODS" != "0000000" || -n "$HARNESSES$NEWLINE_CHORD" ]]; then
+        echo "--tools currently accepts orca alone, with --dry-run or --uninstall." >&2
+        exit 1
+    fi
+    PY="$(resolve_python_command)" || { echo "Python 3.8+ is required." >&2; exit 2; }
+    tool_args=()
+    [[ "$DRY_RUN" -eq 1 ]] && tool_args+=(--dry-run)
+    [[ "$UNINSTALL" -eq 1 ]] && tool_args+=(--uninstall)
+    exec "$PY" -B -X utf8 "$REPO_ROOT/res/tools/orca.py" ${tool_args[@]+"${tool_args[@]}"}
 fi
 
 # 인자가 하나도 없을 때만 온보딩을 띄운다.

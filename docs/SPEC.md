@@ -43,6 +43,16 @@
 
 ## 데이터 계약
 
+### Orca 설치 (2026-10-21 플랫폼별 설치 방식 적용)
+
+- `--tools orca` / `-Tools orca`는 `res/tools/orca.py`를 호출한다. 현재 도구 설치의 구현 범위는 Orca이며 다른 설정 범위와 혼합하지 않는다.
+- macOS는 공식 zip의 `/Applications/Orca.app`, Windows는 공식 `orca-windows-setup.exe /S /CURRENTUSER`, Debian/Ubuntu는 공식 `orca-ide_<version>_<arch>.deb`를 선택한다. Homebrew cask·winget을 새 설치의 소유자로 추가하지 않는다.
+- 공식 stable 매니페스트에서 현재 아키텍처의 파일을 선택하고, 다운로드 크기·SHA-512를 검증한 뒤 설치한다. Mac은 서명·Gatekeeper를 확인한다. Linux sudo는 기존 D3 규칙을 따른다.
+- 기존 설치는 보존한다. 새 패키지·버전 확인 후 `tool_installs.orca`에 `method`, `version`, `skills_added`, `skills_state`를 기록한다. 다른 영수증 키는 보존한다. 패키지 단계는 `tool_attempts.orca`로 추적하며, 중단 뒤 설치 경로가 남아 있으면 성공으로 간주하지 않고 점검을 요구한다.
+- 스킬은 설치본 CLI의 번들 목록에서 공용 디렉터리·universal 링크·lock 항목이 모두 없는 이름만 선택하고 `skills install --skill <name> --agent universal`로 같은 빌드의 고정된 원본을 사용한다. 기존 lock은 version 3 이상이며 파싱할 수 있어야 한다. 중단 시 부분 설치를 기록하고 `skills_state=pending`으로 남겨 재실행 때 스킬만 재시도한다.
+- 제거는 기록된 설치 방식에만 적용하며 사용자 설정·인증·프로젝트·페어링 파일은 보존한다. 스킬은 새로 추가했고 내용 해시가 그대로인 것만 제거하며, 그 설치가 만든 universal 링크와 일치하는 lock 항목도 정리한다.
+- `--dry-run`은 릴리스·스킬 네트워크 요청, 설치, 영수증 쓰기를 하지 않는다.
+
 - `res/catalog.json` 항목: `id`, `kind`(`harness`/`tool`), `skills`(선택, 도구와 함께 설치할 `sources.json` 형식 항목), `detect`(실행 파일 이름과 버전 인자), `install`·`uninstall`(플랫폼별 명령 목록, 설치 방식별로 짝을 이룬다), `update`, `plugin_update`(선택), `requires`(예: `node>=20`), `sudo`(bool).
   - `packages`: 설치 방식별 패키지 이름(`npm`, `winget`, `brew`, `brew_cask`, `deb`). update-ai 는 찾은 실행 파일이 실제로 그 방식으로 깔린 것일 때만 그 방식으로 올린다(npm 은 `node_modules/<pkg>` 안에 있을 때, winget 은 `WinGet` 경로, brew 는 brew prefix 아래). 패키지 목록 조회는 기본 `update` 명령이 없는 도구의 마지막 확인에만 쓴다.
   - `detect.sessions`(선택): 실행 중인 세션 판정 보정. `match` 는 실행 파일 이름이 다른 세션(`/opt/Orca/orca-ide`, qemu 로 도는 grok)을, `ignore` 는 세션이 아닌 상주 프로세스(데몬·데스크톱 앱: `herdr server`, `graft mcp`, codex app-server 데몬, Claude Desktop)를 명령줄 부분 문자열로 적는다.

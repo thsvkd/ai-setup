@@ -24,6 +24,7 @@ param(
     [switch]$AgentsMd,
     [switch]$Keybinds,
     [switch]$Skills,
+    [string]$Tools = "",
     [switch]$Omc,
     [switch]$OutputStyle,
     [switch]$Mods,
@@ -52,6 +53,7 @@ $ErrorActionPreference = "Stop"
 # PS 7.4+ 는 네이티브 명령의 0이 아닌 종료 코드를 종료 오류로 승격시킬 수 있다 ($true 가 기본인
 # 빌드/프로필이 있음). 이 스크립트들은 실패를 $LASTEXITCODE 로 직접 판정하므로 명시적으로 끈다.
 $PSNativeCommandUseErrorActionPreference = $false
+$toolsGiven = $PSBoundParameters.ContainsKey("Tools")
 
 function Show-Usage {
     Write-Host @"
@@ -64,6 +66,8 @@ Usage: .\setup.ps1 [options]
   -Harness L    harnesses to install instructions for (comma-separated: claude,codex,grok,opencode,all)
                 choosing claude also installs CLAUDE.md. Default is all.
   -Skills       install bundled skills only (~/.claude/skills)
+  -Tools orca   install the official Orca package and its bundled skills only
+                may be combined with -DryRun or -Uninstall
   -Keybinds     install newline keybindings only (VS Code/Cursor/Claude/Codex)
   -Newline VAL  newline key (shift-enter | ctrl-enter). Default shift-enter
   -Omc          install the oh-my-claudecode plugin + show cache TTL in the HUD
@@ -119,6 +123,12 @@ for ($i = 0; $i -lt $Rest.Count; $i++) {
         '^--dry-run$'            { $DryRun = $true }
         '^--no-onboard$'         { $NoOnboard = $true }
         '^--doctor$'             { $Doctor = $true }
+        '^--tools=(.*)$'         { $Tools = $Matches[1]; $toolsGiven = $true }
+        '^--tools$' {
+            $toolsGiven = $true
+            $Tools = if ($i + 1 -lt $Rest.Count) { $Rest[++$i] } else { "" }
+            if (-not $Tools) { Write-Host "--tools requires orca."; exit 1 }
+        }
         '^--newline=(.*)$'       { $Newline = $Matches[1]; $newlineGiven = $true }
         '^--harness=(.*)$'       { $Harness = @($Matches[1]); $harnessGiven = $true }
         '^--harness$' {
@@ -147,6 +157,7 @@ if ($unknownArgs.Count -gt 0) {
 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
+if ($toolsGiven -and -not $Tools) { Write-Host "--tools requires orca." -ForegroundColor Red; exit 1 }
 
 # 온보딩이 채우는 값들. 비어 있으면 워커가 각자의 기본값을 쓴다.
 $defaultMode = ""
@@ -205,6 +216,20 @@ if ($Doctor) {
     $homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
     # -B: 바이트코드 캐시도 쓰지 않는다(doctor 는 읽기 전용).
     & $py.Exe @($py.Args) -B -X utf8 (Join-Path $RepoRoot "res\doctor\doctor.py") --home $homeDir
+    exit $LASTEXITCODE
+}
+
+if ($Tools) {
+    if ($Tools -ne "orca" -or $Hooks -or $AgentsMd -or $Keybinds -or $Skills -or $Omc -or $OutputStyle -or $Mods -or $Harness.Count -or $Newline) {
+        Write-Host "-Tools currently accepts orca alone, with -DryRun or -Uninstall." -ForegroundColor Red
+        exit 1
+    }
+    $py = Resolve-PythonForOnboard
+    if (-not $py) { Write-Host "Python 3.8+ is required." -ForegroundColor Red; exit 2 }
+    $toolArgs = @()
+    if ($DryRun) { $toolArgs += "--dry-run" }
+    if ($Uninstall) { $toolArgs += "--uninstall" }
+    & $py.Exe @($py.Args) -B -X utf8 (Join-Path $RepoRoot "res\tools\orca.py") @toolArgs
     exit $LASTEXITCODE
 }
 

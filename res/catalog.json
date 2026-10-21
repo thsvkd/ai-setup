@@ -328,19 +328,19 @@
       "linux": [
         {
           "method": "deb",
-          "cmd": "download orca-ide_<version>_<arch>.deb from https://github.com/stablyai/orca/releases and run: sudo apt install ./orca-ide_<version>_<arch>.deb"
+          "cmd": "python3 res/tools/orca.py"
         }
       ],
       "macos": [
         {
-          "method": "brew",
-          "cmd": "brew install --cask stablyai/orca/orca"
+          "method": "app",
+          "cmd": "python3 res/tools/orca.py"
         }
       ],
       "windows": [
         {
-          "method": "winget",
-          "cmd": "winget install StablyAI.Orca"
+          "method": "user-setup",
+          "cmd": "python res/tools/orca.py"
         }
       ]
     },
@@ -349,7 +349,27 @@
       "deb": "orca-ide",
       "brew_cask": "stablyai/orca/orca"
     },
-    "update": null
+    "update": null,
+    "uninstall": {
+      "linux": [
+        {
+          "method": "deb",
+          "cmd": "python3 res/tools/orca.py --uninstall"
+        }
+      ],
+      "macos": [
+        {
+          "method": "app",
+          "cmd": "python3 res/tools/orca.py --uninstall"
+        }
+      ],
+      "windows": [
+        {
+          "method": "user-setup",
+          "cmd": "python res/tools/orca.py --uninstall"
+        }
+      ]
+    }
   },
   {
     "id": "herdr",

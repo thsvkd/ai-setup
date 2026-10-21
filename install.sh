@@ -38,6 +38,7 @@ Usage:
   curl -fsSL .../install.sh | sh -s -- --dry-run  # preview without changing anything
   curl -fsSL .../install.sh | sh -s -- --no-onboard # full install without onboarding
   curl -fsSL .../install.sh | sh -s -- --skills   # bundled skills only
+  curl -fsSL .../install.sh | sh -s -- --tools orca --dry-run # preview official Orca install
   curl -fsSL .../install.sh | sh -s -- --keybinds # newline keybinding only
   curl -fsSL .../install.sh | sh -s -- --omc      # oh-my-claudecode + cache TTL HUD
   curl -fsSL .../install.sh | sh -s -- --output-style # fluent-korean output style

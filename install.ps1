@@ -33,6 +33,7 @@ param(
     [switch]$AgentsMd,
     [switch]$Keybinds,
     [switch]$Skills,
+    [string]$Tools,
     [switch]$Omc,
     [switch]$OutputStyle,
     [switch]$Mods,
@@ -142,6 +143,7 @@ function Invoke-Install {
         [switch]$AgentsMd,
         [switch]$Keybinds,
         [switch]$Skills,
+        [string]$Tools,
         [switch]$Omc,
         [switch]$OutputStyle,
         [switch]$Mods,
@@ -162,6 +164,7 @@ function Invoke-Install {
     $restTokens = $Rest
     $newlineGiven = $PSBoundParameters.ContainsKey("Newline")
     $harnessGiven = $PSBoundParameters.ContainsKey("Harness")
+    $toolsGiven = $PSBoundParameters.ContainsKey("Tools")
     $unknownArgs = @()
     for ($i = 0; $i -lt $restTokens.Count; $i++) {
         switch -Regex ([string]$restTokens[$i]) {
@@ -173,6 +176,11 @@ function Invoke-Install {
             '^--omc$'                { $Omc = $true }
             '^--output-style$'       { $OutputStyle = $true }
             '^--mods$'               { $Mods = $true }
+            '^--tools=(.*)$'         { $Tools = $Matches[1]; $toolsGiven = $true }
+            '^--tools$' {
+                $toolsGiven = $true
+                $Tools = if ($i + 1 -lt $restTokens.Count) { [string]$restTokens[++$i] } else { "" }
+            }
             '^--uninstall$'          { $Uninstall = $true }
             '^--dry-run$'            { $DryRun = $true }
             '^--no-onboard$'         { $NoOnboard = $true }
@@ -189,6 +197,8 @@ function Invoke-Install {
             default { $unknownArgs += $restTokens[$i] }
         }
     }
+
+    if ($toolsGiven -and -not $Tools) { throw "--tools requires orca." }
 
     if ($Help) {
         Write-Host @"
@@ -257,6 +267,7 @@ Environment variables:
         # $PSBoundParameters 가 아니라 변수에서 읽는다 — 위 긴 표기(--dry-run) 해석 결과는
         # $PSBoundParameters 에 남지 않는다.
         $fwd = @{}
+        if ($toolsGiven) { $fwd['Tools'] = $Tools }
         foreach ($k in 'Hooks', 'AgentsMd', 'Uninstall', 'DryRun', 'NoOnboard', 'Keybinds', 'Skills', 'Omc', 'OutputStyle', 'Mods') {
             if (Get-Variable -Name $k -ValueOnly) { $fwd[$k] = $true }
         }

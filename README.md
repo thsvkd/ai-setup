@@ -64,6 +64,7 @@ irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubuserco
 | `--agentsmd` | `-AgentsMd` | 현재 폴더에 `AGENTS.md`만 설치 |
 | `--harness <목록>` | `-Harness <목록>` | 지침을 설치할 하네스: `claude`,`codex`,`grok`,`opencode`,`all` (기본 `all`) |
 | `--skills` | `-Skills` | 번들 스킬만 설치 (`~/.claude/skills`) |
+| `--tools orca` | `-Tools orca` | 공식 Orca 패키지와 그 빌드의 번들 스킬만 설치. `--dry-run`·`--uninstall`과 조합 가능 |
 | `--keybinds` | `-Keybinds` | 줄바꿈 키바인딩만 설치 |
 | `--newline <값>` | `-Newline <값>` | 줄바꿈 키: `shift-enter`(기본) 또는 `ctrl-enter` |
 | `--omc` | `-Omc` | oh-my-claudecode 플러그인 설치 + HUD에 프롬프트 캐시 TTL 표시. 전체 설치에는 포함되지 않는다 |
@@ -85,6 +86,26 @@ PowerShell은 `| iex`로는 인자를 넘길 수 없어서 scriptblock으로 감
 ```
 
 레포를 clone했다면 `bash scripts/setup.sh --dry-run` / `.\scripts\setup.ps1 -DryRun`처럼 직접 실행해도 된다.
+
+### Orca 설치
+
+`bash scripts/setup.sh --tools orca --dry-run`으로 설치 계획을 확인하고, 실제 설치에는 `--dry-run`을 뺀다.
+Windows에서는 `.\scripts\setup.ps1 -Tools orca -DryRun`을 사용한다.
+기존 Orca 설치가 있으면 유지하며 소유권을 새로 기록하지 않는다.
+
+새 설치 형태는 Debian/Ubuntu의 공식 deb(`/opt/Orca`), macOS의 공식 `/Applications/Orca.app`,
+Windows의 공식 사용자 설치본(`%LOCALAPPDATA%\Programs\orca`)이다. 공식 stable 매니페스트의 크기와 SHA-512가
+일치한 패키지만 실행한다. Mac 앱은 서명·Gatekeeper 검사 후 설치한다. Linux의 sudo 설치는 대화형 터미널에서 실행한다.
+CLI는 이 설치본 안의 것을 사용해 번들 목록을 읽고, 기존 디렉터리·링크·lock 항목이 없는 스킬만 `skills install --skill <name> --agent universal`로 추가한다.
+사용자 설정·프로젝트·페어링 데이터는 유지한다.
+
+`--tools orca --uninstall`은 이 설치기가 기록한 패키지와 새로 추가한 스킬만 제거한다.
+스킬의 공용 경로·새로 만든 링크·lock 항목은 영수증과 일치할 때 함께 정리한다. 변경된 스킬은 보존하며, 스킬 설치가 중단되면 다음 실행에서 패키지를 유지하고 스킬만 재시도한다.
+이 단계는 Orca 설치를 맡는다. 헤드리스 서버의 서비스 구성은 별도 단계이며, 기존 서버의 갱신은 Jarvis에서 실행한다.
+Mac의 앱 업데이터와 함께 Homebrew cask를 추가 설치하지 않는다.
+
+공식 계약: [릴리스](https://github.com/stablyai/orca/releases/latest),
+[번들 스킬 설치](https://www.onorca.dev/docs/cli/reference).
 
 ### update-ai
 
