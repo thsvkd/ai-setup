@@ -19,6 +19,20 @@ orcasetup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(orcasetup)
 
 
+def configured_orca_server_setup(home):
+    return {
+        'state': 'configured',
+        'server_profile': str(home / 'orca'),
+        'client_profile': str(home / 'orca-desktop'),
+        'desktop_environment_id': 'env-1',
+        'pairing_codes_path': str(home / 'pairing-codes.txt'),
+        'service_manager': 'task-scheduler',
+        'service_root': str(home / 'service'),
+        'service_path': str(home / 'service.xml'),
+        'service_task': 'ai-setup Orca Server',
+    }
+
+
 @pytest.mark.parametrize('plat,arch,method,manifest,name', [
     ('linux','aarch64','deb','latest-linux-arm64.yml','orca-ide_1.4.237_arm64.deb'),
     ('linux','x86_64','deb','latest-linux.yml','orca-ide_1.4.237_amd64.deb'),
@@ -47,8 +61,50 @@ def test_existing_install_is_preserved_without_receipt(tmp_path, monkeypatch):
     monkeypatch.setattr(orcasetup, 'home_dir', lambda: tmp_path)
     monkeypatch.setattr(orcasetup, 'existing_install', lambda p: True)
     monkeypatch.setattr(orcasetup, 'fetch_manifest', lambda p: pytest.fail('existing app requested download'))
-    assert orcasetup.main([]) == 0
+    monkeypatch.setattr(orcasetup, 'configure_orca_host', lambda *a, **k: {'state': 'active-preserved'})
+    assert orcasetup.main([]) == 1
     assert not list(tmp_path.iterdir())
+
+
+def test_existing_install_configures_server_and_records_before_open(tmp_path, monkeypatch):
+    calls=[]
+    monkeypatch.setattr(orcasetup,'home_dir',lambda:tmp_path)
+    monkeypatch.setattr(orcasetup,'existing_install',lambda p:True)
+    setup={
+        'state':'configured','server_profile':str(tmp_path/'orca'),'client_profile':str(tmp_path/'orca-desktop'),
+        'desktop_environment_id':'env-1','pairing_codes_path':str(tmp_path/'pairing-codes.txt'),
+        'service_manager':'task-scheduler','service_root':str(tmp_path/'service'),
+        'service_path':str(tmp_path/'service.xml'),'service_task':'ai-setup Orca Server',
+    }
+    monkeypatch.setattr(orcasetup,'configure_orca_host',lambda *a,**k:setup)
+    def open_client(cli,record):
+        saved=json.loads((tmp_path/'.claude/.claude-code-setup.json').read_text())
+        assert saved['tool_installs']['orca_server']['desktop_environment_id']=='env-1'
+        calls.append((cli,record))
+    monkeypatch.setattr(orcasetup,'open_configured_orca_client',open_client)
+    assert orcasetup.main([])==0
+    receipt=json.loads((tmp_path/'.claude/.claude-code-setup.json').read_text())
+    assert receipt['tool_installs']['orca_server']==setup
+    assert calls and calls[0][1]['desktop_environment_id']=='env-1'
+
+
+def test_server_setup_failure_keeps_recoverable_ownership_receipt(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(orcasetup, 'home_dir', lambda: tmp_path)
+    monkeypatch.setattr(orcasetup, 'package_plan', lambda *a: {'method': 'app'})
+    monkeypatch.setattr(orcasetup, 'existing_install', lambda p: True)
+    monkeypatch.setattr(orcasetup, 'install_paths', lambda p: (tmp_path / 'Orca.app', tmp_path / 'orca.exe'))
+    configuring = configured_orca_server_setup(tmp_path)
+    configuring['state'] = 'configuring'
+
+    def fail_setup(*args, on_record=None, **kwargs):
+        assert on_record is not None
+        on_record(configuring)
+        raise RuntimeError('mobile pairing did not become ready')
+
+    monkeypatch.setattr(orcasetup, 'configure_orca_host', fail_setup)
+    assert orcasetup.main([]) == 1
+    receipt = json.loads((tmp_path / '.claude/.claude-code-setup.json').read_text())
+    assert receipt['tool_installs']['orca_server']['state'] == 'configuring'
 
 
 def test_bad_hash_never_reaches_package_installer(tmp_path, monkeypatch):
@@ -101,6 +157,8 @@ def test_success_records_package_and_skills_without_changing_other_receipt_keys(
     monkeypatch.setattr(orcasetup,'install_package',lambda *a:None)
     monkeypatch.setattr(orcasetup,'installed_version',lambda p:'1.4.237')
     monkeypatch.setattr(orcasetup,'install_skills',lambda p,h,owned,checkpoint=None: owned['skills_added'].update({'orca-cli':'digest'}))
+    monkeypatch.setattr(orcasetup,'configure_orca_host',lambda *a,**k:configured_orca_server_setup(tmp_path))
+    monkeypatch.setattr(orcasetup,'open_configured_orca_client',lambda *a:None)
     assert orcasetup.main([])==0
     receipt=json.loads(manifest.read_text())
     assert receipt['mods']=={'user':'preserved'}
@@ -133,6 +191,8 @@ def test_partial_skills_are_recorded_after_failed_install(tmp_path, monkeypatch)
     cli=tmp_path/'orca';cli.write_text('stub')
     monkeypatch.setattr(orcasetup,'home_dir',lambda:tmp_path)
     monkeypatch.setattr(orcasetup,'existing_install',lambda p:False)
+    monkeypatch.setattr(orcasetup,'configure_orca_host',lambda *a,**k:configured_orca_server_setup(tmp_path))
+    monkeypatch.setattr(orcasetup,'open_configured_orca_client',lambda *a:None)
     monkeypatch.setattr(orcasetup,'package_plan',lambda *a:plan)
     monkeypatch.setattr(orcasetup,'install_paths',lambda p:(tmp_path/'Orca.app',cli))
     monkeypatch.setattr(orcasetup,'fetch_manifest',lambda p:('1.4.237',{}))
@@ -235,6 +295,73 @@ def test_dangling_package_link_is_preserved(tmp_path,monkeypatch):
     assert orcasetup.existing_install({'method':'app'}) is True
 
 
+def test_uninstall_removes_incomplete_pairing_receipt_when_runtime_is_stopped(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(orcasetup, 'home_dir', lambda: tmp_path)
+    monkeypatch.setitem(sys.modules, 'orca_server', SimpleNamespace(
+        profile_paths=lambda *args: {'server': tmp_path / 'server', 'client': tmp_path / 'client'},
+        runtime_is_active=lambda profile: False,
+        find_new_environment_id=lambda *args: None,
+    ))
+    service_root = tmp_path / 'service'
+    receipt = {'tool_installs': {'orca_server': {
+        'state': 'pairing', 'cli': 'orca.exe', 'service_root': str(service_root),
+        'desktop_environment_name': 'host Orca server', 'client_environment_ids_before_pairing': [],
+    }}}
+    path = tmp_path / '.claude/.claude-code-setup.json'
+    path.parent.mkdir()
+
+    assert orcasetup.uninstall({'method': 'app'}, receipt, path, False) == 0
+    assert 'orca_server' not in receipt['tool_installs']
+    assert json.loads(path.read_text())['tool_installs'] == {}
+
+
+def test_uninstall_preserves_incomplete_pairing_receipt_while_runtime_is_active(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(orcasetup, 'home_dir', lambda: tmp_path)
+    monkeypatch.setitem(sys.modules, 'orca_server', SimpleNamespace(
+        profile_paths=lambda *args: {'server': tmp_path / 'server', 'client': tmp_path / 'client'},
+        runtime_is_active=lambda profile: True,
+        find_new_environment_id=lambda *args: None,
+    ))
+    receipt = {'tool_installs': {'orca_server': {
+        'state': 'pairing', 'cli': 'orca.exe', 'service_root': str(tmp_path / 'service'),
+        'desktop_environment_name': 'host Orca server', 'client_environment_ids_before_pairing': [],
+    }}}
+    path = tmp_path / '.claude/.claude-code-setup.json'
+    path.parent.mkdir()
+
+    with pytest.raises(RuntimeError, match='pairing runtime is still active'):
+        orcasetup.uninstall({'method': 'app'}, receipt, path, False)
+    assert receipt['tool_installs']['orca_server']['state'] == 'pairing'
+    assert not path.exists()
+
+
+def test_uninstall_preserves_pairing_receipt_when_new_desktop_environment_may_exist(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(orcasetup, 'home_dir', lambda: tmp_path)
+    monkeypatch.setitem(sys.modules, 'orca_server', SimpleNamespace(
+        profile_paths=lambda *args: {'server': tmp_path / 'server', 'client': tmp_path / 'client'},
+        runtime_is_active=lambda profile: False,
+        find_new_environment_id=lambda *args: 'env-new',
+    ))
+    record = {
+        'state': 'pairing', 'cli': 'orca.exe', 'service_root': str(tmp_path / 'service'),
+        'desktop_environment_name': 'host Orca server', 'client_environment_ids_before_pairing': [],
+    }
+    receipt = {'tool_installs': {'orca_server': record}}
+    path = tmp_path / '.claude/.claude-code-setup.json'
+    path.parent.mkdir()
+
+    with pytest.raises(RuntimeError, match='desktop environment may have been created'):
+        orcasetup.uninstall({'method': 'app'}, receipt, path, False)
+    assert receipt['tool_installs']['orca_server'] == record
+    assert not path.exists()
+
+
 def test_uninstall_cleans_only_owned_skill_link_and_lock_entry(tmp_path,monkeypatch):
     monkeypatch.setattr(orcasetup,'home_dir',lambda:tmp_path)
     monkeypatch.delenv('XDG_STATE_HOME',raising=False);monkeypatch.delenv('XDG_CONFIG_HOME',raising=False)
@@ -247,7 +374,7 @@ def test_uninstall_cleans_only_owned_skill_link_and_lock_entry(tmp_path,monkeypa
     root=tmp_path/'Orca.app';root.mkdir();(root/'app').write_text('package')
     monkeypatch.setattr(orcasetup,'install_paths',lambda p:(root,root/'cli'))
     receipt={'tool_installs':{'orca':{'method':'app','skills_added':{'orca-cli':hashlib.sha256(b'SKILL.mdofficial').hexdigest()},
-        'skills_links':{'orca-cli':{'link':str(skill)}},'skills_lock':{'orca-cli':entry},'skills_lock_path':str(lock)}}}
+        'skills_links':{'orca-cli':{'link':os.readlink(str(link))}},'skills_lock':{'orca-cli':entry},'skills_lock_path':str(lock)}}}
     path=tmp_path/'.claude/.claude-code-setup.json';path.parent.mkdir()
     assert orcasetup.uninstall({'method':'app'},receipt,path,False)==0
     assert not root.exists() and not skill.exists() and not link.is_symlink()
@@ -313,3 +440,42 @@ def test_uninstall_cleans_recorded_lock_when_partial_skill_file_is_missing(tmp_p
     path = tmp_path / '.claude/.claude-code-setup.json'
     assert orcasetup.uninstall({'method': 'app'}, receipt, path, False) == 0
     assert json.loads(lock.read_text())['skills'] == {'other': {'source': 'user'}}
+
+
+@pytest.mark.parametrize('interruption', ['before_offer', 'after_desktop_added'])
+def test_real_host_setup_persists_partial_pairing_checkpoints(tmp_path, monkeypatch, interruption):
+    # covers: AI-41
+    monkeypatch.syspath_prepend(str(ROOT / 'res' / 'tools'))
+    import orca_server
+
+    monkeypatch.setenv('APPDATA', str(tmp_path / 'Roaming'))
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path / 'Local'))
+    active = {'value': False}
+    monkeypatch.setattr(orca_server, 'runtime_is_active', lambda profile: active['value'])
+    monkeypatch.setattr(orca_server, 'list_remote_environments', lambda *args: [{'id': 'env-old', 'name': 'old'}])
+
+    def issue_offer(*args):
+        if interruption == 'before_offer':
+            raise RuntimeError('simulated interruption')
+        active['value'] = True
+        return object(), {'url': 'orca://pair?code=test-only'}
+
+    monkeypatch.setattr(orca_server, 'issue_pairing_offer', issue_offer)
+    monkeypatch.setattr(orca_server, 'add_remote_environment', lambda *args: 'env-new')
+    monkeypatch.setattr(orca_server, 'stop_server_process', lambda process: None)
+    path = tmp_path / '.claude' / '.claude-code-setup.json'
+    receipt = {'unrelated': {'preserved': True}}
+    with pytest.raises(RuntimeError, match='simulated interruption|Temporary Orca pairing server'):
+        orcasetup.configure_orca_host(
+            {'method': 'user-setup'}, tmp_path, 'orca.exe', '100.64.1.20',
+            on_record=lambda record: orcasetup.save_orca_server_record(receipt, path, record),
+        )
+    saved = json.loads(path.read_text())
+    checkpoint = saved['tool_installs']['orca_server']
+    assert saved['unrelated'] == {'preserved': True}
+    assert checkpoint['state'] == 'pairing'
+    assert checkpoint['desktop_environment_name']
+    assert checkpoint['client_environment_ids_before_pairing'] == ['env-old']
+    assert checkpoint['cli'] == 'orca.exe'
+    assert checkpoint.get('desktop_environment_id') == (None if interruption == 'before_offer' else 'env-new')
+    assert 'orca://pair?' not in path.read_text()

@@ -42,6 +42,7 @@
 | AI-35 | WHEN sudo 가 필요한 설치 명령을 실행하기 전이면 THE SYSTEM SHALL 명령 전체를 출력하고, 표준 입력이 TTY 가 아니면 실행하지 않고 건너뛴 것으로 보고한다 | | 미착수 |
 | AI-36 | WHEN 인자 없이 비대화형으로 실행하면 THE SYSTEM SHALL 새 단계를 하나도 실행하지 않는다 | | 미착수 |
 | AI-37 | WHEN `--tools orca` 로 Orca 를 설치하면 THE SYSTEM SHALL 카탈로그에 묶인 orca 스킬도 설치해 영수증에 기록하고, `--skills` 만 실행할 때는 orca 스킬을 설치하지 않는다 | | 미착수 |
+| AI-41 | WHEN `--tools orca` 를 실행하면 THE SYSTEM SHALL 원본 프로필의 서버에 런타임 링크로 데스크톱 클라이언트를 먼저 등록하고, 별도 프로필의 데스크톱 앱에서 서버 워크스페이스를 열며, 지속 서버 실행 중 현재 유효한 모바일 링크를 보관한다. Windows 는 재부팅 후 서버를 자동 시작한다. 페어링 전과 데스크톱 ID 저장 직후 복구 가능한 영수증을 기록하고, 임시 런타임이 활성인 동안 지속 서비스를 시작하지 않으며 재시도 시 링크 재발급 없이 이어간다. 같은 이름의 미확인 환경은 재사용하지 않는다. ai-setup 소유 활성 구성은 검증 후 재사용하고, 미구성 활성 서버는 재시작하지 않으며 실패 처리한다. 제거는 ai-setup 소유 서비스만 중단하고 프로필 데이터는 보존한다 | `tests/test_orca_server.py::test_issue_pairings_registers_desktop_before_stopping_runtime_offer`, `tests/test_orca_server.py::test_setup_records_pairing_state_and_environment_before_service_start`, `tests/test_orca_server.py::test_setup_keeps_recoverable_pairing_receipt_when_temporary_server_remains_active`, `tests/test_orca_server.py::test_setup_resumes_pairing_receipt_without_reissuing_desktop_offer`, `tests/test_orca_server.py::test_setup_recovers_environment_saved_before_pairing_receipt_id`, `tests/test_orca_server.py::test_issue_pairings_preflight_failure_does_not_start_offer`, `tests/test_orca_server.py::test_service_runner_persists_live_mobile_offer_for_connected_desktop`, `tests/test_orca_server.py::test_windows_service_starts_at_boot_without_stored_credentials`, `tests/test_orca_server.py::test_setup_server_client_does_not_report_an_active_profile_as_configured`, `tests/test_orca_server.py::test_setup_server_client_reuses_active_managed_setup`, `tests/test_orca_server.py::test_setup_server_client_resumes_an_interrupted_managed_setup`, `tests/test_orca_server.py::test_remove_user_service_deletes_only_its_files_and_keeps_extra_contents`, `tests/test_orca_server.py::test_remove_user_service_rejects_symlink_root`, `tests/test_orca_install.py::test_uninstall_preserves_pairing_receipt_when_new_desktop_environment_may_exist`, `tests/test_orca_install.py::test_server_setup_failure_keeps_recoverable_ownership_receipt`, `tests/test_orca_server.py::test_environment_add_refuses_to_reuse_an_unverified_saved_environment`, Windows 임시 S4U 예약 작업 설치·실행·재실행·중지 후 복구·제거 실측(2026-10-26) | RED (Windows 통합 통과; 실제 재부팅·POSIX 서비스 미검증) |
 
 ### 플러그인
 
@@ -86,7 +87,7 @@
 ## 범위 밖
 
 - 실제 네트워크 설치·업데이트의 성공 여부: 자동 테스트는 스텁으로 호출 명령만 검증한다. 실제 동작은 장비 3대에서 수동 실측으로 확인한다.
-- Orca 헤드리스 서버(R9, 선택): 범위가 확정되면 케이스를 추가한다.
+- AI-41 의 실제 사용자 로그인 후 자동 시작과 GUI 워크스페이스 표시는 설치 통합 단계에서 검증한다.
 - 영수증 드리프트 수정: doctor 의 보고(AI-4)까지만 범위다.
 
 ## 미검증

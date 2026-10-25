@@ -47,7 +47,7 @@ AI 하네스와 그 주변 도구의 설정이 장비마다 손으로 관리되�
 | R6  | 스킬: 플러그인이 없는 외부 스킬(archify, find-skills, microsoft-foundry; orca 스킬은 R4 의 Orca 단계가 맡는다)을 `skills` CLI 로 `~/.agents/skills` 에 설치하고 Claude Code 등 필요한 하네스에 연결한다. 번들 design-lab 은 현재 위치를 유지한다. | 필수 |
 | R7  | MCP: graft MCP 를 설치된 하네스마다 user scope 로 등록한다. 토큰이 필요한 서버는 환경 변수 이름으로만 참조한다. | 필수 |
 | R8  | 모든 쓰기 단계는 dry-run 과 uninstall 대칭을 지키고, 이 레포가 추가한 것만 영수증에 기록해 그것만 되돌린다. | 필수 |
-| R9  | Orca 헤드리스 서버(`orca serve` + user systemd) 구성. | 선택 |
+| R9  | `--tools orca` 는 기존 Orca 프로필을 지속 서버로 실행하고, 별도 데스크톱 클라이언트 프로필을 페어링해 서버 소유 워크스페이스를 연다. 데스크톱 연결을 먼저 등록하고, 서버는 모바일 링크를 발급해 보관한다. Windows 는 부팅 시 서버를 자동 시작하고, 이미 ai-setup 이 소유한 구성을 검증 후 재사용한다. 미구성 활성 서버는 재시작하지 않고 설정 실패로 보고한다. | 필수 |
 | R10 | `--prune-skills`: `~/.agents/skills` 에서 lock 에 없는 실제 디렉터리를 하나씩 확인받아 휴지통으로 옮긴다. 기본 실행에는 포함되지 않는다. | 필수 |
 
 ## 성공 지표

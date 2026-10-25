@@ -64,8 +64,26 @@ def env_for(home, path_dirs, log):
 
 def run_update(home, path_dirs, log, *args):
     home.mkdir(parents=True, exist_ok=True)
+    bootstrap = r"""
+import importlib.util, json, os, sys
+spec = importlib.util.spec_from_file_location("update_ai_fixture", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+original = module.process_table
+roots = [value.replace("\\", "/").lower().rstrip("/") + "/" for value in json.loads(sys.argv[2])]
+def fixture_processes():
+    table = original()
+    if table is None:
+        return None
+    return [(pid, command) for pid, command in table
+            if pid not in (os.getpid(), os.getppid())
+            and any(root in command.replace("\\", "/").lower() for root in roots)]
+module.process_table = fixture_processes
+raise SystemExit(module.main(sys.argv[3:]))
+"""
     return subprocess.run(
-        [sys.executable, "-X", "utf8", str(UPDATE_AI), *args],
+        [sys.executable, "-X", "utf8", "-c", bootstrap, str(UPDATE_AI), json.dumps([str(path) for path in path_dirs]), *args],
         capture_output=True, text=True, encoding="utf-8", env=env_for(home, path_dirs, log),
         stdin=subprocess.DEVNULL, timeout=120,
     )
@@ -382,6 +400,7 @@ def test_unmanaged_app_server_blocks_the_codex_update(tmp_path):
         assert result.returncode == 1, result.stdout
         assert "codex update" not in updates(log)
         assert "unmanaged" in result.stdout
+        assert str(server.pid) in result.stdout
     finally:
         server.kill()
         server.wait()

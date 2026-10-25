@@ -336,6 +336,50 @@ def finish_skills(plan, home, owned, receipt, path):
 
 
 def uninstall(plan, receipt, path, dry_run):
+    server_owned = receipt.get('tool_installs', {}).get('orca_server')
+    if server_owned:
+        if not isinstance(server_owned, dict) or server_owned.get('state') not in ('configured', 'configuring', 'pairing'):
+            raise RuntimeError('Invalid Orca server ownership receipt; preserving it')
+        if server_owned.get('state') == 'pairing' and not (Path(server_owned.get('service_root', '')) / '.ai-setup-managed').is_file():
+            if not dry_run:
+                tool_dir = str(Path(__file__).resolve().parent)
+                if tool_dir not in sys.path:
+                    sys.path.insert(0, tool_dir)
+                import orca_server
+                profiles = orca_server.profile_paths(sys.platform, home_dir())
+                if orca_server.runtime_is_active(profiles['server']):
+                    raise RuntimeError('Orca pairing runtime is still active; preserving its partial setup receipt')
+                if 'client_environment_ids_before_pairing' not in server_owned:
+                    raise RuntimeError('Orca pairing checkpoint is incomplete; preserving its receipt for recovery')
+                recovered_id = orca_server.find_new_environment_id(
+                    server_owned.get('cli') or install_paths(plan)[1], profiles['client'],
+                    server_owned.get('desktop_environment_name', ''),
+                    server_owned['client_environment_ids_before_pairing'],
+                )
+                if recovered_id:
+                    raise RuntimeError('A desktop environment may have been created; preserving its pairing receipt')
+                del receipt['tool_installs']['orca_server']
+                save_receipt(path, receipt)
+            else:
+                print('Remove incomplete Orca pairing setup receipt')
+            server_owned = None
+    if server_owned:
+        print('Remove managed Orca server service: ' + str(server_owned.get('service_path', '')))
+        if not dry_run:
+            tool_dir = str(Path(__file__).resolve().parent)
+            if tool_dir not in sys.path:
+                sys.path.insert(0, tool_dir)
+            import orca_server
+            profiles = orca_server.profile_paths(sys.platform, home_dir())
+            expected_plan = orca_server.service_plan(sys.platform, home_dir())
+            orca_server.validate_service_record(
+                server_owned, expected_plan, profiles["server"]
+            )
+            cleanup_record = dict(server_owned)
+            cleanup_record.setdefault('cli', str(install_paths(plan)[1]))
+            orca_server.remove_user_service(cleanup_record)
+            del receipt['tool_installs']['orca_server']
+            save_receipt(path, receipt)
     owned = receipt.get('tool_installs', {}).get('orca')
     if not owned:
         print('Orca has no setup receipt; preserving existing installations.')
@@ -404,10 +448,49 @@ def uninstall(plan, receipt, path, dry_run):
     return 1 if remaining or remaining_links else 0
 
 
+def configure_orca_host(plan, home, cli, pairing_address=None, dry_run=False, existing_record=None, on_record=None):
+    if dry_run:
+        print('Orca: configure persistent server + paired desktop client; emit mobile/runtime pairing links.')
+        return {"state": "planned"}
+    tool_dir = str(Path(__file__).resolve().parent)
+    if tool_dir not in sys.path:
+        sys.path.insert(0, tool_dir)
+    import orca_server
+
+    address = pairing_address or orca_server.discover_pairing_address()
+    result = orca_server.setup_server_client(
+        cli, home, address, sys.executable, Path(tool_dir) / "orca_server.py",
+        plat=sys.platform, existing_record=existing_record, on_record=on_record,
+    )
+    if result.get("state") != "configured":
+        raise RuntimeError("Orca server and desktop client setup did not complete")
+    print('Orca server and desktop client configured; pairing links are in: ' + result["pairing_codes_path"])
+    return result
+
+
+def save_orca_server_record(receipt, path, setup):
+    keys = ('state', 'cli', 'server_profile', 'client_profile', 'desktop_environment_id', 'pairing_codes_path', 'service_manager', 'service_root', 'service_path', 'service_task', 'desktop_environment_name', 'client_environment_ids_before_pairing', 'shortcut_receipt_path')
+    receipt.setdefault('tool_installs', {})['orca_server'] = {
+        key: setup[key] for key in keys if key in setup
+    }
+    save_receipt(path, receipt)
+
+
+def open_configured_orca_client(cli, setup):
+    tool_dir = str(Path(__file__).resolve().parent)
+    if tool_dir not in sys.path:
+        sys.path.insert(0, tool_dir)
+    import orca_server
+    orca_server.open_desktop_client(
+        cli, setup["client_profile"], setup["desktop_environment_id"]
+    )
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Install the official Orca package and its bundled skills')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--uninstall', action='store_true')
+    parser.add_argument('--pairing-address')
     args = parser.parse_args(argv)
     try:
         plan = package_plan(sys.platform, platform.machine())
@@ -425,12 +508,23 @@ def main(argv=None):
                 if not args.dry_run:
                     finish_skills(plan, home, owned, receipt, path)
                 print('Orca package preserved; bundled skills retry ' + ('planned.' if args.dry_run else 'completed.'))
-                return 0
-            print('Orca is already installed; preserving its package, settings and ownership.')
+            else:
+                print('Orca package already installed; preserving its package, settings and ownership.')
+            setup = configure_orca_host(
+                plan, home, install_paths(plan)[1], args.pairing_address, args.dry_run,
+                receipt.get('tool_installs', {}).get('orca_server'),
+                on_record=lambda record: save_orca_server_record(receipt, path, record),
+            )
+            if not args.dry_run and setup.get('state') != 'configured':
+                raise RuntimeError('Orca server and desktop client setup did not complete')
+            if setup.get('state') == 'configured':
+                save_orca_server_record(receipt, path, setup)
+                open_configured_orca_client(install_paths(plan)[1], setup)
             return 0
         root, cli = install_paths(plan)
         print('Orca: official {} -> {} ({}); bundled skills after install'.format(plan['method'], root, plan['manifest']))
         if args.dry_run:
+            configure_orca_host(plan, home, cli, args.pairing_address, True)
             return 0
         for destination in skill_locations(home):
             check_owned_path(destination, home)
@@ -451,6 +545,16 @@ def main(argv=None):
         receipt.get('tool_attempts', {}).pop('orca', None)
         save_receipt(path, receipt)  # 스킬 실패여도 설치된 앱의 소유권은 잃지 않는다.
         finish_skills(plan, home, owned, receipt, path)
+        setup = configure_orca_host(
+            plan, home, cli, args.pairing_address, args.dry_run,
+            receipt.get('tool_installs', {}).get('orca_server'),
+            on_record=lambda record: save_orca_server_record(receipt, path, record),
+        )
+        if setup.get('state') != 'configured':
+            raise RuntimeError('Orca server and desktop client setup did not complete')
+        if setup.get('state') == 'configured':
+            save_orca_server_record(receipt, path, setup)
+            open_configured_orca_client(cli, setup)
         print('Orca {} and bundled skills installed.'.format(version))
         return 0
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:

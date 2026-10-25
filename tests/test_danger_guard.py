@@ -11,6 +11,7 @@
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -213,7 +214,7 @@ def test_session_start_puts_shims_first_on_path_for_later_bash_commands(tmp_path
     _session_start(env_file)
     # Git Bash 는 PATH 를 `:` 로 구분한 /c/... 형식으로 보여준다. cygpath 가 있으면 Windows 형식으로 돌려 비교한다.
     out = subprocess.run(
-        ["bash", "-c", '. "$1"; . "$1"; r=$(command -v rm); p=$PATH; '
+        [shutil.which("bash") or "bash", "-c", '. "$1"; . "$1"; r=$(command -v rm); p=$PATH; '
          'if command -v cygpath >/dev/null; then r=$(cygpath -w "$r"); p=$(cygpath -wp "$p"); fi; '
          'echo "$r"; echo "$p"', "_", str(env_file)],
         capture_output=True, text=True, encoding="utf-8").stdout.splitlines()

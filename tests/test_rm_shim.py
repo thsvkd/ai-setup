@@ -9,9 +9,12 @@
 휴지통도 같은 램이라 옮겨봐야 회수되지 않는다) 거기서 재면 셰임 경로를 전혀 검증하지 못한다.
 """
 import os
+from functools import lru_cache
 import shutil
+import shlex
 import site
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -19,9 +22,29 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 SHIM_DIR = REPO / "res" / "hooks" / "shims"
 BASE = REPO / ".tmp-rmshim"
+BASH = shutil.which("bash") or "bash"
 
 
-def bash_receives_env(bash="bash"):
+@lru_cache(maxsize=256)
+def shell_path(path):
+    if os.name == "nt":
+        cygpath = Path(BASH).parents[1] / "usr/bin/cygpath.exe"
+        return subprocess.run([str(cygpath), "-u", str(path)], check=True,
+                              capture_output=True, text=True).stdout.strip()
+    return str(path)
+
+
+def bash_environment(env):
+    env = dict(env)
+    env["PATH"] = ":".join(shell_path(part) for part in env["PATH"].split(os.pathsep))
+    for key in ("HOME", "D", "T", "LOG", "BIN_DIR"):
+        if key in env:
+            env[key] = shell_path(env[key])
+    env["RMSHIM_TEST_PATH"] = env["PATH"]
+    return env
+
+
+def bash_receives_env(bash=BASH):
     """bash 가 넘겨준 환경을 받는가. Windows 의 WSL bash 는 받지 않는다."""
     probe = subprocess.run([bash, "-c", 'printf %s "$RMSHIM_PROBE"'], capture_output=True,
                            env=dict(os.environ, RMSHIM_PROBE="ok"))
@@ -67,7 +90,7 @@ def observe(script, use_shim):
     env["PATH"] = path_without_shims()
     if use_shim:
         env["PATH"] = str(SHIM_DIR) + os.pathsep + env["PATH"]
-    proc = subprocess.run(["bash", "-c", script], cwd=str(d), env=env,
+    proc = subprocess.run([BASH, "-c", 'export PATH="$RMSHIM_TEST_PATH";\n' + (SHIM_GUARD if use_shim else "") + script], cwd=str(d), env=bash_environment(env),
                           capture_output=True, text=True, encoding="utf-8")
     survivors = sorted(
         str(p.relative_to(d)) for p in d.rglob("*")
@@ -128,7 +151,9 @@ SHIM_GUARD = ('case "$(command -v rm)" in */shims/rm) ;; '
 
 
 def run_via_shim(script, **kwargs):
-    proc = subprocess.run(["bash", "-c", SHIM_GUARD + script],
+    if "env" in kwargs:
+        kwargs["env"] = bash_environment(kwargs["env"])
+    proc = subprocess.run([BASH, "-c", 'export PATH="$RMSHIM_TEST_PATH";\n' + SHIM_GUARD + script],
                           capture_output=True, text=True, encoding="utf-8", **kwargs)
     assert proc.returncode != 97, "bash is not using the shim - %s" % proc.stderr
     return proc
@@ -150,7 +175,7 @@ def test_shim_guard_stops_before_rm_when_rm_is_not_the_shim():
     target = BASE / "guard-target"
     target.write_text("x", encoding="utf-8")
     env = dict(os.environ, T=str(target), PATH=path_without_shims())
-    proc = subprocess.run(["bash", "-c", SHIM_GUARD + 'rm -f "$T"'], env=env, capture_output=True)
+    proc = subprocess.run([BASH, "-c", SHIM_GUARD + 'rm -f "$T"'], env=env, capture_output=True)
     assert proc.returncode == 97
     assert target.is_file()
 
@@ -188,12 +213,14 @@ def test_root_and_home_are_refused(script, tmp_path):
 
 def test_tmp_targets_are_really_deleted(tmp_path):
     """/tmp 는 tmpfs 라 휴지통 자리도 같은 램이다 — 옮기면 램이 회수되지 않는다."""
+    if os.name == "nt":
+        tmp_path = Path(tempfile.mkdtemp(prefix="rmshim-target-"))
     target = tmp_path / "big"
     target.mkdir()
     (target / "f").write_text("x", encoding="utf-8")
     env = dict(os.environ)
     env["PATH"] = str(SHIM_DIR) + os.pathsep + env["PATH"]
-    run_via_shim("rm -rf %s" % target, env=env)
+    run_via_shim("rm -rf %s" % shlex.quote(shell_path(target)), env=env)
     assert not target.exists()
 
 
@@ -238,7 +265,7 @@ def test_macos_builtin_trash_is_used_when_trash_put_is_absent(tmp_path):
     env = dict(os.environ, LOG=str(log), BIN_DIR=str(bin_dir))
     env.pop("CLAUDE_NO_TRASH", None)
     env["PATH"] = os.pathsep.join([str(SHIM_DIR), str(fake), "/usr/bin", "/bin"])
-    proc = subprocess.run(["bash", "-c", "rm -rf sub a.txt -- -weird"], cwd=str(d), env=env,
+    proc = subprocess.run([BASH, "-c", 'export PATH="$RMSHIM_TEST_PATH";\n' + SHIM_GUARD + "rm -rf sub a.txt -- -weird"], cwd=str(d), env=bash_environment(env),
                           capture_output=True, text=True, encoding="utf-8")
     assert proc.returncode == 0, proc.stderr
     assert "without the trash" not in proc.stderr
@@ -249,9 +276,17 @@ def test_macos_builtin_trash_is_used_when_trash_put_is_absent(tmp_path):
 def test_sandboxed_home_under_tmp_can_be_cleaned_up(tmp_path):
     """테스트·스크립트가 HOME 을 임시 디렉터리로 바꿔 두고 `rm -rf "$HOME"` 으로 정리하는 것은
     홈 삭제가 아니다 — bats 의 샌드박스 teardown 이 이 오인으로 막혔다."""
+    if os.name == "nt":
+        tmp_path = Path(tempfile.mkdtemp(prefix="rmshim-home-"))
     sandbox = tmp_path / "sandbox-home"
     sandbox.mkdir()
     env = dict(os.environ, HOME=str(sandbox), PATH=_fake_trash_path(tmp_path))
+    if os.name == "nt":
+        # MSYS synthesizes the current account's passwd home from HOME. This case
+        # exercises the temporary ENV_HOME exemption independently of that mapping.
+        fake_id = tmp_path / "fakebin/id"
+        fake_id.write_text("#!/bin/sh\necho rmshim-fixture-no-account\n", encoding="utf-8")
+        fake_id.chmod(0o755)
     env.pop("CLAUDE_NO_TRASH", None)
     proc = run_via_shim('rm -rf "$HOME"', env=env)
     assert proc.returncode == 0, proc.stderr
@@ -284,5 +319,5 @@ def test_username_is_not_evaluated_as_shell(tmp_path):
     (d / "f").write_text("x", encoding="utf-8")
     env = dict(os.environ, PATH=os.pathsep.join([str(SHIM_DIR), str(fake), "/usr/bin", "/bin"]))
     env.pop("CLAUDE_NO_TRASH", None)
-    subprocess.run(["bash", "-c", "rm f"], cwd=str(d), env=env, capture_output=True)
+    subprocess.run([BASH, "-c", 'export PATH="$RMSHIM_TEST_PATH";\n' + SHIM_GUARD + "rm f"], cwd=str(d), env=bash_environment(env), capture_output=True)
     assert not mark.exists()

@@ -504,7 +504,7 @@ Describe "Windows .ps1 encoding regression (BOM)" {
     # powershell.exe 는 Windows 에만 있다. 없는 곳에서 '실패'로 잡으면 진짜 실패가 묻힌다 —
     # 건너뛴 것은 통과가 아니라 '검증 안 됨'이며, Pester 요약에 Skipped 로 정직하게 남는다.
     It "setup.ps1 -Help parses and runs correctly under powershell.exe (Windows PowerShell 5.1)" -Skip:(-not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) {
-        $out = powershell.exe -ExecutionPolicy Bypass -File $script:Setup -Help 2>&1 | Out-String
+        $out = powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script:Setup -Help 2>&1 | Out-String
         $ec = $LASTEXITCODE
         $ec | Should -Be 0
         # 비ASCII 줄로 확인해야 BOM 없이 ANSI 로 읽혀 깨진 경우를 잡는다.
@@ -542,7 +542,7 @@ Describe "native command error escalation guard regression (S1)" {
 # 인터프리터로 넘긴다 — try/catch 와 `py` 빈 Args 후보가 둘 다 실제로 밟힌다.
 Describe "onboarding Python detection (py -3 NativeCommandError regression)" {
     BeforeEach {
-        $script:realPython = (Get-Command python -CommandType Application -ErrorAction SilentlyContinue).Source
+        $script:realPython = (Get-Command python -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
         $script:sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-py3-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $script:sandbox | Out-Null
         $script:stub = Join-Path $script:sandbox "stubbin"
