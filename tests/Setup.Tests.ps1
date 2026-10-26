@@ -189,16 +189,15 @@ Describe "install.ps1 bootstrap" {
     # 으로 거절하던 회귀. 존재하지 않는 레포를 가리켜 다운로드 단계에서 멈추게 하므로 설치는
     # 일어나지 않고, 오프라인이어도 결론은 같다.
     It "passes the option check when run without arguments" {
-        $oldRepo, $oldTok, $oldUP, $oldTemp = $env:CLAUDE_SETUP_REPO, $env:GITHUB_TOKEN, $env:USERPROFILE, $env:TEMP
+        $oldRepo, $oldUP, $oldTemp = $env:CLAUDE_SETUP_REPO, $env:USERPROFILE, $env:TEMP
         $env:CLAUDE_SETUP_REPO = "thsvkd/does-not-exist-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
-        $env:GITHUB_TOKEN = "invalid"
         $env:USERPROFILE = [System.IO.Path]::GetTempPath()
         # install.ps1 은 Windows 부트스트랩이라 $env:TEMP 를 쓴다. Linux/macOS 의 pwsh 에는 없다.
         $env:TEMP = [System.IO.Path]::GetTempPath()
         try {
             $r = Invoke-ScriptInline (Join-Path $script:RepoRoot "install.ps1") ""
         } finally {
-            $env:CLAUDE_SETUP_REPO, $env:GITHUB_TOKEN, $env:USERPROFILE, $env:TEMP = $oldRepo, $oldTok, $oldUP, $oldTemp
+            $env:CLAUDE_SETUP_REPO, $env:USERPROFILE, $env:TEMP = $oldRepo, $oldUP, $oldTemp
         }
         $r.Output | Should -Not -Match "Unknown option"
         $r.Output | Should -Match "Download failed"
@@ -213,22 +212,21 @@ Describe "install.ps1 bootstrap" {
         Set-Content -Path (Join-Path $src "setup.ps1") -Value "exit 3" -Encoding ascii
         $zip = Join-Path $sb "repo.zip"
         Compress-Archive -Path (Join-Path $sb "src\*") -DestinationPath $zip
-        $mock = "function Invoke-WebRequest { param(`$Uri, `$OutFile, `$UseBasicParsing, `$Headers) Copy-Item '$zip' `$OutFile }"
+        $mock = "function Invoke-WebRequest { param(`$Uri, `$OutFile, `$UseBasicParsing) Copy-Item '$zip' `$OutFile }"
         $text = (Get-Content (Join-Path $script:RepoRoot "install.ps1") -Raw).Replace(
             "Set-StrictMode -Version Latest", "Set-StrictMode -Version Latest`r`n$mock")
         # 대역이 안 들어가면 진짜 저장소를 내려받아 설치한다 — 그 전에 멈춘다.
         $text | Should -Match "function Invoke-WebRequest"
         $inst = Join-Path $sb "install.ps1"
         [System.IO.File]::WriteAllText($inst, $text, (New-Object System.Text.UTF8Encoding $false))
-        $oldTemp, $oldUP, $oldTok = $env:TEMP, $env:USERPROFILE, $env:GITHUB_TOKEN
+        $oldTemp, $oldUP = $env:TEMP, $env:USERPROFILE
         $env:TEMP = $sb
         $env:USERPROFILE = $sb
-        $env:GITHUB_TOKEN = "unused"
         try {
             $out = pwsh -NoProfile -File $inst -NoOnboard 2>&1 | Out-String
             $ec = $LASTEXITCODE
         } finally {
-            $env:TEMP, $env:USERPROFILE, $env:GITHUB_TOKEN = $oldTemp, $oldUP, $oldTok
+            $env:TEMP, $env:USERPROFILE = $oldTemp, $oldUP
             Remove-Item -Recurse -Force $sb -ErrorAction SilentlyContinue
         }
         $ec | Should -Be 3 -Because $out
@@ -613,13 +611,14 @@ Describe "onboarding Python detection (py -3 NativeCommandError regression)" {
         # NativeCommandError 부재로 판정한다.
         $out | Should -Not -Match "NativeCommandError" -Because "a py -3 failure must be swallowed by try/catch and move on to the next candidate"
         $out | Should -Not -Match "Python not found"
-        Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $true `
-            -Because "the original crash died before the hooks were installed; if the file remains, onboarding detection survived"
+        $out | Should -Match "No terminal, so nothing was installed."
+        Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $false `
+            -Because "CI with no arguments installs nothing; the script must reach that line without dying on py -3"
     }
 
     # 5.1 은 출력이 리다이렉트되면 네이티브 stderr 를 오류 레코드로 바꾼다. 온보딩이 '물을 수 없음'(2)을
-    # stderr 로 알리는 순간 $ErrorActionPreference=Stop 이 설치를 죽이면, 기본값 설치가 중단으로 둔갑한다.
-    It "on powershell.exe 5.1 an onboarding that cannot ask and says so on stderr still installs the defaults" -Skip:(-not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) {
+    # stderr 로 알리는 순간 $ErrorActionPreference=Stop 이 설치를 죽이면, '아무것도 설치하지 않음'이 중단으로 둔갑한다.
+    It "on powershell.exe 5.1 an onboarding that cannot ask and says so on stderr installs nothing" -Skip:(-not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) {
         if (-not $script:realPython) {
             Set-ItResult -Skipped -Because "a real python must be on PATH so the stub py can run the onboarding stub"
             return
@@ -635,7 +634,8 @@ Describe "onboarding Python detection (py -3 NativeCommandError regression)" {
         $setup = Join-Path $repo "scripts\setup.ps1"
         $out = powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& '$setup' 2>&1 | Out-String" 2>&1 | Out-String
         $out | Should -Not -Match "Aborting installation"
-        Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $true -Because $out
+        $out | Should -Match "No terminal, so nothing was installed."
+        Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $false -Because $out
     }
 }
 
@@ -686,7 +686,7 @@ Describe "onboarding wiring" {
     }
 
     It "if onboarding breaks midway, it does not proceed with defaults and installs nothing" {
-        # 2(물을 수 없음)만 기본값으로 진행한다. 1(프롬프트가 깨짐)·traceback 은 고르던 중이었다.
+        # 물을 수 없으면(2) 아무것도 설치하지 않는다. 1(프롬프트가 깨짐)·traceback 은 고르던 중이었다.
         $repo = Join-Path $script:sandbox "repo"
         New-Item -ItemType Directory -Force -Path $repo | Out-Null
         Copy-Item -Recurse (Join-Path $script:RepoRoot "scripts"), (Join-Path $script:RepoRoot "res") $repo
@@ -785,6 +785,12 @@ Describe "project instructions harness selection" {
         (Invoke-AgentsMdIn $script:proj @("-Harness", "codex")).ExitCode | Should -Be 0
         Test-Path (Join-Path $script:proj "AGENTS.md") | Should -Be $true
         Test-Path (Join-Path $script:proj "CLAUDE.md") | Should -Be $false -Because "Codex reads AGENTS.md directly"
+    }
+
+    It "-Harness agy,gemini,copilot writes AGENTS.md and not CLAUDE.md" {
+        (Invoke-AgentsMdIn $script:proj @("-Harness", "agy,gemini,copilot")).ExitCode | Should -Be 0
+        Test-Path (Join-Path $script:proj "AGENTS.md") | Should -Be $true
+        Test-Path (Join-Path $script:proj "CLAUDE.md") | Should -Be $false
     }
 
     It "-Harness grok,opencode does not create CLAUDE.md" {

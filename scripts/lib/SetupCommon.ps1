@@ -340,6 +340,9 @@ function Uninstall-Hooks {
     }
 
     # 매니페스트: 다른 워커의 영수증(keybinds, omc_hud, output_style, mods)이 남아 있으면 그 섹션만 남기고 훅 흔적만 지운다.
+    # 단계식 설치의 하네스·플러그인·MCP·Jarvis 유닛·AGENTS.md·스킬 기록도 남긴다. 이 제거는 앞의 것들을
+    # 되돌리지 않고, 스킬은 범위에 따라 지우지 않을 수도 있다(스킬 소유는 스킬 영수증과 교차 확인). 그래서
+    # 지우면 --uninstall --stages all 이 무엇을 이 셋업이 깔았는지 알 수 없다.
     # 통째로 지우면 키바인드 uninstall 이 '우리가 넣은 tmux 줄' 을, OMC uninstall 이 '우리가 넣은
     # refreshInterval' 을 식별할 근거를 잃는다.
     if (Test-Path $manifestPath) {
@@ -349,8 +352,11 @@ function Uninstall-Hooks {
             $payload = [ordered]@{}
             try {
                 $m = Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-                foreach ($key in @("keybinds", "omc_hud", "output_style", "mods", "tool_installs", "tool_attempts")) {
-                    if ($m -and $m.PSObject.Properties.Name -contains $key -and $m.$key) {
+                foreach ($key in @("keybinds", "omc_hud", "output_style", "mods", "tool_installs", "tool_attempts", "harness_installs", "plugins", "mcp", "jarvis_unit", "agentsmd", "skills", "marketplaces")) {
+                    # 빈 객체({})도 PowerShell 에서는 참이다. bash 쪽과 같게 빈 값은 버린다.
+                    $value = if ($m -and $m.PSObject.Properties.Name -contains $key) { $m.$key } else { $null }
+                    $present = if ($value -is [pscustomobject]) { @($value.PSObject.Properties).Count -gt 0 } else { [bool]$value }
+                    if ($present) {
                         $payload[$key] = $m.$key
                     }
                 }

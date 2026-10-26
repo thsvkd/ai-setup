@@ -82,10 +82,21 @@ def test_existing_install_configures_server_and_records_before_open(tmp_path, mo
         assert saved['tool_installs']['orca_server']['desktop_environment_id']=='env-1'
         calls.append((cli,record))
     monkeypatch.setattr(orcasetup,'open_configured_orca_client',open_client)
-    assert orcasetup.main([])==0
+    assert orcasetup.main(['--desktop-app'])==0
     receipt=json.loads((tmp_path/'.claude/.claude-code-setup.json').read_text())
     assert receipt['tool_installs']['orca_server']==setup
     assert calls and calls[0][1]['desktop_environment_id']=='env-1'
+
+
+def test_default_setup_pairs_the_desktop_without_opening_the_gui(tmp_path, monkeypatch):
+    """서버·데스크톱·모바일 페어링은 기본이다. GUI 실행과 바로가기 변경은 --desktop-app 일 때만 한다."""
+    monkeypatch.setattr(orcasetup,'home_dir',lambda:tmp_path)
+    monkeypatch.setattr(orcasetup,'existing_install',lambda p:True)
+    monkeypatch.setattr(orcasetup,'configure_orca_host',lambda *a,**k:configured_orca_server_setup(tmp_path))
+    monkeypatch.setattr(orcasetup,'open_configured_orca_client',lambda *a:pytest.fail('GUI opened without --desktop-app'))
+    assert orcasetup.main([])==0
+    receipt=json.loads((tmp_path/'.claude/.claude-code-setup.json').read_text())
+    assert receipt['tool_installs']['orca_server']['desktop_environment_id']
 
 
 def test_server_setup_failure_keeps_recoverable_ownership_receipt(tmp_path, monkeypatch, capsys):
@@ -218,6 +229,31 @@ def test_partial_skills_are_recorded_after_failed_install(tmp_path, monkeypatch)
     assert receipt['skills_state']=='done'
 
 
+@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None, reason="POSIX shell test")
+def test_setup_forwards_orca_desktop_only_with_tools_or_stages(tmp_path):
+    import os
+    env=dict(os.environ, HOME=str(tmp_path),USERPROFILE=str(tmp_path))
+    run=lambda *flags: subprocess.run(['bash',str(ROOT/'scripts/setup.sh'),*flags],capture_output=True,text=True,env=env,timeout=15)  # noqa: E731
+    p=run('--tools','orca','--orca-desktop','--dry-run')
+    assert p.returncode == 0, p.stdout+p.stderr
+    assert 'open the paired desktop app' in p.stdout
+    assert 'open the paired desktop app' not in run('--tools','orca','--dry-run').stdout
+    assert run('--hooks','--orca-desktop','--dry-run').returncode == 1
+    assert not (tmp_path/'.claude').exists()
+
+
+def test_powershell_forwards_orca_desktop_only_with_tools_or_stages(tmp_path):
+    import os,shutil
+    pwsh=shutil.which('pwsh')
+    if not pwsh:pytest.skip('PowerShell is unavailable')
+    env=dict(os.environ,HOME=str(tmp_path),USERPROFILE=str(tmp_path),LOCALAPPDATA=str(tmp_path/'AppData/Local'))
+    run=lambda *flags: subprocess.run([pwsh,'-NoProfile','-File',str(ROOT/'scripts/setup.ps1'),*flags],capture_output=True,text=True,env=env,timeout=30)  # noqa: E731
+    p=run('-Tools','orca','-DryRun','--orca-desktop')
+    assert p.returncode==0,p.stdout+p.stderr
+    assert 'open the paired desktop app' in p.stdout
+    assert run('-Hooks','-DryRun','--orca-desktop').returncode==1
+
+
 @pytest.mark.parametrize('flags',[['-Tools','orca','-DryRun'],['--tools','orca','--dry-run']])
 def test_powershell_tools_dry_run_is_isolated(tmp_path, flags):
     import os,shutil
@@ -237,10 +273,10 @@ def test_powershell_bootstrap_forwards_tools(tmp_path):
     archive=tmp_path/'repo.zip'
     with zipfile.ZipFile(archive,'w') as z:
         z.writestr('repo/scripts/setup.ps1', 'param([string]$Tools,[switch]$DryRun)\nif($Tools -ne "orca" -or -not $DryRun){exit 41}\nWrite-Output "TOOLS_FORWARDED"\nexit 0\n')
-    mock="function Invoke-WebRequest { param($Uri,$OutFile,$UseBasicParsing,$Headers) Copy-Item '"+str(archive).replace("'","''")+"' $OutFile }\n"
+    mock="function Invoke-WebRequest { param($Uri,$OutFile,$UseBasicParsing) Copy-Item '"+str(archive).replace("'","''")+"' $OutFile }\n"
     text=(ROOT/'install.ps1').read_text(encoding='utf-8').replace('Set-StrictMode -Version Latest','Set-StrictMode -Version Latest\n'+mock)
     script=tmp_path/'install.ps1';script.write_text(text)
-    env=dict(os.environ,HOME=str(tmp_path),USERPROFILE=str(tmp_path),TEMP=str(tmp_path),GITHUB_TOKEN='unused')
+    env=dict(os.environ,HOME=str(tmp_path),USERPROFILE=str(tmp_path),TEMP=str(tmp_path))
     p=subprocess.run([pwsh,'-NoProfile','-File',str(script),'-Tools','orca','-DryRun'],capture_output=True,text=True,env=env,timeout=25)
     assert p.returncode==0,p.stdout+p.stderr
     assert 'TOOLS_FORWARDED' in p.stdout
@@ -265,6 +301,27 @@ def test_existing_skills_links_and_lock_entries_are_preserved(tmp_path, monkeypa
     assert (shared/'orchestration').is_symlink()
     assert set(owned['skills_added'])=={'orca-jira'}
     assert json.loads(lock.read_text())['skills']['computer-use']=={'source':'user'}
+
+
+def test_native_skill_install_without_a_lock_file_is_owned_and_removable(tmp_path, monkeypatch):
+    # Orca 1.4.239+ 는 npx skills 없이 SKILL.md 만 쓰고 .skill-lock.json 을 만들지 않는다.
+    shared=tmp_path/'.agents/skills'
+    monkeypatch.setattr(orcasetup,'available_skills',lambda cli:['orca-cli','orchestration'])
+    monkeypatch.setattr(orcasetup,'install_paths',lambda p:(tmp_path,tmp_path/'cli'))
+    def command(argv,**kw):
+        for name in ('orca-cli','orchestration'):
+            (shared/name).mkdir(parents=True);(shared/name/'SKILL.md').write_text('official '+name)
+    monkeypatch.setattr(orcasetup,'run_command',command)
+    owned={};orcasetup.install_skills({},tmp_path,owned)
+    assert set(owned['skills_added'])=={'orca-cli','orchestration'}
+    assert 'skills_attempting' not in owned and not owned.get('skills_lock')
+    assert not (tmp_path/'.agents/.skill-lock.json').exists()
+    monkeypatch.setattr(orcasetup,'home_dir',lambda:tmp_path)
+    owned.update(method='app',package_removed=True,skills_state='complete')
+    receipt={'tool_installs':{'orca':owned}};path=tmp_path/'.claude/.claude-code-setup.json'
+    assert orcasetup.uninstall({'method':'app'},receipt,path,False)==0
+    assert not (shared/'orca-cli').exists() and not (shared/'orchestration').exists()
+    assert not (tmp_path/'.agents/.skill-lock.json').exists()
 
 
 def test_malformed_skill_lock_blocks_install_without_overwrite(tmp_path, monkeypatch):
@@ -444,7 +501,7 @@ def test_uninstall_cleans_recorded_lock_when_partial_skill_file_is_missing(tmp_p
 
 @pytest.mark.parametrize('interruption', ['before_offer', 'after_desktop_added'])
 def test_real_host_setup_persists_partial_pairing_checkpoints(tmp_path, monkeypatch, interruption):
-    # covers: AI-41
+    # covers: AI-48
     monkeypatch.syspath_prepend(str(ROOT / 'res' / 'tools'))
     import orca_server
 
@@ -479,3 +536,55 @@ def test_real_host_setup_persists_partial_pairing_checkpoints(tmp_path, monkeypa
     assert checkpoint['cli'] == 'orca.exe'
     assert checkpoint.get('desktop_environment_id') == (None if interruption == 'before_offer' else 'env-new')
     assert 'orca://pair?' not in path.read_text()
+
+
+
+STAGE_RECORDS = {
+    'harness_installs': {'claude': {'method': 'native'}},
+    'plugins': {'ponytail': True},
+    'mcp': {'claude': True},
+    'jarvis_unit': True,
+    'agentsmd': True,
+    'skills': {'design-lab': True},
+    'marketplaces': {'ponytail': True},
+}
+
+
+@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None, reason="POSIX shell test")
+def test_hooks_uninstall_keeps_the_stage_records_it_does_not_revert(tmp_path):
+    """일반 --uninstall 뒤에도 --uninstall --stages all 이 하네스·플러그인·MCP 를 지울 근거가 남아야 한다."""
+    import os
+    manifest = tmp_path / '.claude/.claude-code-setup.json'
+    manifest.parent.mkdir()
+    # 훅 기록은 지우고, 빈 기록({})은 bash·PowerShell 모두 버린다.
+    manifest.write_text(json.dumps(dict(STAGE_RECORDS, hooks=True, tool_installs={})))
+    env = dict(os.environ, HOME=str(tmp_path), USERPROFILE=str(tmp_path))
+    script = 'source "$1/scripts/lib/setup_common.sh"; uninstall_hooks "$2" "$1/res/hooks/merge_and_diff.py" "$HOME/.claude" "$HOME/.claude/hooks" "$HOME/.claude/settings.json" 0'
+    p = subprocess.run(['bash', '-c', script, 'bash', str(ROOT), sys.executable], capture_output=True, text=True, env=env, timeout=15)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert json.loads(manifest.read_text()) == STAGE_RECORDS
+
+
+def test_powershell_hooks_uninstall_keeps_the_stage_records_it_does_not_revert(tmp_path):
+    pwsh = shutil.which('pwsh') or shutil.which('powershell')
+    if not pwsh:
+        pytest.skip('PowerShell is unavailable')
+    claude = tmp_path / '.claude'
+    claude.mkdir()
+    manifest = claude / '.claude-code-setup.json'
+    manifest.write_text(json.dumps(dict(STAGE_RECORDS, hooks=True, tool_installs={})))
+    driver = tmp_path / 'driver.ps1'
+    driver.write_text(
+        'param($Common, $Claude, $Merge, $Py)\n'
+        '. $Common\n'
+        'Uninstall-Hooks -ClaudeDir $Claude -HooksDir (Join-Path $Claude "hooks") '
+        '-SettingsPath (Join-Path $Claude "settings.json") -MergeScriptPath $Merge -PyExe $Py\n',
+        encoding='utf-8',
+    )
+    p = subprocess.run(
+        [pwsh, '-NoProfile', '-File', str(driver), str(ROOT / 'scripts/lib/SetupCommon.ps1'), str(claude),
+         str(ROOT / 'res/hooks/merge_and_diff.py'), sys.executable],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert json.loads(manifest.read_text(encoding='utf-8-sig')) == STAGE_RECORDS

@@ -19,8 +19,6 @@
 #   CLAUDE_SETUP_REPO=owner/repo   대상 레포 (기본 thsvkd/ai-setup)
 #   CLAUDE_SETUP_REF=main          브랜치/태그 (기본 main; 배포 시 vX.Y.Z 태그 권장)
 #                                  feature/foo 처럼 슬래시가 든 브랜치명도 그대로 쓸 수 있다.
-#   GITHUB_TOKEN / GH_TOKEN        비공개(private) 레포 다운로드용 PAT. 둘 다 없으면
-#                                  `gh auth token` 으로 폴백한다.
 #
 # 이 스크립트는 전체 로직을 main() 안에 넣고 마지막 줄에서만 호출한다. curl 다운로드가
 # 중간에 끊겨도 셸은 "함수 정의"까지만 파싱하고 main 을 실행하지 않으므로, 잘린
@@ -54,10 +52,6 @@ Environment variables:
   CLAUDE_SETUP_REPO=owner/repo   target repo (default thsvkd/ai-setup)
   CLAUDE_SETUP_REF=main          branch/tag (default main). Slashes are fine, as in
                                  feature/foo, and so is refs/heads/feature/foo.
-  GITHUB_TOKEN / GH_TOKEN        PAT for private repos. Falls back to `gh auth token` if unset.
-
-A 404 on a private repo is almost always a token problem (GitHub disguises auth failures
-as 404). On failure this script diagnoses and reports the cause.
 EOF
 }
 
@@ -65,43 +59,15 @@ need_cmd() {
     command -v "$1" >/dev/null 2>&1 || return 1
 }
 
-# GITHUB_TOKEN → GH_TOKEN → `gh auth token` 순으로 찾는다. gh 폴백이 있으면 사용자가
-# GITHUB_TOKEN 을 셸에 export 해둘 필요가 없다 — 그 환경변수가 남아 있으면 gh 가
-# "환경변수를 쓰는 중"이라며 `gh auth login` 을 거부해, 토큰이 만료된 순간 재로그인조차
-# 할 수 없는 상태에 빠진다.
-resolve_token() {
-    if [ -n "${GITHUB_TOKEN:-}" ]; then printf '%s' "$GITHUB_TOKEN"; return 0; fi
-    if [ -n "${GH_TOKEN:-}" ]; then printf '%s' "$GH_TOKEN"; return 0; fi
-    if need_cmd gh; then gh auth token 2>/dev/null || true; fi
-    return 0
-}
-
-# 토큰을 argv 대신 curl 설정 파일로 넘긴다 (ps aux 로 다른 사용자에게 노출되지 않도록).
-write_token_conf() {
-    TOKEN_CONF="$(mktemp)"
-    printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" > "$TOKEN_CONF"
-}
-
 # fetch <url> <outfile>. 반드시 `if` 조건에서 호출할 것 (set -e 가 함수 안까지 번지지 않도록).
 #   --proto '=https': HTTPS 만 허용(다운그레이드 차단), --tlsv1.2: TLS 1.2 이상,
 #   -f: HTTP 오류 시 실패(에러 페이지를 tar 로 넘기지 않음).
 fetch() {
     if need_cmd curl; then
-        if [ -n "$TOKEN" ]; then
-            write_token_conf
-            curl --proto '=https' --tlsv1.2 -fsSL -K "$TOKEN_CONF" -o "$2" "$1"
-            _rc=$?
-            rm -f "$TOKEN_CONF"; TOKEN_CONF=""
-            return "$_rc"
-        fi
         curl --proto '=https' --tlsv1.2 -fsSL -o "$2" "$1"
         return $?
     fi
     if need_cmd wget; then
-        if [ -n "$TOKEN" ]; then
-            wget --https-only -q --header "Authorization: Bearer $TOKEN" -O "$2" "$1"
-            return $?
-        fi
         wget --https-only -q -O "$2" "$1"
         return $?
     fi
@@ -109,61 +75,12 @@ fetch() {
     exit 1
 }
 
-# GitHub API 는 인증 실패를 정직하게 401 로 알려준다. 아카이브/raw URL 과 달리.
-api_status() {
-    need_cmd curl || { printf '%s' ""; return 0; }
-    if [ -n "$TOKEN" ]; then
-        write_token_conf
-        _code="$(curl -s -o /dev/null -w '%{http_code}' -K "$TOKEN_CONF" "$1" || true)"
-        rm -f "$TOKEN_CONF"; TOKEN_CONF=""
-    else
-        _code="$(curl -s -o /dev/null -w '%{http_code}' "$1" || true)"
-    fi
-    printf '%s' "$_code"
-}
-
-# 비공개 레포는 인증 실패를 401 이 아니라 404 로 위장한다 (레포의 존재 자체를 숨기려고).
-# 그래서 "install.sh 가 없다"처럼 보이는 오류의 진짜 원인은 대개 죽은 토큰이다.
-# API 를 한 번 찔러 실제 원인을 특정해준다.
 explain_download_failure() {
     echo "" >&2
     echo "❌ Download failed: $TARBALL" >&2
-    echo "" >&2
-
-    if [ -z "$TOKEN" ]; then
-        echo "  No token found. A private repo requires authentication:" >&2
-        echo "    gh auth login -h github.com" >&2
-        echo "  Once logged in, this script reads the token from gh automatically." >&2
-        return 0
-    fi
-
-    echo "  Failed even with a token. Private repos report auth failures as 404, not 401," >&2
-    echo "  so even when it looks like 'file not found', the cause is usually the token." >&2
-    echo "" >&2
-    case "$(api_status "https://api.github.com/repos/$REPO")" in
-        401)
-            echo "  Diagnosis: the token is expired/revoked (GitHub API returned 401 Bad credentials)." >&2
-            echo "    unset GITHUB_TOKEN GH_TOKEN" >&2
-            echo "    gh auth login -h github.com" >&2
-            echo "  ※ gh auth login refuses to run while GITHUB_TOKEN is set. Unset it first." >&2
-            ;;
-        403)
-            echo "  Diagnosis: the token is valid but has no permission for this repo (403)." >&2
-            echo "    A classic PAT needs the repo scope; a fine-grained PAT needs Contents:Read." >&2
-            ;;
-        404)
-            echo "  Diagnosis: the token authenticates but cannot see '$REPO' (404)." >&2
-            echo "    Check that CLAUDE_SETUP_REPO is correct and that the token has access to this repo." >&2
-            ;;
-        200)
-            echo "  Diagnosis: the repo is reachable but ref '$REF' was not found." >&2
-            echo "    Check the branch/tag name. You can also give the fully qualified form:" >&2
-            echo "      CLAUDE_SETUP_REF=refs/heads/feature/my-branch" >&2
-            ;;
-        *)
-            echo "  Diagnosis: could not reach the GitHub API. Check your network/proxy." >&2
-            ;;
-    esac
+    echo "  Check CLAUDE_SETUP_REPO ('$REPO'), CLAUDE_SETUP_REF ('$REF') and your network/proxy." >&2
+    echo "  A branch name can also be given in the fully qualified form:" >&2
+    echo "    CLAUDE_SETUP_REF=refs/heads/feature/my-branch" >&2
 }
 
 main() {
@@ -182,24 +99,18 @@ main() {
     fi
 
     TMP="$(mktemp -d)"
-    TOKEN_CONF=""
     # EXIT 트랩의 종료 상태가 스크립트의 종료 상태가 된다. 진입 시점의 $? 를 붙잡아
     # 그대로 돌려주지 않으면, 정리 작업의 마지막 명령이 실패했다는 이유만으로 설치가
-    # 성공해도 exit 1 이 된다 (예: TOKEN_CONF 가 비어 `[ -n "" ]` 가 1 을 반환).
+    # 성공해도 exit 1 이 된다.
     cleanup() {
         _status=$?
         rm -rf "$TMP"
-        if [ -n "$TOKEN_CONF" ]; then
-            rm -f "$TOKEN_CONF"
-        fi
         return "$_status"
     }
     trap 'cleanup' EXIT
     trap 'cleanup; exit 130' INT
     trap 'cleanup; exit 143' TERM
 
-    # 비공개 레포면 PAT 로 인증한다. github.com 아카이브 URL 은 Authorization 헤더를 받아준다.
-    TOKEN="$(resolve_token)"
     TARBALL="https://github.com/$REPO/archive/$REF.tar.gz"
     TARFILE="$TMP/repo.tar.gz"
 

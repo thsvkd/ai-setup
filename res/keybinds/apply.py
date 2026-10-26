@@ -317,6 +317,21 @@ def strip_keybinds_from_manifest(home: Path) -> None:
     write_manifest(home, data)
 
 
+def remove_created_if_empty(own_files: dict, created) -> None:
+    """설치가 새로 만든 파일이 제거 뒤 비었으면 지운다. 원래 있던 파일·사용자가 내용을 쓴 파일은 남긴다."""
+    for name in created or []:
+        path = own_files.get(name)
+        if path is None or not path.is_file() or path.is_symlink():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if text in ("", "{}"):
+            path.unlink()
+            print(f"  {path} — removed the empty file the installer created")
+
+
 def invalid_newline_message(value: str) -> str:
     return (
         f"--newline must be shift-enter or ctrl-enter "
@@ -466,6 +481,9 @@ def apply_claude_keybindings(path: Path, chord: str, uninstall: bool, dry_run: b
             if key not in chat:
                 chat[key] = value
                 changed = True
+        # 우리 키만 들어 있던 Chat 이 비면 객체도 뺀다. 남기면 설치 전과 다른 파일이 된다.
+        if changed and not chat:
+            del data["Chat"]
         if dry_run:
             print(f"  {path} (Claude keybindings.json) — remove keys added by the installer + restore overwritten values")
             return [], {}
@@ -1055,6 +1073,9 @@ def run(args) -> int:
     codex_toml = codex_dir / "config.toml"
     tmux_conf = home / ".tmux.conf"
 
+    own_files = {"claude": claude_kb, "codex": codex_toml, "tmux": tmux_conf}
+    existed = {name for name, path in own_files.items() if path.exists()}
+
     manifest = load_manifest(home)
     prev_kb = manifest.get("keybinds") if isinstance(manifest.get("keybinds"), dict) else {}
 
@@ -1075,6 +1096,7 @@ def run(args) -> int:
                           prev_kb.get("newline_chord"), bool(prev_kb.get("wt_managed")))
         apply_tmux(tmux_conf, True, args.dry_run, prev_kb.get("tmux_added"))
         if not args.dry_run:
+            remove_created_if_empty(own_files, prev_kb.get("created_files"))
             strip_keybinds_from_manifest(home)
         return report_result("Keybindings removed — your original entries were preserved.")
 
@@ -1135,6 +1157,9 @@ def run(args) -> int:
         "claude_overwrote": claude_overwrote,
         "codex_keys_added": union_receipt(prev_kb.get("codex_keys_added"), codex_keys)
         if chord == prev_kb.get("newline_chord") else codex_keys,
+        "created_files": union_receipt(
+            prev_kb.get("created_files"),
+            [name for name, path in own_files.items() if name not in existed and path.is_file()]),
     })
     return report_result("Newline keybindings installed.")
 

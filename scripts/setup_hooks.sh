@@ -150,13 +150,19 @@ else
     set +e
     "$PY" -m pip install ${PIP_FLAGS[@]+"${PIP_FLAGS[@]}"} --user trash-cli 2>/dev/null || \
     "$PY" -m pip install ${PIP_FLAGS[@]+"${PIP_FLAGS[@]}"} trash-cli 2>/dev/null
+    # Debian 12·Ubuntu 23.04+·Raspberry Pi OS 는 시스템 Python 을 보호해서(PEP 668) pip 가 거절한다.
+    # 그때는 배포판 패키지로 깐다. sudo 는 명령을 먼저 보이고 TTY 에서만 돌린다(D3).
+    if ! resolve_trash_command >/dev/null && command -v apt-get &>/dev/null && [[ -t 0 ]]; then
+        echo "  📦 pip was refused; running: sudo apt-get install -y trash-cli"
+        sudo apt-get install -y trash-cli || { sudo apt-get update && sudo apt-get install -y trash-cli; }
+    fi
     set -e
 
     if TRASH_CMD="$(resolve_trash_command)"; then
         echo "  ✅ trash-cli installed: $TRASH_CMD"
         HAS_TRASH=1
     else
-        echo "  ⚠️ Automatic trash tool install failed — install manually: $PY -m pip install trash-cli" >&2
+        echo "  ⚠️ Automatic trash tool install failed — install manually: $PY -m pip install trash-cli (or: sudo apt-get install trash-cli)" >&2
         echo "     (until installed, rm leaves a warning and 'really' deletes — this cannot be undone)" >&2
     fi
 fi

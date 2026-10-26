@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -22,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ONBOARD = ROOT / "res" / "onboard.py"
 
 DOWN = b"\x1b[B"
+UP = b"\x1b[A"
 ENTER = b"\r"
 CTRL_C = b"\x03"
 SPACE = b" "        # 체크박스에서 항목 선택/해제
@@ -43,6 +45,10 @@ def clean_env(**extra):
            if k not in ("CI", "CONTINUOUS_INTEGRATION", "GITHUB_ACTIONS", "GITLAB_CI", "BUILDKITE")}
     env["TERM"] = "xterm-256color"
     env.update(extra)
+    if "HOME" not in extra:
+        # 실제 홈에 영수증이 있으면 산책 대신 허브가 뜬다. 테스트마다 빈 홈에서 시작한다.
+        # ponytail: 임시 홈은 지우지 않는다. 쌓이는 게 문제가 되면 tmp_path 를 받게 바꾼다.
+        env["HOME"] = env["USERPROFILE"] = tempfile.mkdtemp(prefix="ai-setup-onboard-home-")
     return env
 
 
@@ -188,34 +194,42 @@ def test_ci_env_var_blocks_prompt_even_with_tty(tmp_path):
 # ── 실제 터미널 상호작용 ──────────────────────────────────────────────
 
 
+# 산책 키 위치: 0 시작 · 1 base · 2 하네스 선택 · 3 하네스 설치 · 4 plugins · 5 skills ·
+# 6 codegraph · 7 mcp · 8 줄바꿈 · 9 줄바꿈 키 · 10 Claude 전용 · 11-13 출력 스타일·mod·HUD ·
+# 14 tools · 15 Jarvis · 16 herdr · 17 hooks · 18 권한 · 19 AGENTS.md · 20 허브(커서는 Apply).
+ACCEPT_APPLY = [ENTER] * 21
+ACCEPT_DRY = [ENTER] * 20 + [DOWN, ENTER]
+# Skip 은 허브로 간다. 허브 커서는 첫 카테고리이므로 ↑ 한 번이면 맨 끝의 Quit 이다.
+SKIP_THEN_QUIT = [DOWN, ENTER, UP, ENTER]
+
+
 @posix_only
 def test_default_choices_give_full_install_with_auto(tmp_path):
-    """covers: Test-1
-    SCOPE=all 기본값: 권한 모드 다음·적용 여부 전에 줄바꿈 키를 묻고,
-    Enter(기본 강조)는 Shift+Enter → NEWLINE_CHORD=shift-enter.
-    질문 순서: 범위 → 권한 → 줄바꿈 키 → 하네스 → OMC → 출력 스타일 → mod → 적용.
-    하네스 체크박스는 전부 체크된 상태로 뜨므로 Enter 만으로 전체가 선택된다.
-    OMC·출력 스타일·mod 는 confirm 이라 Enter 가 기본값(아니오)이다.
-    """
+    """Enter 만으로 기본 산책: Claude Code·Codex, Shift+Enter, Claude 전용 설정은 예, Jarvis 는 설치하지 않음."""
     out = tmp_path / "answers"
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER],
+        keys=ACCEPT_APPLY,
+        timeout=90,
     )
     text = screen.decode(errors="replace")
     assert code == EXIT_OK, text
     assert "Shift+Enter" in text and "Ctrl+Enter" in text, text
+    assert "Claude Code" in text and "Codex" in text, text
     assert read_answers(out) == {
-        "SCOPE": "all",
+        "SKIP": "0",
+        "STAGES": "base,harness,plugins,skills,codegraph,mcp,newline,claude_special,tools,hooks,agentsmd",
+        "HARNESSES": "claude,codex",
         "DEFAULT_MODE": "auto",
-        "OVERWRITE_AGENTSMD": "0",
+        "JARVIS_ROLE": "none",
+        "HERDR": "0",
         "DRY_RUN": "0",
+        "OMC": "1",
+        "OUTPUT_STYLE": "1",
+        "MODS": "1",
+        "OVERWRITE_AGENTSMD": "0",
         "NEWLINE_CHORD": "shift-enter",
-        "HARNESSES": "claude,codex,grok,opencode",
-        "OMC": "0",
-        "OUTPUT_STYLE": "0",
-        "MODS": "0",
     }
 
 
@@ -223,32 +237,28 @@ def test_default_choices_give_full_install_with_auto(tmp_path):
 def test_prompt_works_under_curl_pipe_install(tmp_path):
     """`curl … | sh` 는 stdin 이 스크립트 본문이다. /dev/tty 를 열지 못하면 여기서 깨진다.
 
-    questionary 는 이 상황에서 조용히 첫 항목을 확정해버리므로, '두 번째 항목이 제대로
-    골라졌는지'까지 확인해야 진짜로 키 입력을 받은 것이다.
+    첫 항목을 자동 확정하면 Skip 이 아니라 산책이 시작된다. Skip 뒤 허브의 Quit 이 기록돼야
+    키를 받은 것이다.
     """
     out = tmp_path / "answers"
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[DOWN, ENTER, DOWN, ENTER, ENTER, ENTER, ENTER, DOWN, ENTER],
+        keys=SKIP_THEN_QUIT,
         stdin_pipe=True,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
-    answers = read_answers(out)
-    assert answers["SCOPE"] == "hooks"
-    assert answers["DEFAULT_MODE"] == "bypassPermissions"
-    assert answers["DRY_RUN"] == "1"
-    assert "NEWLINE_CHORD" not in answers
+    assert read_answers(out) == {"SKIP": "1"}
 
 
 @posix_only
 def test_bypass_choice_shows_warning(tmp_path):
     out = tmp_path / "answers"
-    # 범위=전체, 권한=bypass, 줄바꿈=기본(Shift+Enter), 하네스=기본(전체), OMC=기본(아니오), 출력 스타일=기본(아니오), mod=기본(아니오), 적용=기본
     _, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER, DOWN, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER],
+        keys=[ENTER] * 18 + [DOWN, ENTER, ENTER, ENTER],
+        timeout=90,
     )
     text = screen.decode(errors="replace")
     assert "bypassPermissions skips all of Claude Code's permission prompts" in text, text
@@ -278,12 +288,7 @@ def test_broken_prompt_aborts_instead_of_falling_back_to_defaults(tmp_path):
     shutil.copy(ONBOARD, tmp_path / "onboard.py")
     real_tui = (ROOT / "res" / "tui.py").read_text(encoding="utf-8")
     (tmp_path / "tui.py").write_text(
-        real_tui + "\n\n_real_select = select\n_calls = []\n\n"
-        "def select(*a, **k):\n"
-        "    _calls.append(1)\n"
-        "    if len(_calls) > 1:\n"
-        "        raise RuntimeError('render broke')\n"
-        "    return _real_select(*a, **k)\n",
+        real_tui + "\n\ndef confirm(*a, **k):\n    raise RuntimeError('render broke')\n",
         encoding="utf-8",
     )
     out = tmp_path / "answers"
@@ -316,6 +321,7 @@ def test_console_setup_failure_proceeds_with_defaults_before_drawing(tmp_path):
     text = screen.decode(errors="replace")
     assert code == EXIT_NON_INTERACTIVE, text
     assert "What would you like to install?" not in text, text
+    assert "Set up this machine?" not in text, text
     assert read_answers(out) == {}
 
 
@@ -335,11 +341,11 @@ def test_closed_stdin_ends_as_cannot_ask(tmp_path):
 def test_overwrite_asked_only_when_agentsmd_exists(tmp_path):
     (tmp_path / "AGENTS.md").write_text("기존 프로젝트 규칙\n", encoding="utf-8")
     out = tmp_path / "answers"
-    # 질문이 하나 늘어난다: 범위 → 권한 → 줄바꿈 키 → 하네스 → 덮어쓰기 → OMC → 출력 스타일 → mod → 적용
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER],
+        keys=[ENTER] * 22,
+        timeout=90,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     assert "already exists" in screen.decode(errors="replace")
@@ -357,28 +363,28 @@ def test_ctrl_enter_choice_makes_newline_chord_ctrl_enter(tmp_path):
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER, ENTER, DOWN, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER],
+        keys=[ENTER] * 9 + [DOWN, ENTER] + [ENTER] * 11,
+        timeout=90,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     answers = read_answers(out)
-    assert answers["SCOPE"] == "all"
+    assert answers["SKIP"] == "0"
     assert answers["NEWLINE_CHORD"] == "ctrl-enter"
 
 
 @posix_only
 def test_scope_hooks_does_not_ask_newline_chord(tmp_path):
-    """covers: Test-2
-    SCOPE=hooks 이면 줄바꿈 키를 묻지 않고 답 파일에 NEWLINE_CHORD 가 없다.
-    """
+    """줄바꿈 단계를 끄면 줄바꿈 키를 묻지 않고 NEWLINE_CHORD 를 기록하지 않는다."""
     out = tmp_path / "answers"
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[DOWN, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER],
+        keys=[ENTER] * 8 + [b"n"] + [ENTER] * 11,
+        timeout=90,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     answers = read_answers(out)
-    assert answers["SCOPE"] == "hooks"
+    assert "newline" not in answers["STAGES"].split(",")
     assert "NEWLINE_CHORD" not in answers
 
 
@@ -392,29 +398,27 @@ def test_accepts_application_cursor_mode_arrows(tmp_path):
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[b"\x1bOB", ENTER, ENTER, ENTER, ENTER, ENTER, ENTER],
+        keys=[b"\x1bOB", ENTER, b"\x1bOA", ENTER],
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
-    assert read_answers(out)["SCOPE"] == "hooks"
+    assert read_answers(out) == {"SKIP": "1"}
 
 
 @posix_only
 def test_scope_agentsmd_does_not_ask_newline_chord(tmp_path):
-    """covers: Test-2
-    SCOPE=agentsmd 이면 줄바꿈 키를 묻지 않고 답 파일에 NEWLINE_CHORD 가 없다.
-    질문 순서: 범위 → 하네스 → 적용.
-    """
+    """AGENTS.md 단계만 켜면 줄바꿈 키를 묻지 않는다. 하네스 기본값은 Claude Code 와 Codex 다."""
     out = tmp_path / "answers"
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[DOWN, DOWN, ENTER, ENTER, ENTER],
+        keys=[ENTER, b"n", ENTER] + [b"n"] * 9 + [ENTER, ENTER],
+        timeout=60,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     answers = read_answers(out)
-    assert answers["SCOPE"] == "agentsmd"
+    assert answers["STAGES"] == "agentsmd"
     assert "NEWLINE_CHORD" not in answers
-    assert answers["HARNESSES"] == "claude,codex,grok,opencode"
+    assert answers["HARNESSES"] == "claude,codex"
 
 
 @posix_only
@@ -424,90 +428,184 @@ def test_deselecting_harnesses_records_only_the_chosen(tmp_path):
     이 경로가 깨지면 Codex 만 쓰는 사용자의 프로젝트에도 CLAUDE.md 가 생긴다.
     """
     out = tmp_path / "answers"
-    # 범위=AGENTS.md만 → 하네스에서 첫 항목(claude) 을 Space 로 해제 → 확정 → 적용
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[DOWN, DOWN, ENTER, SPACE, ENTER, ENTER],
+        keys=[ENTER] * 2 + [SPACE, ENTER] + [ENTER] * 15,
+        timeout=90,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     answers = read_answers(out)
-    assert answers["HARNESSES"] == "codex,grok,opencode"
+    assert answers["HARNESSES"] == "codex"
+    assert answers["OMC"] == "0"
 
 
 @posix_only
-def test_scope_hooks_does_not_ask_harnesses(tmp_path):
-    """훅은 프로젝트 지침과 무관하다. 범위가 훅뿐이면 하네스 질문이 끼면 안 된다."""
+def test_skip_then_quit_selects_nothing(tmp_path):
+    """covers: AI-47
+    Skip 뒤 허브에서 Quit 하면 하네스를 고르지 않고 설치 선택도 남기지 않는다."""
     out = tmp_path / "answers"
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[DOWN, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER],
+        keys=SKIP_THEN_QUIT,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     answers = read_answers(out)
-    assert answers["SCOPE"] == "hooks"
+    assert answers == {"SKIP": "1"}
     assert "HARNESSES" not in answers
 
 
 @posix_only
 def test_choosing_omc_records_omc_as_1(tmp_path):
-    """범위=훅 → 권한=기본 → OMC 에서 y → 출력 스타일=기본 → mod=기본 → 적용. y 는 confirm 을 곧바로 확정한다."""
+    """출력 스타일과 mod 는 아니오, OMC HUD 래퍼만 예."""
     out = tmp_path / "answers"
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[DOWN, ENTER, ENTER, b"y", ENTER, ENTER, ENTER],
+        keys=[ENTER] * 11 + [b"n", b"n", b"y"] + [ENTER] * 7,
+        timeout=90,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     answers = read_answers(out)
-    assert answers["SCOPE"] == "hooks"
     assert answers["OMC"] == "1"
+    assert answers["OUTPUT_STYLE"] == "0"
+    assert answers["MODS"] == "0"
 
 
 @posix_only
 def test_choosing_output_style_records_output_style_as_1(tmp_path):
-    """범위=훅 → 권한=기본 → OMC=기본(아니오) → 출력 스타일에서 y → mod=기본 → 적용."""
+    """출력 스타일만 예. y 는 confirm 을 곧바로 확정한다."""
     out = tmp_path / "answers"
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[DOWN, ENTER, ENTER, ENTER, b"y", ENTER, ENTER],
+        keys=[ENTER] * 11 + [b"y", b"n", b"n"] + [ENTER] * 7,
+        timeout=90,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     answers = read_answers(out)
     assert answers["OMC"] == "0"
     assert answers["OUTPUT_STYLE"] == "1"
+    assert answers["MODS"] == "0"
 
 
 @posix_only
 def test_choosing_mod_records_mods_as_1(tmp_path):
-    """범위=훅 → 권한=기본 → OMC=기본 → 출력 스타일=기본 → mod 에서 y → 적용."""
+    """mod 만 예."""
     out = tmp_path / "answers"
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[DOWN, ENTER, ENTER, ENTER, ENTER, b"y", ENTER],
+        keys=[ENTER] * 11 + [b"n", b"y", b"n"] + [ENTER] * 7,
+        timeout=90,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     answers = read_answers(out)
     assert answers["OUTPUT_STYLE"] == "0"
     assert answers["MODS"] == "1"
+    assert answers["OMC"] == "0"
 
 
 @posix_only
 def test_scope_agentsmd_does_not_ask_omc(tmp_path):
-    """OMC 는 전역 설치다. 현재 폴더만 고른 사용자에게 전역 변경을 묻지 않는다."""
+    """AGENTS.md 만 고르면 Claude 전용 설정을 묻지 않는다."""
     out = tmp_path / "answers"
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[DOWN, DOWN, ENTER, ENTER, ENTER],
+        keys=[ENTER, b"n", ENTER] + [b"n"] * 9 + [ENTER, ENTER],
+        timeout=60,
+    )
+    text = screen.decode(errors="replace")
+    assert code == EXIT_OK, text
+    answers = read_answers(out)
+    assert answers["OMC"] == "0"
+    assert answers["OUTPUT_STYLE"] == "0"
+    assert answers["MODS"] == "0"
+    assert "Wrap the OMC HUD" not in text
+
+
+# ── 카테고리 허브 ─────────────────────────────────────────────────────
+
+
+@posix_only
+def test_skip_opens_hub_and_apply_records_the_edited_selection(tmp_path):
+    """covers: AI-45
+    Skip 은 설치하지 않고 허브로 간다. 허브에서 Base 를 끄고 Apply 하면 나머지 기본값이 기록된다."""
+    out = tmp_path / "answers"
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        # Skip → 허브(Base) → Base 끔 → 허브 커서는 Base → ↓10 번이면 Apply.
+        keys=[DOWN, ENTER, ENTER, b"n"] + [DOWN] * 10 + [ENTER],
+    )
+    text = screen.decode(errors="replace")
+    assert code == EXIT_OK, text
+    assert "Choose a category to change" in text, text
+    answers = read_answers(out)
+    assert answers["SKIP"] == "0"
+    assert answers["DRY_RUN"] == "0"
+    assert answers["STAGES"] == "harness,plugins,skills,codegraph,mcp,newline,claude_special,tools,hooks,agentsmd"
+    assert answers["HARNESSES"] == "claude,codex"
+
+
+@posix_only
+def test_apply_with_every_stage_off_selects_nothing(tmp_path):
+    """covers: AI-47
+    모든 단계를 끄고 Apply 하면 Quit 과 같다. 빈 STAGES 는 setup 스크립트에서 예전 전체 설치가 된다.
+    """
+    out = tmp_path / "answers"
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        # 시작 · base n · 하네스 선택 · 하네스 설치 n · 나머지 9 단계 n · 허브 Apply.
+        keys=[ENTER, b"n", ENTER] + [b"n"] * 10 + [ENTER],
+        timeout=60,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
-    assert "OMC" not in read_answers(out)
-    assert "OUTPUT_STYLE" not in read_answers(out)
-    assert "MODS" not in read_answers(out)
+    assert read_answers(out) == {"SKIP": "1"}
+
+
+@posix_only
+def test_receipt_opens_hub_without_the_walk(tmp_path):
+    """covers: AI-46
+    영수증이 있는 머신은 산책 질문 없이 허브부터 연다. 허브의 Quit 은 아무것도 설치하지 않는다."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / ".claude-code-setup.json").write_text("{}", encoding="utf-8")
+    out = tmp_path / "answers"
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        keys=[UP, ENTER],
+        env=clean_env(HOME=str(home)),
+    )
+    text = screen.decode(errors="replace")
+    assert code == EXIT_OK, text
+    assert "Set up this machine?" not in text, text
+    assert "Choose a category to change" in text, text
+    assert read_answers(out) == {"SKIP": "1"}
+
+
+def test_hub_rows_show_each_category_selection():
+    """허브 줄은 카테고리마다 현재 선택을 보여 주고, 끝은 Apply·Preview·Quit 이다."""
+    sys.path.insert(0, str(ROOT / "res"))
+    import onboard
+    import stages
+
+    assert onboard.STAGE_ORDER == stages.STAGE_ORDER
+    state = onboard.default_state()
+    state["stages"] -= {"mcp", "plugins"}
+    state["harnesses"] = ["codex"]
+    state["mode"] = "bypassPermissions"
+    rows = {value: label for value, label, _ in onboard.hub_options(state)}
+    assert rows["harness"] == "Harnesses · Codex"
+    assert rows["plugins"] == "Plugins · off"
+    assert rows["codegraph"] == "CodeGraph · package"
+    assert rows["claude_special"] == "Claude extras · on · needs Claude Code"
+    assert rows["hooks"] == "Guard hooks · bypassPermissions"
+    assert [value for value, _, _ in onboard.hub_options(state)][-3:] == ["apply", "dry", "quit"]
 
 
 # ── 렌더러 회귀 방지 ─────────────────────────────────────────────────
@@ -536,6 +634,19 @@ def test_renderer_builds_frames_without_console():
                           capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert proc.returncode == 0, proc.stderr
     assert "OK" in proc.stdout
+
+
+def test_install_ps1_forwards_stage_flags_to_setup():
+    """Windows 원라이너도 setup.ps1 과 같은 단계 선택을 넘긴다.
+
+    --stages 는 스위치가 아니라 남은 인자다. 부트스트랩이 모르는 옵션으로 거절하면
+    POSIX install.sh 만 단계 계획을 실행할 수 있다.
+    """
+    source = (ROOT / "install.ps1").read_text(encoding="utf-8-sig")
+    assert "'^--stages=(.*)$'" in source
+    assert "--stages', $stagesValue" in source
+    assert "@extra" in source
+    assert "nothing is installed" in source
 
 
 def test_install_ps1_forwards_every_received_switch_to_setup():
@@ -604,7 +715,7 @@ def test_install_ps1_forwards_keybinds_and_newline_to_setup():
 
 @posix_only
 def test_setup_sh_dry_run_follows_onboarding_choices(tmp_path):
-    """온보딩에서 '훅만 + dry-run' 을 고르면 AGENTS.md 는 건드리지 않고 미리보기만 나와야 한다."""
+    """온보딩에서 기본값 + Preview(dry-run) 를 고르면 미리보기만 나오고 아무것도 쓰지 않는다."""
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     project = tmp_path / "project"
@@ -617,19 +728,20 @@ def test_setup_sh_dry_run_follows_onboarding_choices(tmp_path):
     trash.chmod(0o755)
 
     env = clean_env(HOME=str(home), PATH=f"{stub_bin}{os.pathsep}{os.environ['PATH']}")
-    # 범위=훅만(↓), 권한=auto(기본), OMC=아니오(기본), 출력 스타일=아니오(기본), mod=아니오(기본), 적용=dry-run 먼저(↓).
-    # SCOPE=hooks 이므로 줄바꿈 키 질문은 끼지 않는다 (covers: Test-2).
     code, screen = run_in_pty(
         ["bash", str(ROOT / "scripts" / "setup.sh")],
-        keys=[DOWN, ENTER, ENTER, ENTER, ENTER, ENTER, DOWN, ENTER],
-        cwd=project, env=env, timeout=90,
+        keys=ACCEPT_DRY,
+        cwd=project, env=env, timeout=120,
     )
     text = screen.decode(errors="replace")
     assert code == 0, text
     assert "DRY RUN" in text, text
+    assert "CodeGraph" in text, text
+    assert "graft" not in text.lower(), text
+    assert "Claude Code" in text and "Codex" in text, text
     # dry-run 이므로 실제 설정은 하나도 쓰이지 않는다.
     assert not (home / ".claude" / "settings.json").exists(), text
-    # 범위가 '훅만' 이므로 AGENTS.md 도 설치되지 않는다.
+    # dry-run 이므로 AGENTS.md 도 생기지 않는다.
     assert not (project / "AGENTS.md").exists(), text
 
 
@@ -646,17 +758,16 @@ def test_onboarding_works_in_piped_setup_sh(tmp_path):
     project.mkdir()
 
     env = clean_env(HOME=str(home))
-    # 범위=AGENTS.md만(↓↓), 하네스=전부(Enter), 적용=dry-run 먼저(↓) — 권한 모드는 묻지 않는 범위다.
     code, screen = run_in_pty(
         ["bash", str(ROOT / "scripts" / "setup.sh")],
-        keys=[DOWN, DOWN, ENTER, ENTER, DOWN, ENTER],
-        cwd=project, env=env, stdin_pipe=True, timeout=90,
+        keys=ACCEPT_DRY,
+        cwd=project, env=env, stdin_pipe=True, timeout=120,
     )
     text = screen.decode(errors="replace")
     assert code == 0, text
-    assert "What would you like to install?" in text, text
+    assert "Set up this machine?" in text, text
     assert "DRY RUN" in text, text
-    # AGENTS.md 만 고르고 dry-run 이므로 훅도 파일도 설치되지 않는다.
+    # dry-run 이므로 훅도 파일도 설치되지 않는다.
     assert not (home / ".claude" / "settings.json").exists(), text
     assert not (project / "AGENTS.md").exists(), text
 

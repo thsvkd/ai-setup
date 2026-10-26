@@ -346,6 +346,43 @@ def install_user_service(plan, username=None, uid=None):
             )
 
 
+STOP_WAIT_SECONDS = 30
+
+
+def stop_managed_service(record, service):
+    """ai-setup 이 등록한 서비스만 멈춘다. 다른 런타임은 건드리지 않는다."""
+    manager = record["service_manager"]
+    if manager == "task-scheduler":
+        command = ["schtasks.exe", "/End", "/TN", record["service_task"]]
+    elif manager == "launchd":
+        command = ["launchctl", "bootout", "gui/{}".format(os.getuid()), str(service)]
+    elif manager == "systemd-user":
+        command = ["systemctl", "--user", "stop", service.name]
+    else:
+        raise RuntimeError("Unsupported Orca service manager; preserving its files")
+    result = subprocess.run(
+        command, check=False, capture_output=True,
+        text=True, encoding="oem" if os.name == "nt" else "utf-8", errors="replace", input="", timeout=60,
+    )
+    if result.returncode and manager == "task-scheduler":
+        # 승격해 등록한 작업은 일반 권한으로 멈추지 못할 수 있다. 등록·삭제와 같은 동의 경로로 다시 시도한다.
+        result = change_windows_task({
+            "task": record["service_task"], "service": service,
+            "runner": Path(record["service_root"]) / "orca-server-runner.py",
+        }, "end")
+    if result.returncode:
+        raise RuntimeError(
+            "Could not stop the ai-setup Orca service; preserving it: " + (result.stderr or "").strip()
+        )
+    deadline = time.monotonic() + STOP_WAIT_SECONDS
+    while runtime_is_active(record["server_profile"]):
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                "An Orca server not run by ai-setup is active on this profile; stop it and retry the uninstall"
+            )
+        time.sleep(1)
+
+
 def remove_user_service(record):
     root = Path(record["service_root"])
     service = Path(record["service_path"])
@@ -354,8 +391,6 @@ def remove_user_service(record):
     marker = root / ".ai-setup-managed"
     if not marker.is_file() or marker.read_text(encoding="utf-8").strip() != "ai-setup orca server v1":
         raise RuntimeError("Orca service ownership marker is missing; preserving its files")
-    if runtime_is_active(record["server_profile"]):
-        raise RuntimeError("Orca server is active; preserving it and its package during uninstall")
     runner = root / "orca-server-runner.py"
     owned_files = (
         runner,
@@ -369,6 +404,9 @@ def remove_user_service(record):
         raise RuntimeError("An ai-setup Orca service file was replaced with a symbolic link; preserving its files")
     if not service.is_file() or str(runner).casefold() not in service.read_text(encoding="utf-8").casefold():
         raise RuntimeError("Orca service definition changed; preserving it")
+    # 소유를 확인한 서비스가 돌고 있으면 먼저 멈춘다. 멈춘 뒤에도 남는 서버는 남의 것이라 보존한다.
+    if runtime_is_active(record["server_profile"]):
+        stop_managed_service(record, service)
     manager = record["service_manager"]
     if manager == "task-scheduler":
         query = subprocess.run(

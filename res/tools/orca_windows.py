@@ -39,8 +39,8 @@ try {
         $definition.Principal.LogonType = 2
         $definition.Principal.RunLevel = 0
         $null = $folder.RegisterTaskDefinition($data.task, $definition, 2, $data.callerSid, $null, 2)
-    } elseif ($data.operation -eq 'delete') {
-        try { $definition = $folder.GetTask($data.task).Definition } catch {
+    } elseif ($data.operation -in @('delete', 'end')) {
+        try { $registered = $folder.GetTask($data.task); $definition = $registered.Definition } catch {
             if ($_.Exception.HResult -eq -2147024894) { exit 0 }
             throw
         }
@@ -56,7 +56,7 @@ try {
             $definition.Principal.UserId
         } else { $account.Translate([Security.Principal.SecurityIdentifier]).Value }
         if ($sid -ne $data.callerSid) { throw 'The registered Orca task belongs to another user.' }
-        $folder.DeleteTask($data.task, 0)
+        if ($data.operation -eq 'end') { $registered.Stop(0) } else { $folder.DeleteTask($data.task, 0) }
     } else {
         throw 'Unsupported Orca task operation.'
     }
@@ -98,7 +98,7 @@ def protect_file(path):
 
 
 def change_task(plan, operation):
-    if operation not in ('create', 'delete'):
+    if operation not in ('create', 'delete', 'end'):
         raise ValueError('Unsupported Orca task operation')
     powershell = powershell_path()
     template = base64.b64encode(WORKER.encode('utf-8')).decode('ascii')

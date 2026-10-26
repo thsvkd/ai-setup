@@ -224,8 +224,7 @@ def test_remote_bootstrap_installs_skills_from_local_archive(tmp_path, long_opti
               "scripts/lib/SetupCommon.ps1", "res/skills/apply.py",
               "res/skills/design-lab/SKILL.md"]
     env = dict(os.environ)
-    env.update(USERPROFILE=str(home), HOME=str(home), CI="1",
-               GITHUB_TOKEN="", GH_TOKEN="")
+    env.update(USERPROFILE=str(home), HOME=str(home), CI="1")
     env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env["PATH"]
     if sys.platform == "win32":
         archive = tmp_path / "repo.zip"
@@ -241,7 +240,6 @@ function Invoke-WebRequest {
     param($Uri, $OutFile, $Headers, [switch]$UseBasicParsing)
     Copy-Item -LiteralPath $env:CLAUDE_SKILL_TEST_ARCHIVE -Destination $OutFile
 }
-function gh { return }
 $bootstrap = [scriptblock]::Create((Get-Content -LiteralPath $env:CLAUDE_SKILL_TEST_BOOTSTRAP -Raw))
 if ($env:CLAUDE_SKILL_TEST_OPTION -eq "--skills") { & $bootstrap --skills }
 else { & $bootstrap -Skills }
@@ -258,9 +256,6 @@ exit $LASTEXITCODE
         curl = stub / "curl"
         curl.write_text('#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n  if [ "$1" = "-o" ]; then shift; cp "$CLAUDE_SKILL_TEST_ARCHIVE" "$1"; exit 0; fi\n  shift\ndone\nexit 1\n', encoding="utf-8")
         curl.chmod(0o755)
-        gh = stub / "gh"
-        gh.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        gh.chmod(0o755)
         env["PATH"] = str(stub) + os.pathsep + env["PATH"]
         env["CLAUDE_SKILL_TEST_ARCHIVE"] = str(archive)
         command = ["sh", str(ROOT / "install.sh"), "--skills"]

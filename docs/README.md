@@ -40,7 +40,6 @@
 | 문서 | 다루는 것 | 상태 |
 | --- | --- | --- |
 | `CONTEXT.md` | 용어 정의 | `authoritative` |
-| `AUTHENTICATION.md` | GitHub 인증 | `authoritative` |
 | `2026-07-31-delete-guard-architecture.md` | 삭제 가드 설계와 그 한계 | `historical` |
 | `handoffs/` | 이전 작업의 케이스 합의·핵심 결정·기각한 대안 | `historical` |
 | `reviews/` | 정적 리뷰와 인간 검수 산출물 | `historical` |

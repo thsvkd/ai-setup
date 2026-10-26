@@ -2,10 +2,10 @@
 #
 # Claude Code 사용자 레벨 설정 CLI 엔트리포인트 (macOS/Linux)
 #
-#   인자 없이 실행하면 대화형 온보딩(res/onboard.py)이 떠서 설치 범위·권한 모드 등을
-#   고르게 합니다. 플래그를 하나라도 주면 사용자가 이미 뜻을 밝힌 것이므로 온보딩을
-#   건너뛰고 예전과 똑같이 동작합니다. 온보딩을 띄울 수 없는 환경(TTY 없음/CI)에서도
-#   예전 기본값(훅+권한 설치 + AGENTS.md 설치)으로 그대로 진행합니다.
+#   인자 없이 실행하면 대화형 온보딩(res/onboard.py)이 단계 산책을 띄운다. 산책 뒤나 Skip 은
+#   카테고리 허브로 가고, 허브의 Apply 만 설치한다. Quit 이나 터미널 없음은 아무것도 설치하지 않는다. 플래그를 주면 온보딩을 건너뛴다.
+#   --no-onboard 는 예전 기본 설치(훅+AGENTS.md+키바인드+스킬)를 유지한다.
+#   --stages 는 순수 액션 목록(res/stages.py)을 따른다.
 #
 # 사용법:
 #   bash setup.sh                       # 온보딩 → 선택대로 실행
@@ -30,10 +30,18 @@ print_usage() {
 ai-setup — Claude Code user-level setup
 
 Usage: bash setup.sh [options]
-  (no options)  pick install scope/permission mode in interactive onboarding, then run
+  (no options)  walk the stages on a TTY, then the category hub. Only Apply installs; Quit or no TTY installs nothing
+  --stages L    all or a comma list, in stage order. --dry-run prints the list only
+  --jarvis-role gateway|core
+                with --stages, clone and register Jarvis for that role
+  --herdr       with --stages, include herdr (off unless chosen)
+  --orca-desktop
+                with --tools orca or --stages, also open the paired Orca desktop app
+                (Windows: point the Orca shortcuts at the desktop profile). Off by default
+  --ss-caps     with --stages, grant the Jarvis ss capability
   --hooks       install global guard hooks + permissions only (~/.claude)
   --agentsmd    install project instructions into the current folder only
-  --harness L   harnesses to install instructions for (comma-separated: claude,codex,grok,opencode,all)
+  --harness L   harnesses to install instructions for (comma-separated: claude,codex,grok,opencode,agy,gemini,copilot,all)
                 choosing claude also installs CLAUDE.md. Default is all.
   --skills      install bundled skills only (~/.claude/skills)
   --tools orca  install the official Orca package and its bundled skills only
@@ -60,14 +68,16 @@ Usage: bash setup.sh [options]
   --help, -h    this help
 
 What onboarding lets you choose:
-  · install scope (everything (incl. bundled skills) / guard hooks+permissions only / AGENTS.md only)
+  · Walk the stages, or Skip straight to the category menu (hub)
+  · a machine that already has a receipt opens the hub directly
+  · each stage, on by default: base, harness, plugins, skills, codegraph, mcp, newline, claude_special, tools, hooks, agentsmd
+  · harnesses (default Claude Code and Codex)
+  · newline key (Shift+Enter / Ctrl+Enter)
+  · Claude specials when Claude Code is selected
+  · Jarvis role (default: do not install) and herdr (default off)
   · permission mode (auto / bypassPermissions)
-  · newline key (Shift+Enter / Ctrl+Enter) — only when scope=everything
-  · whether to install oh-my-claudecode — only when scope=everything/hooks
-  · whether to install the fluent-korean output style — only when scope=everything/hooks
-  · whether to install Claude Code mods — only when scope=everything/hooks
   · whether to overwrite an existing AGENTS.md (asked only when the file exists)
-  · whether to apply now or first view the change plan (--dry-run)
+  · in the hub: Apply, Preview the plan (--dry-run), or Quit
 EOF
 }
 
@@ -89,6 +99,17 @@ FORCE_AGENTSMD=0
 HARNESSES=""
 NEWLINE_CHORD=""
 NEWLINE_GIVEN=0
+STAGES=""
+STAGE_RUN=0
+JARVIS_ROLE=""
+HERDR_FLAG=0
+ORCA_DESKTOP=0
+SS_CAPS=0
+SKIP_INSTALL=0
+# 온보딩 답이 있을 때만 채운다. 비어 있으면 --stages 는 특별 설정을 기본으로 계획한다.
+INCLUDE_OUTPUT_STYLE=
+INCLUDE_MODS=
+INCLUDE_OMC=
 
 HAD_ARGS=0
 ARG_COUNT=$#
@@ -110,7 +131,7 @@ while [[ $# -gt 0 ]]; do
         --mods) RUN_MODS=1; HAD_ARGS=1; shift ;;
         --harness)
             if [[ -z "${2:-}" ]]; then
-                echo "--harness requires a value (claude|codex|grok|opencode|all)" >&2
+                echo "--harness requires a value (claude|codex|grok|opencode|agy|gemini|copilot|all)" >&2
                 exit 1
             fi
             HARNESSES="$2"; HAD_ARGS=1; shift 2 ;;
@@ -126,6 +147,17 @@ while [[ $# -gt 0 ]]; do
         --dry-run) DRY_RUN=1; HAD_ARGS=1; shift ;;
         --no-onboard) NO_ONBOARD=1; HAD_ARGS=1; shift ;;
         --doctor) RUN_DOCTOR=1; HAD_ARGS=1; shift ;;
+        --stages)
+            if [[ -z "${2:-}" ]]; then echo "--stages requires all or a comma-separated list." >&2; exit 1; fi
+            STAGES="$2"; STAGE_RUN=1; HAD_ARGS=1; shift 2 ;;
+        --stages=*) STAGES="${1#*=}"; STAGE_RUN=1; HAD_ARGS=1; shift ;;
+        --jarvis-role)
+            if [[ -z "${2:-}" ]]; then echo "--jarvis-role requires gateway or core." >&2; exit 1; fi
+            JARVIS_ROLE="$2"; HAD_ARGS=1; shift 2 ;;
+        --jarvis-role=*) JARVIS_ROLE="${1#*=}"; HAD_ARGS=1; shift ;;
+        --herdr) HERDR_FLAG=1; HAD_ARGS=1; shift ;;
+        --orca-desktop) ORCA_DESKTOP=1; HAD_ARGS=1; shift ;;
+        --ss-caps) SS_CAPS=1; HAD_ARGS=1; shift ;;
         --help|-h) print_usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; echo ""; print_usage >&2; exit 1 ;;
     esac
@@ -133,6 +165,23 @@ done
 
 # 값이 비었는지가 아니라 '플래그가 주어졌는지' 로 판정한다. --newline= 처럼 빈 값을 준 경우도
 # 잘못된 값이며, 조용히 기본값으로 흘려보내면 PowerShell 쪽(-Newline "")과 동작이 갈린다.
+if [[ -n "$JARVIS_ROLE" ]]; then
+    case "$JARVIS_ROLE" in
+        gateway|core) ;;
+        *)
+            echo "--jarvis-role must be gateway or core (got: $JARVIS_ROLE)." >&2
+            exit 1 ;;
+    esac
+fi
+if [[ ( -n "$JARVIS_ROLE" || "$HERDR_FLAG" -eq 1 || "$SS_CAPS" -eq 1 ) && "$STAGE_RUN" -ne 1 ]]; then
+    echo "--jarvis-role, --herdr, and --ss-caps require --stages." >&2
+    exit 1
+fi
+if [[ "$ORCA_DESKTOP" -eq 1 && "$STAGE_RUN" -ne 1 && -z "$TOOLS" ]]; then
+    echo "--orca-desktop requires --tools orca or --stages." >&2
+    exit 1
+fi
+
 if [[ "$NEWLINE_GIVEN" -eq 1 ]]; then
     case "$NEWLINE_CHORD" in
         shift-enter|ctrl-enter) ;;
@@ -245,6 +294,10 @@ if [[ "$RUN_DOCTOR" -eq 1 ]]; then
 fi
 
 # 도구만 설치할 때 기본 훅·AGENTS.md 설치로 흘러가지 않게 별도로 끝낸다.
+if [[ -n "$TOOLS" && "$STAGE_RUN" -eq 1 ]]; then
+    echo "--tools cannot be combined with --stages." >&2
+    exit 1
+fi
 if [[ -n "$TOOLS" ]]; then
     if [[ "$TOOLS" != "orca" || "$RUN_HOOKS$RUN_AGENTSMD$RUN_KEYBINDS$RUN_SKILLS$RUN_OMC$RUN_OUTPUT_STYLE$RUN_MODS" != "0000000" || -n "$HARNESSES$NEWLINE_CHORD" ]]; then
         echo "--tools currently accepts orca alone, with --dry-run or --uninstall." >&2
@@ -254,14 +307,15 @@ if [[ -n "$TOOLS" ]]; then
     tool_args=()
     [[ "$DRY_RUN" -eq 1 ]] && tool_args+=(--dry-run)
     [[ "$UNINSTALL" -eq 1 ]] && tool_args+=(--uninstall)
+    [[ "$ORCA_DESKTOP" -eq 1 ]] && tool_args+=(--desktop-app)
     exec "$PY" -B -X utf8 "$REPO_ROOT/res/tools/orca.py" ${tool_args[@]+"${tool_args[@]}"}
 fi
 
 # 인자가 하나도 없을 때만 온보딩을 띄운다.
 #
 # 온보딩 종료 코드: 0=선택 완료, 1=프롬프트가 깨짐, 2=대화형 불가(TTY 없음/CI), 130=사용자 취소.
-# 2 만 "물어볼 수 없었다"라서 예전 기본값으로 계속 진행한다. 나머지(취소·깨짐·traceback·
-# 시그널)는 사용자가 고르던 중이었으므로 아무것도 설치하지 않고 멈춘다.
+# 2 는 "물어볼 수 없었다"라서 아무것도 설치하지 않고 끝낸다. 나머지(취소·깨짐·traceback·
+# 시그널)도 설치하지 않고 멈춘다.
 run_onboarding() {
     local onboard="$REPO_ROOT/res/onboard.py"
     [[ -f "$onboard" ]] || return 0
@@ -284,7 +338,8 @@ run_onboarding() {
 
     if [[ "$status" -eq 2 ]]; then
         rm -f "$answers"
-        return 0    # 대화형 불가 — 예전 기본값 그대로
+        echo "No terminal, so nothing was installed."
+        exit 0
     fi
     if [[ "$status" -ne 0 ]]; then
         rm -f "$answers"
@@ -322,9 +377,33 @@ run_onboarding() {
                     *) HARNESSES="$value" ;;
                 esac ;;
             OVERWRITE_AGENTSMD) [[ "$value" == "1" ]] && FORCE_AGENTSMD=1 ;;
-            OMC) [[ "$value" == "1" ]] && RUN_OMC=1 ;;
-            OUTPUT_STYLE) [[ "$value" == "1" ]] && RUN_OUTPUT_STYLE=1 ;;
-            MODS) [[ "$value" == "1" ]] && RUN_MODS=1 ;;
+            SKIP) [[ "$value" == "1" ]] && SKIP_INSTALL=1 ;;
+            STAGES)
+                case "$value" in
+                    ""|*[!a-z_,]*) ;;
+                    *) STAGES="$value"; STAGE_RUN=1 ;;
+                esac ;;
+            JARVIS_ROLE)
+                case "$value" in
+                    none|"") JARVIS_ROLE="" ;;
+                    gateway|core) JARVIS_ROLE="$value" ;;
+                esac ;;
+            HERDR) [[ "$value" == "1" ]] && HERDR_FLAG=1 ;;
+            OMC)
+                case "$value" in
+                    0|1) INCLUDE_OMC="$value" ;;
+                esac
+                [[ "$value" == "1" ]] && RUN_OMC=1 ;;
+            OUTPUT_STYLE)
+                case "$value" in
+                    0|1) INCLUDE_OUTPUT_STYLE="$value" ;;
+                esac
+                [[ "$value" == "1" ]] && RUN_OUTPUT_STYLE=1 ;;
+            MODS)
+                case "$value" in
+                    0|1) INCLUDE_MODS="$value" ;;
+                esac
+                [[ "$value" == "1" ]] && RUN_MODS=1 ;;
             DRY_RUN) [[ "$value" == "1" ]] && DRY_RUN=1 ;;
         esac
     done < "$answers"
@@ -333,6 +412,42 @@ run_onboarding() {
 
 if [[ "$HAD_ARGS" -eq 0 && "$NO_ONBOARD" -eq 0 ]]; then
     run_onboarding
+fi
+
+if [[ "$SKIP_INSTALL" -eq 1 ]]; then
+    echo "Nothing selected, so nothing was installed."
+    exit 0
+fi
+
+run_stage_plan() {
+    local py status
+    py="$(resolve_python_command)" || { echo "Python 3 is required." >&2; exit 2; }
+    local args=(--plan --stages "$STAGES" --project-dir "$(pwd)")
+    [[ -n "$HARNESSES" ]] && args+=(--harness "$HARNESSES")
+    [[ -n "$JARVIS_ROLE" ]] && args+=(--jarvis-role "$JARVIS_ROLE")
+    [[ "$HERDR_FLAG" -eq 1 ]] && args+=(--herdr)
+    [[ "$ORCA_DESKTOP" -eq 1 ]] && args+=(--orca-desktop)
+    [[ "$SS_CAPS" -eq 1 ]] && args+=(--ss-caps)
+    [[ "$DRY_RUN" -eq 1 ]] && args+=(--dry-run)
+    [[ "$UNINSTALL" -eq 1 ]] && args+=(--uninstall)
+    [[ -n "$NEWLINE_CHORD" ]] && args+=(--newline "$NEWLINE_CHORD")
+    [[ -n "$DEFAULT_MODE" ]] && args+=(--permission-mode "$DEFAULT_MODE")
+    [[ "$FORCE_AGENTSMD" -eq 1 ]] && args+=(--overwrite-agentsmd)
+    [[ -n "$INCLUDE_OUTPUT_STYLE" ]] && args+=(--include-output-style "$INCLUDE_OUTPUT_STYLE")
+    [[ -n "$INCLUDE_MODS" ]] && args+=(--include-mods "$INCLUDE_MODS")
+    [[ -n "$INCLUDE_OMC" ]] && args+=(--include-omc "$INCLUDE_OMC")
+    set +e
+    "$py" -B -X utf8 "$REPO_ROOT/res/stages.py" "${args[@]}"
+    status=$?
+    set -e
+    if [[ "$DRY_RUN" -eq 1 && "$status" -eq 0 ]]; then
+        echo "DRY RUN complete — nothing was changed."
+    fi
+    exit "$status"
+}
+
+if [[ "$STAGE_RUN" -eq 1 ]]; then
+    run_stage_plan
 fi
 
 # bash 3.2 (macOS 기본) 는 set -u 에서 빈 배열의 "${arr[@]}" 확장을 unbound variable 로

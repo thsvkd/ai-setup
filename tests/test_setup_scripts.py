@@ -89,10 +89,11 @@ def test_setup_hooks_installs_for_real(sandbox_home, stub_bin):
     assert settings(sandbox_home)["hooks"]["SessionStart"]
 
 
-def test_setup_no_args_installs_hooks_and_agentsmd(sandbox_home, stub_bin, tmp_path):
+def test_setup_no_onboard_installs_hooks_and_agentsmd(sandbox_home, stub_bin, tmp_path):
+    # 인자 없음은 이제 아무것도 설치하지 않는다(D4, AI-42). 예전 전체 설치는 --no-onboard 다.
     project = tmp_path / "project"
     project.mkdir()
-    proc = run_script(["bash", str(ROOT / "scripts" / "setup.sh")], sandbox_home, stub_bin, cwd=project)
+    proc = run_script(["bash", str(ROOT / "scripts" / "setup.sh"), "--no-onboard"], sandbox_home, stub_bin, cwd=project)
     assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     assert (sandbox_home / ".claude" / "hooks" / "danger_guard.py").exists()
     assert (project / "AGENTS.md").exists()
@@ -197,104 +198,35 @@ def test_install_sh_propagates_failure(sandbox_home, curl_stub):
     assert proc.returncode != 0
 
 
-# --- 다운로드 실패 진단 ---
+# --- 다운로드 실패 안내 ---
 #
-# 비공개 레포는 인증 실패를 401 이 아니라 404 로 위장한다. 그래서 만료된 토큰으로 설치하면
-# "install.sh 가 없다"처럼 보이는 404 가 나고, 진짜 원인(재로그인 필요)을 알 수 없다.
-# install.sh 는 실패 시 GitHub API 를 한 번 찔러 원인을 특정해야 한다.
+# 공개 레포라 인증이 없다. 다운로드가 실패하면 레포·ref·네트워크를 확인하라고 안내한다.
 
 
-def failing_curl(bin_dir, api_status):
-    """아카이브 다운로드는 실패하고, API 프로브는 지정한 상태코드를 돌려주는 curl 스텁."""
-    curl = bin_dir / "curl"
+def test_install_sh_reports_repo_and_ref_on_download_failure_without_sending_a_token(sandbox_home, stub_bin):
+    """GITHUB_TOKEN 이 셸에 남아 있어도 보내지 않는다. 공개 레포에는 필요 없고, 새면 시크릿 노출이다."""
+    curl = stub_bin / "curl"
     curl.write_text(
         "#!/bin/sh\n"
-        "for a in \"$@\"; do\n"
-        "  case \"$a\" in\n"
-        f"    *api.github.com*) printf '%s' '{api_status}'; exit 0 ;;\n"
-        "  esac\n"
-        "done\n"
+        "printf '%s\\n' \"$@\" > \"$HOME/curl.args\"\n"
         "echo 'curl: (22) The requested URL returned error: 404' >&2\n"
         "exit 22\n",
         encoding="utf-8",
     )
     curl.chmod(0o755)
-    # gh 폴백이 실환경 토큰을 집어오지 않도록 PATH 에서 가린다.
-    gh = bin_dir / "gh"
-    gh.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
-    gh.chmod(0o755)
-    return bin_dir
-
-
-def install_with(sandbox_home, bin_dir, token=None):
     env = dict(os.environ)
     env["HOME"] = str(sandbox_home)
-    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
-    env.pop("GITHUB_TOKEN", None)
-    env.pop("GH_TOKEN", None)
-    if token:
-        env["GITHUB_TOKEN"] = token
-    return subprocess.run(
+    env["PATH"] = f"{stub_bin}{os.pathsep}{env['PATH']}"
+    env["GITHUB_TOKEN"] = "ghp_should_not_leave"
+    env["CLAUDE_SETUP_REF"] = "no-such-ref"
+    proc = subprocess.run(
         ["sh", str(ROOT / "install.sh"), "--dry-run"],
         cwd=str(ROOT), env=env, capture_output=True, text=True, encoding="utf-8", timeout=60,
     )
-
-
-def test_install_sh_diagnoses_expired_token(sandbox_home, stub_bin):
-    proc = install_with(sandbox_home, failing_curl(stub_bin, 401), token="ghp_dead")
     assert proc.returncode != 0
-    assert "expired" in proc.stderr
-    assert "unset GITHUB_TOKEN" in proc.stderr      # gh auth login 이 거부되는 함정까지 안내
-
-
-def test_install_sh_diagnoses_missing_token(sandbox_home, stub_bin):
-    proc = install_with(sandbox_home, failing_curl(stub_bin, 401), token=None)
-    assert proc.returncode != 0
-    assert "No token found" in proc.stderr
-    assert "gh auth login" in proc.stderr
-
-
-def test_install_sh_diagnoses_insufficient_scope(sandbox_home, stub_bin):
-    proc = install_with(sandbox_home, failing_curl(stub_bin, 403), token="ghp_weak")
-    assert proc.returncode != 0
-    assert "has no permission for this repo" in proc.stderr
-    assert "Contents:Read" in proc.stderr
-
-
-def test_install_sh_diagnoses_bad_ref(sandbox_home, stub_bin):
-    # API 는 200 (레포 접근 OK) 인데 아카이브만 실패 → ref 가 잘못된 것이다.
-    proc = install_with(sandbox_home, failing_curl(stub_bin, 200), token="ghp_ok")
-    assert proc.returncode != 0
-    assert "ref" in proc.stderr
+    assert "Download failed" in proc.stderr
+    assert "no-such-ref" in proc.stderr
     assert "refs/heads/" in proc.stderr             # 슬래시 브랜치명 해법 안내
-
-
-def test_install_sh_falls_back_to_gh_auth_token(sandbox_home, stub_bin):
-    """GITHUB_TOKEN 을 export 하지 않아도 gh 에서 토큰을 읽어와야 한다.
-
-    GITHUB_TOKEN 을 셸에 영구 export 하면 gh 가 `gh auth login` 을 거부하게 되므로,
-    스크립트가 알아서 gh 를 읽는 편이 안전하다.
-    """
-    curl = stub_bin / "curl"
-    # 토큰이 실제로 전달됐는지 -K 설정 파일 내용으로 확인한 뒤 실패시킨다.
-    curl.write_text(
-        "#!/bin/sh\n"
-        "for a in \"$@\"; do\n"
-        "  case \"$a\" in\n"
-        "    *api.github.com*) printf '%s' 401; exit 0 ;;\n"
-        "  esac\n"
-        "done\n"
-        "while [ $# -gt 0 ]; do\n"
-        "  if [ \"$1\" = '-K' ]; then grep -q 'gh_token_from_cli' \"$2\" && echo 'TOKEN_FORWARDED' >&2; fi\n"
-        "  shift\n"
-        "done\n"
-        "exit 22\n",
-        encoding="utf-8",
-    )
-    curl.chmod(0o755)
-    gh = stub_bin / "gh"
-    gh.write_text("#!/bin/sh\n[ \"$1\" = auth ] && [ \"$2\" = token ] && echo gh_token_from_cli\n", encoding="utf-8")
-    gh.chmod(0o755)
-
-    proc = install_with(sandbox_home, stub_bin, token=None)
-    assert "TOKEN_FORWARDED" in proc.stderr, proc.stderr
+    args = (sandbox_home / "curl.args").read_text(encoding="utf-8")
+    assert "ghp_should_not_leave" not in args
+    assert "-K" not in args.split()

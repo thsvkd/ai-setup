@@ -161,7 +161,10 @@ def install_package(plan, path, scratch):
     if os.path.lexists(str(root)):
         raise RuntimeError('An Orca installation appeared; preserving it')
     if plan['method'] == 'deb':
-        run_command(['sudo', 'apt', 'install', '-y', '--', path], needs_sudo=True)
+        # Orca 의 deb 는 Electron 이 여는 libasound.so.2 를 Depends 에 적지 않는다. 데스크톱이 아닌
+        # 머신에서는 그 때문에 orca-ide 가 127 로 죽으므로 같은 apt 호출에서 함께 깐다.
+        # 제거는 orca-ide 만 지운다. libasound2 는 다른 패키지도 쓰는 공용 라이브러리다.
+        run_command(['sudo', 'apt', 'install', '-y', '--', path, 'libasound2'], needs_sudo=True)
     elif plan['method'] == 'app':
         unpack = scratch / 'unpacked'
         run_command(['/usr/bin/ditto', '-x', '-k', path, unpack])
@@ -308,8 +311,8 @@ def install_skills(plan, home, owned, checkpoint=None):
         checkpoint()
     try:
         run_command(argv)
-        current = read_skill_lock(lock_path)
-        if any(not (shared / n / 'SKILL.md').is_file() or n not in current['skills'] for n in names):
+        # Orca 1.4.239+ 는 lock 없이 직접 복사하므로 lock 항목은 판정에 쓰지 않는다. 있으면 아래에서 기록한다.
+        if any(not (shared / n / 'SKILL.md').is_file() for n in names):
             raise RuntimeError('Bundled skill installation is incomplete')
         owned.pop('skills_attempting', None)
     finally:
@@ -491,7 +494,11 @@ def main(argv=None):
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--uninstall', action='store_true')
     parser.add_argument('--pairing-address')
+    # 데스크톱 GUI 실행과 Windows 바로가기 변경은 선택이다. 서버·데스크톱·모바일 페어링은 항상 한다.
+    parser.add_argument('--desktop-app', action='store_true')
     args = parser.parse_args(argv)
+    if args.dry_run and args.desktop_app and not args.uninstall:
+        print('Orca: open the paired desktop app after setup.')
     try:
         plan = package_plan(sys.platform, platform.machine())
         home = home_dir()
@@ -519,7 +526,8 @@ def main(argv=None):
                 raise RuntimeError('Orca server and desktop client setup did not complete')
             if setup.get('state') == 'configured':
                 save_orca_server_record(receipt, path, setup)
-                open_configured_orca_client(install_paths(plan)[1], setup)
+                if args.desktop_app:
+                    open_configured_orca_client(install_paths(plan)[1], setup)
             return 0
         root, cli = install_paths(plan)
         print('Orca: official {} -> {} ({}); bundled skills after install'.format(plan['method'], root, plan['manifest']))
@@ -554,7 +562,8 @@ def main(argv=None):
             raise RuntimeError('Orca server and desktop client setup did not complete')
         if setup.get('state') == 'configured':
             save_orca_server_record(receipt, path, setup)
-            open_configured_orca_client(cli, setup)
+            if args.desktop_app:
+                open_configured_orca_client(cli, setup)
         print('Orca {} and bundled skills installed.'.format(version))
         return 0
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:

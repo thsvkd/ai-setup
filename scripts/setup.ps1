@@ -2,10 +2,9 @@
 .SYNOPSIS
     Claude Code 사용자 레벨 설정 CLI 엔트리포인트 (Windows)
 .DESCRIPTION
-    인자 없이 실행하면 대화형 온보딩(res/onboard.py)이 떠서 설치 범위·권한 모드 등을
-    고르게 합니다. 플래그를 하나라도 주면 사용자가 이미 뜻을 밝힌 것이므로 온보딩을
-    건너뛰고 예전과 똑같이 동작합니다. 온보딩을 띄울 수 없는 환경(콘솔 없음/CI)에서도
-    예전 기본값(훅+권한 설치 + AGENTS.md 설치)으로 그대로 진행합니다.
+    인자 없이 실행하면 대화형 온보딩(res/onboard.py)이 단계 산책을 띄운다. 산책 뒤나 Skip 은
+    카테고리 허브로 가고, 허브의 Apply 만 설치한다. Quit 이나 콘솔 없음은 아무것도 설치하지 않는다. 플래그를 주면 온보딩을 건너뛴다.
+    -NoOnboard 는 예전 기본 설치를 유지한다. --stages 는 res/stages.py 액션 목록을 따른다.
 .USAGE
     powershell -ExecutionPolicy Bypass -File setup.ps1                       # 온보딩 → 선택대로
     powershell -ExecutionPolicy Bypass -File setup.ps1 -Hooks                # 훅/권한만
@@ -60,10 +59,10 @@ function Show-Usage {
 ai-setup — Claude Code user-level setup
 
 Usage: .\setup.ps1 [options]
-  (no options)  pick install scope/permission mode in interactive onboarding, then run
+  (no options)  walk the stages, then the category hub. Only Apply installs; Quit or no console installs nothing
   -Hooks        install global guard hooks + permissions only (~/.claude)
   -AgentsMd     install project instructions into the current folder only
-  -Harness L    harnesses to install instructions for (comma-separated: claude,codex,grok,opencode,all)
+  -Harness L    harnesses to install instructions for (comma-separated: claude,codex,grok,opencode,agy,gemini,copilot,all)
                 choosing claude also installs CLAUDE.md. Default is all.
   -Skills       install bundled skills only (~/.claude/skills)
   -Tools orca   install the official Orca package and its bundled skills only
@@ -82,24 +81,35 @@ Usage: .\setup.ps1 [options]
   -Uninstall    remove guard hooks + managed keybindings/skills + cache TTL HUD + outputStyle + mod settings
                 (permissions, user entries and the OMC/fluent-korean plugins are kept)
   -DryRun       print the change plan only, without changing anything
-  -NoOnboard    run with defaults without interactive onboarding
+  --stages L    all or a comma list, in stage order. -DryRun prints the list only
+  --jarvis-role gateway|core
+                with --stages, clone and register Jarvis for that role
+  --herdr       with --stages, include herdr (off unless chosen)
+  --orca-desktop
+                with -Tools orca or --stages, also open the paired Orca desktop app
+                (points the Orca shortcuts at the desktop profile). Off by default
+  --ss-caps     with --stages, grant the Jarvis ss capability
+  -NoOnboard    run the old default install without interactive onboarding
   -Doctor       read-only health report: installed harnesses/tools and versions, duplicate installs,
                 retired hooks still wired, plaintext secrets (key names only), skills outside the lock.
                 Runs alone and changes nothing. Exit 1 when it finds a problem
   -Help         this help
 
 What onboarding lets you choose:
-  · install scope (everything (incl. bundled skills) / guard hooks+permissions only / AGENTS.md only)
+  · Walk the stages, or Skip straight to the category menu (hub)
+  · a machine that already has a receipt opens the hub directly
+  · each stage, on by default: base, harness, plugins, skills, codegraph, mcp, newline, claude_special, tools, hooks, agentsmd
+  · harnesses (default Claude Code and Codex)
+  · newline key (Shift+Enter / Ctrl+Enter)
+  · Claude specials when Claude Code is selected
+  · Jarvis role (default: do not install) and herdr (default off)
   · permission mode (auto / bypassPermissions)
-  · newline key (Shift+Enter / Ctrl+Enter) — only when scope=everything
-  · whether to install oh-my-claudecode — only when scope=everything/hooks
-  · whether to install the fluent-korean output style — only when scope=everything/hooks
-  · whether to install Claude Code mods — only when scope=everything/hooks
   · whether to overwrite an existing AGENTS.md (asked only when the file exists)
-  · whether to apply now or first view the change plan (-DryRun)
+  · in the hub: Apply, Preview the plan (-DryRun), or Quit
 
 The same long options as setup.sh are accepted too:
   --hooks  --agentsmd  --harness L  --skills  --keybinds  --omc  --output-style  --mods  --newline VAL  --uninstall  --dry-run
+  --stages L  --jarvis-role gateway|core  --herdr  --ss-caps
   --no-onboard  --doctor  --help
 "@
 }
@@ -109,6 +119,12 @@ The same long options as setup.sh are accepted too:
 $newlineGiven = $PSBoundParameters.ContainsKey("Newline")
 $harnessGiven = $PSBoundParameters.ContainsKey("Harness")
 $unknownArgs = @()
+$stageRun = $false
+$stagesValue = ""
+$jarvisRole = ""
+$herdrFlag = $false
+$orcaDesktop = $false
+$ssCaps = $false
 for ($i = 0; $i -lt $Rest.Count; $i++) {
     switch -Regex ($Rest[$i]) {
         '^(--help|-help|/[?h])$' { $Help = $true }
@@ -140,6 +156,20 @@ for ($i = 0; $i -lt $Rest.Count; $i++) {
             $newlineGiven = $true
             $Newline = if ($i + 1 -lt $Rest.Count) { $Rest[++$i] } else { "" }
         }
+        '^--stages=(.*)$' { $stagesValue = $Matches[1]; $stageRun = $true }
+        '^--stages$' {
+            $stageRun = $true
+            $stagesValue = if ($i + 1 -lt $Rest.Count) { $Rest[++$i] } else { "" }
+            if (-not $stagesValue) { Write-Host "--stages requires all or a comma-separated list."; exit 1 }
+        }
+        '^--jarvis-role=(.*)$' { $jarvisRole = $Matches[1] }
+        '^--jarvis-role$' {
+            $jarvisRole = if ($i + 1 -lt $Rest.Count) { $Rest[++$i] } else { "" }
+            if (-not $jarvisRole) { Write-Host "--jarvis-role requires gateway or core."; exit 1 }
+        }
+        '^--herdr$' { $herdrFlag = $true }
+        '^--orca-desktop$' { $orcaDesktop = $true }
+        '^--ss-caps$' { $ssCaps = $true }
         default { $unknownArgs += $Rest[$i] }
     }
 }
@@ -172,6 +202,23 @@ $runMods = [bool]$Mods
 $dryRun = [bool]$DryRun
 $newlineChord = $Newline
 $harnesses = $Harness
+# 온보딩 답이 있을 때만 채운다. $null 이면 --stages 는 특별 설정을 기본으로 계획한다.
+$includeOutputStyle = $null
+$includeMods = $null
+$includeOmc = $null
+
+if ($jarvisRole -and $jarvisRole -notin @("gateway", "core")) {
+    Write-Host "--jarvis-role must be gateway or core (got: $jarvisRole)." -ForegroundColor Red
+    exit 1
+}
+if (($jarvisRole -or $herdrFlag -or $ssCaps) -and -not $stageRun) {
+    Write-Host "--jarvis-role, --herdr, and --ss-caps require --stages." -ForegroundColor Red
+    exit 1
+}
+if ($orcaDesktop -and -not $stageRun -and -not $Tools) {
+    Write-Host "--orca-desktop requires -Tools orca or --stages." -ForegroundColor Red
+    exit 1
+}
 
 if ($newlineGiven -and $newlineChord -notin @("shift-enter", "ctrl-enter")) {
     Write-Host "-Newline (--newline) must be shift-enter or ctrl-enter (got: $newlineChord)." -ForegroundColor Red
@@ -229,13 +276,14 @@ if ($Tools) {
     $toolArgs = @()
     if ($DryRun) { $toolArgs += "--dry-run" }
     if ($Uninstall) { $toolArgs += "--uninstall" }
+    if ($orcaDesktop) { $toolArgs += "--desktop-app" }
     & $py.Exe @($py.Args) -B -X utf8 (Join-Path $RepoRoot "res\tools\orca.py") @toolArgs
     exit $LASTEXITCODE
 }
 
 # 온보딩 종료 코드: 0=선택 완료, 1=프롬프트가 깨짐, 2=대화형 불가(콘솔 없음/CI), 130=사용자 취소.
-# 2 만 "물어볼 수 없었다"라서 예전 기본값으로 계속 진행한다. 나머지(취소·깨짐·traceback)는
-# 사용자가 고르던 중이었으므로 아무것도 설치하지 않고 멈춘다.
+# 2 는 "물어볼 수 없었다"라서 아무것도 설치하지 않고 끝낸다. 나머지(취소·깨짐·traceback)도
+# 설치하지 않고 멈춘다.
 function Invoke-Onboarding {
     $onboard = Join-Path $RepoRoot "res\onboard.py"
     if (-not (Test-Path $onboard)) { return $null }
@@ -256,7 +304,10 @@ function Invoke-Onboarding {
         }
         $status = $LASTEXITCODE
 
-        if ($status -eq 2) { return $null }   # 대화형 불가 — 예전 기본값 그대로
+        if ($status -eq 2) {
+            Write-Host "No terminal, so nothing was installed."
+            exit 0
+        }
         if ($status -ne 0) {
             if ($status -ne 130) { Write-Host "Onboarding did not finish. Aborting installation (exit $status)." -ForegroundColor Red }
             exit $status
@@ -274,7 +325,7 @@ function Invoke-Onboarding {
     }
 }
 
-$hadArgs = $Hooks -or $AgentsMd -or $Keybinds -or $Skills -or $Omc -or $OutputStyle -or $Mods -or $Uninstall -or $DryRun -or $NoOnboard -or $newlineGiven -or $harnessGiven
+$hadArgs = $Hooks -or $AgentsMd -or $Keybinds -or $Skills -or $Omc -or $OutputStyle -or $Mods -or $Uninstall -or $DryRun -or $NoOnboard -or $newlineGiven -or $harnessGiven -or $stageRun -or $herdrFlag -or $ssCaps -or [bool]$jarvisRole
 if (-not $hadArgs) {
     $answers = Invoke-Onboarding
     if ($answers) {
@@ -299,12 +350,63 @@ if (-not $hadArgs) {
             -not $harnessGiven) {
             $harnesses = $answers["HARNESSES"] -split ","
         }
+        if ($answers["SKIP"] -eq "1") {
+            Write-Host "Nothing selected, so nothing was installed."
+            exit 0
+        }
+        if ($answers.ContainsKey("STAGES") -and $answers["STAGES"] -match "^[a-z_,]+$") {
+            $stagesValue = $answers["STAGES"]
+            $stageRun = $true
+        }
+        if ($answers["JARVIS_ROLE"] -in @("gateway", "core")) { $jarvisRole = $answers["JARVIS_ROLE"] }
+        if ($answers["HERDR"] -eq "1") { $herdrFlag = $true }
         if ($answers["OVERWRITE_AGENTSMD"] -eq "1") { $forceAgentsMd = $true }
-        if ($answers["OMC"] -eq "1") { $runOmc = $true }
-        if ($answers["OUTPUT_STYLE"] -eq "1") { $runOutputStyle = $true }
-        if ($answers["MODS"] -eq "1") { $runMods = $true }
+        if ($answers.ContainsKey("OMC") -and $answers["OMC"] -in @("0", "1")) {
+            $includeOmc = $answers["OMC"]
+            if ($answers["OMC"] -eq "1") { $runOmc = $true }
+        }
+        if ($answers.ContainsKey("OUTPUT_STYLE") -and $answers["OUTPUT_STYLE"] -in @("0", "1")) {
+            $includeOutputStyle = $answers["OUTPUT_STYLE"]
+            if ($answers["OUTPUT_STYLE"] -eq "1") { $runOutputStyle = $true }
+        }
+        if ($answers.ContainsKey("MODS") -and $answers["MODS"] -in @("0", "1")) {
+            $includeMods = $answers["MODS"]
+            if ($answers["MODS"] -eq "1") { $runMods = $true }
+        }
         if ($answers["DRY_RUN"] -eq "1") { $dryRun = $true }
     }
+}
+
+function Invoke-StagePlan {
+    $py = Resolve-PythonForOnboard
+    if (-not $py) { Write-Host "Python 3.8+ is required." -ForegroundColor Red; exit 2 }
+    $planArgs = @("--plan", "--stages", $stagesValue, "--project-dir", (Get-Location).Path)
+    if ($harnesses -and @($harnesses).Count -gt 0 -and @($harnesses)[0]) {
+        $planArgs += @("--harness", (@($harnesses) -join ","))
+    }
+    if ($jarvisRole) { $planArgs += @("--jarvis-role", $jarvisRole) }
+    if ($herdrFlag) { $planArgs += "--herdr" }
+    if ($orcaDesktop) { $planArgs += "--orca-desktop" }
+    if ($ssCaps) { $planArgs += "--ss-caps" }
+    if ($dryRun) { $planArgs += "--dry-run" }
+    if ($Uninstall) { $planArgs += "--uninstall" }
+    if ($newlineChord) { $planArgs += @("--newline", $newlineChord) }
+    if ($defaultMode) { $planArgs += @("--permission-mode", $defaultMode) }
+    if ($forceAgentsMd) { $planArgs += "--overwrite-agentsmd" }
+    if ($null -ne $includeOutputStyle) { $planArgs += @("--include-output-style", $includeOutputStyle) }
+    if ($null -ne $includeMods) { $planArgs += @("--include-mods", $includeMods) }
+    if ($null -ne $includeOmc) { $planArgs += @("--include-omc", $includeOmc) }
+    & $py.Exe @($py.Args) -B -X utf8 (Join-Path $RepoRoot "res\stages.py") @planArgs
+    $status = $LASTEXITCODE
+    if ($dryRun -and $status -eq 0) {
+        Write-Host "DRY RUN complete — nothing was changed."
+    }
+    exit $status
+}
+
+if ($stageRun) {
+    if ($Tools) { Write-Host "--tools cannot be combined with --stages." -ForegroundColor Red; exit 1 }
+    Invoke-StagePlan
 }
 
 # ── 출력 서식 ────────────────────────────────────────────────────────

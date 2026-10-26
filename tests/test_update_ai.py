@@ -277,12 +277,27 @@ CATALOG = {e["id"]: e for e in update_ai.json.loads(update_ai.CATALOG.read_text(
     ("orca", "/Applications/Orca.app/Contents/MacOS/Orca", True),
     ("herdr", "/h/.local/bin/herdr server", False),
     ("herdr", "herdr", True),
-    ("graft", "node /n/bin/graft mcp", False),
+    ("codegraph", "node /n/bin/codegraph serve --mcp", False),
+    ("codegraph", "codegraph", True),
     ("claude", r'C:\WINDOWS\system32\cmd.exe /c ""C:\t\bin\claude.cmd" --sleep"', True),
 ])
 def test_session_detection(target, args, expected):
     """covers: AI-9"""
     assert update_ai.runs_target(args, CATALOG[target]) is expected
+
+
+def test_codegraph_catalog_updates_through_npm_without_an_upgrade_command():
+    """npm 탐지가 실패해도 update 배열이 codegraph upgrade 로 떨어지면 안 된다."""
+    assert "graft" not in CATALOG
+    assert "trail" not in CATALOG
+    raw = update_ai.CATALOG.read_text(encoding="utf-8").lower()
+    assert "graft" not in raw
+    assert "trail" not in raw
+    entry = CATALOG["codegraph"]
+    assert entry["packages"]["npm"] == "@colbymchenry/codegraph"
+    assert not entry.get("update")
+    ignore = entry["detect"]["sessions"]["ignore"]
+    assert any("serve --mcp" in marker for marker in ignore)
 
 
 # ── codex 관리형 app-server 데몬 동기화 ─────────────────────────────────

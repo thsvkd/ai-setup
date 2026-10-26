@@ -229,3 +229,6 @@ __marimo__/
 # mod 를 로드할 때 Claude Code 가 써 넣는 타입 선언 (claude plugin test / --plugin-dir)
 res/mods/*/.claude-plugin/types/
 res/mods/*/tsconfig.json
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

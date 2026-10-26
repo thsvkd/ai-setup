@@ -120,16 +120,17 @@ teardown() {
     [ -f "$HOME/.claude/settings.json" ]
 }
 
-@test "setup.sh with no args installs hooks and AGENTS.md" {
+@test "setup.sh with no args and no TTY installs nothing" {
     cd "$SANDBOX"
     run bash "$REPO_ROOT/scripts/setup.sh"
     [ "$status" -eq 0 ]
-    [ -f "$HOME/.claude/hooks/danger_guard.py" ]
-    [ -f "$SANDBOX/AGENTS.md" ]
+    [[ "$output" == *"No terminal, so nothing was installed."* ]]
+    [ ! -e "$HOME/.claude/hooks/danger_guard.py" ]
+    [ ! -e "$SANDBOX/AGENTS.md" ]
 }
 
 @test "setup.sh installs nothing when the onboarding breaks mid-prompt" {
-    # 2(물을 수 없음)만 기본값으로 진행한다. 프롬프트가 깨지거나(1) traceback 으로 죽으면
+    # 물을 수 없으면(2) 아무것도 설치하지 않는다. 프롬프트가 깨지거나(1) traceback 으로 죽으면
     # 사용자는 고르던 중이었으므로, 고르지도 않은 기본값으로 설치하면 안 된다.
     mkdir -p "$SANDBOX/repo"
     cp -R "$REPO_ROOT/scripts" "$REPO_ROOT/res" "$SANDBOX/repo/"
@@ -228,6 +229,14 @@ _keybind_sandbox() {
 @test "setup_agentsmd.sh --harness codex leaves CLAUDE.md alone" {
     cd "$SANDBOX"
     run bash "$REPO_ROOT/scripts/setup_agentsmd.sh" --harness codex
+    [ "$status" -eq 0 ]
+    [ -f "$SANDBOX/AGENTS.md" ]
+    [ ! -f "$SANDBOX/CLAUDE.md" ]
+}
+
+@test "setup_agentsmd.sh --harness agy,gemini,copilot writes AGENTS.md" {
+    cd "$SANDBOX"
+    run bash "$REPO_ROOT/scripts/setup_agentsmd.sh" --harness agy,gemini,copilot
     [ "$status" -eq 0 ]
     [ -f "$SANDBOX/AGENTS.md" ]
     [ ! -f "$SANDBOX/CLAUDE.md" ]

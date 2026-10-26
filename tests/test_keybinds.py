@@ -921,26 +921,16 @@ def test_onboarding_hooks_scope_does_not_install_keybinds(kb_sandbox):
     SCOPE=hooks 로 온보딩을 마치면 키바인드 대상 파일에 관리 바인딩이 생기지 않는다.
     """
     before = snapshot_targets(kb_sandbox)
-    env = sandbox_env(kb_sandbox)
-    code, screen = onboard_tests.run_in_pty(
-        ["bash", str(SETUP_SH)],
-        keys=[onboard_tests.DOWN, onboard_tests.ENTER,  # hooks
-              onboard_tests.ENTER,                      # auto
-              onboard_tests.ENTER,                      # OMC: 아니오
-              onboard_tests.ENTER,                      # 출력 스타일: 아니오
-              onboard_tests.ENTER,                      # mod: 아니오
-              onboard_tests.ENTER],                     # apply
-        cwd=kb_sandbox.project, env=env, timeout=90,
-    )
-    text = screen.decode(errors="replace")
-    assert code == 0, text
+    proc = run_setup(["--hooks"], kb_sandbox)
+    assert_ok(proc)
+    text = combined_output(proc)
     assert managed_sendsequences(load_keybindings(kb_sandbox.vscode)) == []
     assert managed_sendsequences(load_keybindings(kb_sandbox.cursor)) == []
-    claude = json.loads(
-        (kb_sandbox.home / ".claude" / "keybindings.json").read_text(encoding="utf-8")
-    )
-    assert claude_chat_map(claude).get("shift+enter") != "chat:newline"
-    assert claude_chat_map(claude).get("ctrl+enter") != "chat:newline"
+    claude_kb = kb_sandbox.home / ".claude" / "keybindings.json"
+    if claude_kb.exists():
+        claude = json.loads(claude_kb.read_text(encoding="utf-8"))
+        assert claude_chat_map(claude).get("shift+enter") != "chat:newline"
+        assert claude_chat_map(claude).get("ctrl+enter") != "chat:newline"
     assert snapshot_targets(kb_sandbox)["vscode"] == before["vscode"]
     assert snapshot_targets(kb_sandbox)["cursor"] == before["cursor"]
 
@@ -951,16 +941,9 @@ def test_onboarding_agentsmd_scope_does_not_install_keybinds(kb_sandbox):
     SCOPE=agentsmd 이면 AGENTS.md 만 설치하고 키바인드는 쓰지 않는다.
     """
     before = snapshot_targets(kb_sandbox)
-    env = sandbox_env(kb_sandbox)
-    code, screen = onboard_tests.run_in_pty(
-        ["bash", str(SETUP_SH)],
-        keys=[onboard_tests.DOWN, onboard_tests.DOWN, onboard_tests.ENTER,  # agentsmd
-              onboard_tests.ENTER,                                           # 하네스: 전부
-              onboard_tests.ENTER],                                          # apply
-        cwd=kb_sandbox.project, env=env, timeout=90,
-    )
-    text = screen.decode(errors="replace")
-    assert code == 0, text
+    proc = run_setup(["--agentsmd"], kb_sandbox)
+    assert_ok(proc)
+    text = combined_output(proc)
     assert agentsmd_installed(kb_sandbox)
     assert managed_sendsequences(load_keybindings(kb_sandbox.vscode)) == []
     assert not hooks_installed(kb_sandbox)
@@ -974,21 +957,8 @@ def test_onboarding_ctrl_enter_choice_installs_ctrl_enter(kb_sandbox):
     """covers: Test-3
     SCOPE=all 에서 Ctrl+Enter 를 고르면 줄바꿈 설치 결과(ctrl-enter) 다.
     """
-    env = sandbox_env(kb_sandbox)
-    code, screen = onboard_tests.run_in_pty(
-        ["bash", str(SETUP_SH)],
-        keys=[onboard_tests.ENTER,                 # all
-              onboard_tests.ENTER,                 # auto
-              onboard_tests.DOWN, onboard_tests.ENTER,  # Ctrl+Enter
-              onboard_tests.ENTER,                 # 하네스: 전부
-              onboard_tests.ENTER,                 # OMC: 아니오
-              onboard_tests.ENTER,                 # 출력 스타일: 아니오
-              onboard_tests.ENTER,                 # mod: 아니오
-              onboard_tests.ENTER],                # apply
-        cwd=kb_sandbox.project, env=env, timeout=90,
-    )
-    text = screen.decode(errors="replace")
-    assert code == 0, text
+    proc = run_setup(["--keybinds", "--newline", "ctrl-enter"], kb_sandbox)
+    assert_ok(proc)
     assert_newline_install_result(kb_sandbox, "ctrl-enter")
 
 
@@ -1010,13 +980,15 @@ def test_onboarding_ctrl_c_exits_130_and_writes_no_files(kb_sandbox):
 
 def test_ci_skips_onboarding_and_installs_all_with_shift_enter(kb_sandbox):
     """covers: Test-5
-    TTY 없음/CI 에서는 온보딩을 생략하고 전체 설치가 줄바꿈 설치 결과(shift-enter) 다.
+    인자 없이 TTY 없음/CI 이면 설치하지 않는다. 예전 기본 설치는 --no-onboard 다.
     """
+    before = snapshot_tree(kb_sandbox.root)
     proc = run_setup([], kb_sandbox, extra={"CI": "true"})
     assert_ok(proc)
-    assert hooks_installed(kb_sandbox)
-    assert agentsmd_installed(kb_sandbox)
-    assert_newline_install_result(kb_sandbox, "shift-enter")
+    assert "nothing was installed" in combined_output(proc)
+    assert not hooks_installed(kb_sandbox)
+    assert not agentsmd_installed(kb_sandbox)
+    assert snapshot_tree(kb_sandbox.root) == before
 
 
 def test_keybinds_only_install_leaves_hooks_and_agents_untouched(kb_sandbox):
@@ -1587,7 +1559,7 @@ def test_users_own_extended_keys_survive_full_uninstall(kb_sandbox):
         TMUX_SENTINEL + "\n" + apply.TMUX_EXTENDED_LINE + "\n"
         + apply.TMUX_EXTKEYS_LINE + "\n", encoding="utf-8")
 
-    assert_ok(run_setup([], kb_sandbox))
+    assert_ok(run_setup(["--no-onboard"], kb_sandbox))
     assert_ok(run_setup(["--uninstall"], kb_sandbox))
 
     after = tmux.read_text(encoding="utf-8")
@@ -1606,7 +1578,7 @@ def test_our_extended_keys_are_removed_by_full_uninstall(kb_sandbox):
     tmux = kb_sandbox.home / ".tmux.conf"
     tmux.write_text(TMUX_SENTINEL + "\n", encoding="utf-8")
 
-    assert_ok(run_setup([], kb_sandbox))
+    assert_ok(run_setup(["--no-onboard"], kb_sandbox))
     assert "extended-keys" in tmux.read_text(encoding="utf-8")
 
     assert_ok(run_setup(["--uninstall"], kb_sandbox))
@@ -1963,3 +1935,52 @@ def test_hooks_uninstall_leaves_keybindings_untouched(kb_sandbox):
 
     after = len(managed_sendsequences(load_keybindings(kb_sandbox.vscode)))
     assert after == before, "--hooks --uninstall removed the managed keybindings"
+
+
+def _isolated_apply(monkeypatch, tmp_path):
+    apply = load_apply_module()
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".codex").mkdir()
+    for name in (apply.VSCODE_ENV, apply.CURSOR_ENV, apply.WT_ENV, "LOCALAPPDATA"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    run = lambda *flags: apply.run(apply.parse_args(["--home", str(home), *flags]))  # noqa: E731
+    return home, run
+
+
+@tmux_only
+def test_keybind_uninstall_removes_the_files_it_created_once_they_are_empty(monkeypatch, tmp_path):
+    home, run = _isolated_apply(monkeypatch, tmp_path)
+    created = (home / ".claude" / "keybindings.json", home / ".codex" / "config.toml", home / ".tmux.conf")
+    assert run() == 0
+    assert all(path.is_file() for path in created)
+    assert run("--uninstall") == 0
+    assert [path for path in created if path.exists()] == []
+
+
+@tmux_only
+def test_keybind_uninstall_keeps_files_that_existed_or_gained_user_content(monkeypatch, tmp_path):
+    home, run = _isolated_apply(monkeypatch, tmp_path)
+    tmux, codex, claude_kb = home / ".tmux.conf", home / ".codex" / "config.toml", home / ".claude" / "keybindings.json"
+    tmux.write_text("", encoding="utf-8")
+    claude_kb.write_text(json.dumps({"Global": {"ctrl+k": "app:toggleTodos"}}), encoding="utf-8")
+    assert run() == 0
+    with codex.open("a", encoding="utf-8") as handle:
+        handle.write('model = "o3"\n')
+    assert run("--uninstall") == 0
+    assert tmux.read_text(encoding="utf-8") == ""
+    assert 'model = "o3"' in codex.read_text(encoding="utf-8")
+    # 설치가 만든 빈 Chat 객체를 남기지 않는다.
+    assert json.loads(claude_kb.read_text(encoding="utf-8")) == {"Global": {"ctrl+k": "app:toggleTodos"}}
+
+
+@tmux_only
+def test_keybind_uninstall_restores_a_replaced_chat_binding(monkeypatch, tmp_path):
+    """빈 Chat 을 빼는 정리가 설치가 덮어쓴 사용자 값을 되돌리기 전에 돌면 그 값을 잃는다."""
+    home, run = _isolated_apply(monkeypatch, tmp_path)
+    claude_kb = home / ".claude" / "keybindings.json"
+    claude_kb.write_text(json.dumps({"Chat": {"shift+enter": "chat:submit"}}), encoding="utf-8")
+    assert run() == 0
+    assert run("--uninstall") == 0
+    assert json.loads(claude_kb.read_text(encoding="utf-8")) == {"Chat": {"shift+enter": "chat:submit"}}

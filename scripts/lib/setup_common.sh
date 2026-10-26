@@ -159,13 +159,16 @@ uninstall_hooks() {
     done
 
     # 매니페스트: 다른 워커의 영수증(keybinds, omc_hud, output_style, mods)이 남아 있으면 그 섹션만 남기고 훅 흔적만 지운다.
+    # 단계식 설치의 하네스·플러그인·MCP·Jarvis 유닛·AGENTS.md·스킬 기록도 남긴다. 이 제거는 앞의 것들을
+    # 되돌리지 않고, 스킬은 범위에 따라 지우지 않을 수도 있다(스킬 소유는 스킬 영수증과 교차 확인). 그래서
+    # 지우면 --uninstall --stages all 이 무엇을 이 셋업이 깔았는지 알 수 없다.
     # 통째로 지우면 키바인드 uninstall 이 '우리가 넣은 tmux 줄' 을, OMC uninstall 이 '우리가 넣은
     # refreshInterval' 을 식별할 근거를 잃는다.
     if [[ -f "$manifest" ]]; then
         if [[ "$dry_run" -eq 1 ]]; then
             echo "  🧪 (dry-run) would remove: $manifest"
         else
-            "$py_exe" -c "import json,os,sys; p=sys.argv[1]; d=json.load(open(p,encoding='utf-8')); kept={k:d[k] for k in ('keybinds','omc_hud','output_style','mods','tool_installs','tool_attempts') if isinstance(d,dict) and d.get(k)}; json.dump(kept,open(p,'w',encoding='utf-8'),ensure_ascii=False,indent=2) if kept else os.remove(p)" "$manifest" 2>/dev/null || rm -f "$manifest"
+            "$py_exe" -c "import json,os,sys; p=sys.argv[1]; d=json.load(open(p,encoding='utf-8')); kept={k:d[k] for k in ('keybinds','omc_hud','output_style','mods','tool_installs','tool_attempts','harness_installs','plugins','mcp','jarvis_unit','agentsmd','skills','marketplaces') if isinstance(d,dict) and d.get(k)}; json.dump(kept,open(p,'w',encoding='utf-8'),ensure_ascii=False,indent=2) if kept else os.remove(p)" "$manifest" 2>/dev/null || rm -f "$manifest"
             if [[ -f "$manifest" ]]; then
                 echo "  🧾 Kept: $manifest (only other workers' manifests remain)"
             else

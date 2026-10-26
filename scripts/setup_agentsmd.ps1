@@ -60,8 +60,11 @@ function Resolve-Harnesses {
                 "codex"       { @("codex") }
                 "grok"        { @("grok") }
                 "opencode"    { @("opencode") }
+                "agy"         { @("agy") }
+                "gemini"      { @("gemini") }
+                "copilot"     { @("copilot") }
                 default {
-                    Write-Error "Unknown harness: $name (claude|codex|grok|opencode|all)"
+                    Write-Error "Unknown harness: $name (claude|codex|grok|opencode|agy|gemini|copilot|all)"
                     exit 1
                 }
             }
@@ -72,7 +75,7 @@ function Resolve-Harnesses {
     }
 
     if ($selected.Count -eq 0) {
-        Write-Error "Pick at least one harness (claude|codex|grok|opencode|all)"
+        Write-Error "Pick at least one harness (claude|codex|grok|opencode|agy|gemini|copilot|all)"
         exit 1
     }
     return $selected

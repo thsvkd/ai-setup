@@ -16,38 +16,39 @@ Claude Code를 **실수해도 되돌릴 수 있게** 만드는 사용자 레벨 
 
 ## 빠른 시작
 
-**1. 준비** — [Python 3.9+](https://www.python.org/downloads/)와 [GitHub CLI](https://cli.github.com/)가 필요하다. 비공개 레포라서 GitHub 로그인이 되어 있어야 한다.
-
-```sh
-gh auth login -h github.com
-```
-
-> 토큰을 직접 쓰고 싶거나 로그인이 안 되면 [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) 참고.
+**1. 준비** — [Python 3.9+](https://www.python.org/downloads/)가 필요하다. GitHub 로그인은 필요 없다.
 
 **2. 설치** — `AGENTS.md`(와 `CLAUDE.md`)는 현재 폴더에 생기므로 프로젝트 루트에서 실행한다.
 
 macOS / Linux:
 ```sh
-curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh
 ```
 
 Windows — Git Bash가 아니라 PowerShell에서 실행한다(Git Bash로 설치하면 Windows 휴지통 연동이 빠진다):
 ```powershell
-irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1 | iex
 ```
 
-**3. 고르기** — 실행하면 무엇을 설치할지 묻는다. 방향키로 고르고 Enter.
+**3. 고르기** — 터미널에서 인자 없이 실행하면 단계를 순서대로 묻는다. 방향키로 고르고 Enter. 마우스는 쓰지 않는다.
 
-```
-? What would you like to install? (↑↓ move · Enter select)
- » Everything — guard hooks/permissions (global) + AGENTS.md (current folder) + bundled skills
-   Guard hooks + permissions only (~/.claude, applies to all projects)
-   AGENTS.md only (current folder)
-```
+첫 질문에서 Walk 를 고르면 아래 순서로 각 단계를 켤지 묻는다. 기본은 켜짐이다. 산책을 마치거나 Skip 을 고르면 카테고리 메뉴(허브)가 열린다. 허브에서 카테고리를 골라 선택을 바꾸고, Apply 로 설치하거나 Preview 로 dry-run 을 본다. Quit 은 아무것도 설치하지 않는다. 이미 한 번 설치한 머신(영수증이 있음)에서는 산책 없이 허브부터 열린다.
 
-이어서 권한 모드(`auto` / `bypassPermissions`), 지침을 깔 하네스(Claude Code·Codex·Grok·OpenCode), 줄바꿈 키, 기존 `AGENTS.md` 덮어쓰기 여부, 바로 적용할지 미리보기만 할지를 묻는다. 끝나면 Claude Code를 다시 시작한다.
+1. base — git, Python 3.9+. Node 는 뒤에서 고른 항목이 요구할 때만
+2. harness — 기본 Claude Code 와 Codex. Grok, Antigravity, OpenCode, Gemini, Copilot 은 목록에만 있다
+3. plugins — 선택된 Claude Code 의 플러그인
+4. skills — 번들 design-lab, tailnet-report. Orca 스킬은 여기 없다
+5. codegraph — `npm install -g @colbymchenry/codegraph`
+6. mcp — 선택된 하네스에 `codegraph serve --mcp`
+7. newline — 줄바꿈 키. 기본 Shift+Enter
+8. claude_special — fluent-korean, mods, 이미 OMC HUD 인 statusLine 의 캐시 래퍼
+9. tools — Orca, Tailscale 패키지. Jarvis 는 역할을 고를 때만. herdr 는 기본 꺼짐
+10. hooks — 가드 훅과 권한 모드
+11. agentsmd — 현재 폴더의 AGENTS.md
 
-> 터미널이 없는 환경(CI, 에이전트 안에서 실행 등)에서는 **묻지 않고 전체 설치**한다. 먼저 보고 싶으면 아래 [옵션](#옵션)의 `--dry-run`을 쓴다.
+이미 있는 하네스와 도구는 다시 설치하거나 영수증에 새로 넣지 않는다. 끝나면 Claude Code를 다시 시작한다.
+
+> 터미널이 없는 환경(CI, 에이전트 안에서 실행 등)에서는 **묻지 않고 아무것도 설치하지 않는다**. 질문 없이 예전 기본 설치(훅, AGENTS.md, 키바인딩, 번들 스킬)를 하려면 `--no-onboard` 를 쓴다. 단계 계획을 먼저 보려면 `--stages all --dry-run` 을 쓴다.
 
 > ⚠️ 가드 훅과 권한은 `~/.claude`에 설치되어 **이 사용자가 여는 모든 프로젝트**에 적용된다.
 
@@ -64,25 +65,27 @@ irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubuserco
 | `--agentsmd` | `-AgentsMd` | 현재 폴더에 `AGENTS.md`만 설치 |
 | `--harness <목록>` | `-Harness <목록>` | 지침을 설치할 하네스: `claude`,`codex`,`grok`,`opencode`,`all` (기본 `all`) |
 | `--skills` | `-Skills` | 번들 스킬만 설치 (`~/.claude/skills`) |
-| `--tools orca` | `-Tools orca` | 공식 Orca 패키지와 그 빌드의 번들 스킬만 설치. `--dry-run`·`--uninstall`과 조합 가능 |
+| `--tools orca` | `-Tools orca` | 공식 Orca 패키지와 그 빌드의 번들 스킬을 설치하고, Orca 지속 서버와 데스크톱·모바일 페어링을 구성. `--dry-run`·`--uninstall`과 조합 가능 |
+| `--orca-desktop` | `--orca-desktop` | `--tools orca`·`--stages`와 함께 쓰면 설치 뒤 페어링된 데스크톱 앱을 연다(Windows는 바로가기도 데스크톱 프로필로 바꿈). 기본은 꺼짐 |
 | `--keybinds` | `-Keybinds` | 줄바꿈 키바인딩만 설치 |
 | `--newline <값>` | `-Newline <값>` | 줄바꿈 키: `shift-enter`(기본) 또는 `ctrl-enter` |
 | `--omc` | `-Omc` | oh-my-claudecode 플러그인 설치 + HUD에 프롬프트 캐시 TTL 표시. 전체 설치에는 포함되지 않는다 |
 | `--mods` | `-Mods` | Claude Code mod 설치(`bash-diff-filter`, `cache-ttl-status`, `korean-reply-rewrite`). Claude Code v2.1.290 이상. 전체 설치에는 포함되지 않는다 |
 | `--output-style` | `-OutputStyle` | [fluent-korean](https://github.com/snflkd/fluent-korean) 플러그인 설치 + 출력 스타일을 `fluent-korean`으로 지정. 전체 설치에는 포함되지 않는다 |
-| `--no-onboard` | `-NoOnboard` | 질문 없이 전체 설치 |
+| `--stages <목록>` | `--stages <목록>` | `all` 또는 단계 목록. 위 순서로 계획하고, `--dry-run` 이면 목록만 출력한다 |
+| `--no-onboard` | `-NoOnboard` | 질문 없이 예전 기본 설치(훅, AGENTS.md, 키바인딩, 번들 스킬) |
 | `--uninstall` | `-Uninstall` | 설치한 것만 골라 되돌리기 |
 | `--doctor` | `-Doctor` | 읽기 전용 점검: 하네스·도구 설치와 버전, PATH 중복 설치, 은퇴한 훅의 잔존, 하네스 설정의 평문 시크릿 위치(키 이름만), lock 밖 스킬. 다른 옵션과 함께 쓸 수 없다 |
 | `--help` | `-Help` | 도움말 |
 
 플래그 넘기는 법 — POSIX는 `sh -s --` 뒤에 붙인다:
 ```sh
-curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh -s -- --hooks --dry-run
+curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh -s -- --hooks --dry-run
 ```
 
 PowerShell은 `| iex`로는 인자를 넘길 수 없어서 scriptblock으로 감싼다:
 ```powershell
-& ([scriptblock]::Create((irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1))) -Hooks -DryRun
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1))) -Hooks -DryRun
 ```
 
 레포를 clone했다면 `bash scripts/setup.sh --dry-run` / `.\scripts\setup.ps1 -DryRun`처럼 직접 실행해도 된다.
@@ -99,9 +102,15 @@ Windows의 공식 사용자 설치본(`%LOCALAPPDATA%\Programs\orca`)이다. 공
 CLI는 이 설치본 안의 것을 사용해 번들 목록을 읽고, 기존 디렉터리·링크·lock 항목이 없는 스킬만 `skills install --skill <name> --agent universal`로 추가한다.
 사용자 설정·프로젝트·페어링 데이터는 유지한다.
 
-`--tools orca --uninstall`은 이 설치기가 기록한 패키지와 새로 추가한 스킬만 제거한다.
+설치는 기존 Orca 프로필로 지속 서버(Linux systemd 사용자 서비스, macOS LaunchAgent, Windows 예약 작업)를 띄우고,
+별도 `orca-desktop` 프로필에 데스크톱 연결을 등록하며, 모바일 페어링 링크를 서비스 디렉터리의 `pairing-codes.txt`에 보관한다.
+데스크톱 앱을 여는 것은 `--orca-desktop`을 줄 때만이다. 이 옵션이 없으면 Windows 바로가기는 바꾸지 않으므로,
+평소처럼 연 Orca 앱은 서버와 같은 기본 프로필을 쓴다. 같은 머신에서 데스크톱 앱도 쓰려면 `--orca-desktop`으로 다시 실행한다.
+
+`--tools orca --uninstall`은 이 설치기가 기록한 패키지·서버 서비스와 새로 추가한 스킬만 제거한다.
+실행 중인 ai-setup 서버 서비스는 제거가 먼저 멈춘다. ai-setup이 띄우지 않은 서버가 같은 프로필로 돌고 있으면 끊지 않고 제거를 멈춘다.
 스킬의 공용 경로·새로 만든 링크·lock 항목은 영수증과 일치할 때 함께 정리한다. 변경된 스킬은 보존하며, 스킬 설치가 중단되면 다음 실행에서 패키지를 유지하고 스킬만 재시도한다.
-이 단계는 Orca 설치를 맡는다. 헤드리스 서버의 서비스 구성은 별도 단계이며, 기존 서버의 갱신은 Jarvis에서 실행한다.
+기존 서버의 갱신은 Jarvis에서 실행한다.
 Mac의 앱 업데이터와 함께 Homebrew cask를 추가 설치하지 않는다.
 
 공식 계약: [릴리스](https://github.com/stablyai/orca/releases/latest),
@@ -109,7 +118,7 @@ Mac의 앱 업데이터와 함께 Homebrew cask를 추가 설치하지 않는다
 
 ### update-ai
 
-설치된 하네스(claude, codex, grok, opencode, gemini, agy, copilot)와 도구(Orca, herdr, graft), 그 플러그인을 한 번에 최신으로 올린다. 설치되지 않은 것은 건너뛰고 새로 설치하지 않는다. npm·winget·brew·deb 중 실제로 설치한 방식으로 올린다.
+설치된 하네스(claude, codex, grok, opencode, gemini, agy, copilot)와 도구(Orca, herdr, CodeGraph), 그 플러그인을 한 번에 최신으로 올린다. CodeGraph 는 npm 전역 패키지를 올리고 `codegraph upgrade` 는 호출하지 않는다. 설치되지 않은 것은 건너뛰고 새로 설치하지 않는다. npm·winget·brew·deb 중 실제로 설치한 방식으로 올린다.
 
 ```sh
 bash scripts/update-ai.sh --check            # 현재·최신 버전만 본다
@@ -128,10 +137,10 @@ bash scripts/update-ai.sh --only claude,codex
 ## 제거
 
 ```sh
-curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh -s -- --uninstall
 ```
 ```powershell
-& ([scriptblock]::Create((irm -Headers @{Authorization="Bearer $(gh auth token)"} https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1))) -Uninstall
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1))) -Uninstall
 ```
 
 설치가 추가한 훅·권한·키바인딩·수정되지 않은 관리 스킬만 빼고, 원래 있던 설정은 그대로 둔다. 바뀌는 파일은 `<파일>.bak.<타임스탬프>`로 백업된다.
@@ -445,16 +454,16 @@ Codex의 기존 `ctrl-j` 처럼 우리가 넣지 않은 키는 남는다. 우리
 | --- | --- | --- |
 | `0` | 사용자가 선택을 마침 | 고른 대로 실행 |
 | `1` | 프롬프트가 도중에 깨짐 (렌더·입력 오류, 파이썬 traceback) | **아무것도 설치하지 않고 중단** |
-| `2` | 물어볼 수 없음 (TTY 없음 / CI / Git Bash / 콘솔 준비 실패) — 프롬프트를 띄우기 전에 판정 | **예전 기본값으로 그대로 진행** — 실패가 아니다 |
+| `2` | 물어볼 수 없음 (TTY 없음 / CI / Git Bash / 콘솔 준비 실패) — 프롬프트를 띄우기 전에 판정 | **아무것도 설치하지 않고 끝낸다** — 실패가 아니다 |
 | `130` | 사용자가 `Ctrl+C`로 취소 | **아무것도 설치하지 않고 중단** |
 
-기본값으로 진행하는 건 `2`뿐이다. 나머지를 뭉뚱그리면 "취소했거나 화면이 깨졌는데 고르지도 않은 기본값으로 설치되는" 동작이 된다. CI 감지는 TTY 검사와 별도로 둔다 — `docker -t`나 tmux처럼 CI가 TTY를 붙여주는 경우가 있어 TTY 유무만으로는 못 거른다.
+질문 없이 예전 기본 설치를 하는 경로는 `--no-onboard` 뿐이다. 코드 `2` 와 Skip 은 설치하지 않는다. CI 감지는 TTY 검사와 별도로 둔다 — `docker -t`나 tmux처럼 CI가 TTY를 붙여주는 경우가 있어 TTY 유무만으로는 못 거른다.
 
 ### 프롬프트를 직접 그리는 이유
 
 화면은 [`@clack/prompts`](https://github.com/bombshell-dev/clack)(`npx skills` 등이 쓰는 것)의 관용구 — `┌ │ ◆ ◇ └` 거터, `●/○` 라디오, `◼/◻` 체크박스 — 를 따르되, [`res/tui.py`](res/tui.py)가 **표준 라이브러리만으로** 그린다. 필요한 것은 select·multiselect·confirm 세 가지뿐이다.
 
-예전에는 `questionary`(+`prompt_toolkit`)를 벤더링했는데, `prompt_toolkit` 3.0.53 이 Python 3.10+ 문법을 써서 **macOS 기본 `python3`(3.9)에서 import 단계에 죽었다**. 온보딩은 종료 코드 `2`로 빠졌고, 설치는 아무 안내 없이 기본값으로 진행됐다. 의존성이 없으면 훅과 같은 Python 3.8+ 에서 그대로 돈다. 설치 중에 `pip install`을 하지 않는다는 원칙도 그대로 지켜진다.
+예전에는 `questionary`(+`prompt_toolkit`)를 벤더링했는데, `prompt_toolkit` 3.0.53 이 Python 3.10+ 문법을 써서 **macOS 기본 `python3`(3.9)에서 import 단계에 죽었다**. 그때 온보딩은 종료 코드 `2`로 빠졌고 호출부가 기본 설치로 이어졌다. 지금은 코드 `2`에서 아무것도 설치하지 않는다. 의존성이 없으면 훅과 같은 Python 3.8+ 에서 그대로 돈다. 설치 중에 `pip install`을 하지 않는다는 원칙도 그대로 지켜진다.
 
 - 입력: POSIX는 `termios`, Windows는 `msvcrt.getwch`(stdin 과 무관하게 콘솔을 직접 읽는다).
 - 출력: Windows는 `SetConsoleMode`로 VT 처리를 켠다. 켤 수 없으면 대화형을 포기하고 그 사실을 알린다.

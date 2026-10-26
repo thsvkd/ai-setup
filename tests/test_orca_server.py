@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -430,22 +431,78 @@ def test_setup_server_client_resumes_an_interrupted_managed_setup(tmp_path, monk
     assert states == ["configuring", "configured"]
 
 
-def test_remove_user_service_preserves_an_active_server(tmp_path, monkeypatch):
+def _systemd_service(tmp_path):
     root = tmp_path / "service"
     root.mkdir()
+    runner = root / "orca-server-runner.py"
+    runner.write_text("runner")
+    service = tmp_path / "ai-setup-orca.service"
+    service.write_text("ExecStart=python3 " + str(runner))
     (root / ".ai-setup-managed").write_text("ai-setup orca server v1\n")
-    monkeypatch.setattr(orca_server, "runtime_is_active", lambda profile: True)
-    monkeypatch.setattr(orca_server.subprocess, "run", lambda *a, **k: pytest.fail("active service stopped"))
-    record = {
-        "service_root": str(root),
-        "service_path": str(root / "service.xml"),
-        "service_manager": "task-scheduler",
-        "service_task": "ai-setup Orca Server",
-        "server_profile": str(tmp_path / "orca"),
+    return runner, service, {
+        "service_root": str(root), "service_path": str(service),
+        "service_manager": "systemd-user", "server_profile": str(tmp_path / "orca"),
     }
-    with pytest.raises(RuntimeError, match="active"):
+
+
+def test_remove_user_service_stops_its_own_running_service_first(tmp_path, monkeypatch):
+    """ai-setup 이 띄운 서버는 제거가 직접 멈춘다. 사용자가 먼저 멈출 필요가 없다."""
+    runner, service, record = _systemd_service(tmp_path)
+    calls, running = [], {"value": True}
+
+    def run(command, **kwargs):
+        calls.append(command[:3])
+        if command[:3] == ["systemctl", "--user", "stop"]:
+            running["value"] = False
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(orca_server, "runtime_is_active", lambda profile: running["value"])
+    monkeypatch.setattr(orca_server.subprocess, "run", run)
+    orca_server.remove_user_service(record)
+    assert calls[0] == ["systemctl", "--user", "stop"]
+    assert not runner.exists() and not service.exists()
+
+
+def test_remove_user_service_preserves_a_server_it_does_not_run(tmp_path, monkeypatch):
+    """자기 서비스를 멈춰도 서버가 남아 있으면 ai-setup 이 띄운 것이 아니다. 끊지 않고 보존한다."""
+    runner, service, record = _systemd_service(tmp_path)
+    monkeypatch.setattr(orca_server, "runtime_is_active", lambda profile: True)
+    monkeypatch.setattr(orca_server, "STOP_WAIT_SECONDS", 0)
+    monkeypatch.setattr(orca_server.subprocess, "run",
+                        lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "", ""))
+    with pytest.raises(RuntimeError, match="not run by ai-setup"):
         orca_server.remove_user_service(record)
-    assert root.exists()
+    assert runner.exists() and service.exists()
+
+
+def test_remove_user_service_reports_a_failed_stop_instead_of_blaming_another_server(tmp_path, monkeypatch):
+    runner, service, record = _systemd_service(tmp_path)
+    monkeypatch.setattr(orca_server, "runtime_is_active", lambda profile: True)
+    monkeypatch.setattr(orca_server.subprocess, "run",
+                        lambda command, **kwargs: subprocess.CompletedProcess(command, 1, "", "Failed to connect to bus"))
+    with pytest.raises(RuntimeError, match="Could not stop the ai-setup Orca service"):
+        orca_server.remove_user_service(record)
+    assert runner.exists() and service.exists()
+
+
+def test_windows_stop_falls_back_to_the_elevated_task_helper(tmp_path, monkeypatch):
+    """승격해 등록한 예약 작업은 일반 권한 schtasks /End 로 멈추지 못할 수 있다."""
+    running, operations = {"value": True}, []
+
+    def change(plan, operation):
+        operations.append((plan["task"], operation))
+        running["value"] = False
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(orca_server, "runtime_is_active", lambda profile: running["value"])
+    monkeypatch.setattr(orca_server, "change_windows_task", change)
+    monkeypatch.setattr(orca_server.subprocess, "run",
+                        lambda command, **kwargs: subprocess.CompletedProcess(command, 1, "", "Access is denied"))
+    root = tmp_path / "service"
+    record = {"service_manager": "task-scheduler", "service_task": "ai-setup Orca Server",
+              "server_profile": str(tmp_path / "orca"), "service_root": str(root)}
+    orca_server.stop_managed_service(record, root / "orca-server-task.xml")
+    assert operations == [("ai-setup Orca Server", "end")]
 
 
 def test_remove_user_service_deletes_only_its_files_and_keeps_extra_contents(tmp_path, monkeypatch):

@@ -42,7 +42,7 @@
 | AI-35 | WHEN sudo 가 필요한 설치 명령을 실행하기 전이면 THE SYSTEM SHALL 명령 전체를 출력하고, 표준 입력이 TTY 가 아니면 실행하지 않고 건너뛴 것으로 보고한다 | | 미착수 |
 | AI-36 | WHEN 인자 없이 비대화형으로 실행하면 THE SYSTEM SHALL 새 단계를 하나도 실행하지 않는다 | | 미착수 |
 | AI-37 | WHEN `--tools orca` 로 Orca 를 설치하면 THE SYSTEM SHALL 카탈로그에 묶인 orca 스킬도 설치해 영수증에 기록하고, `--skills` 만 실행할 때는 orca 스킬을 설치하지 않는다 | | 미착수 |
-| AI-41 | WHEN `--tools orca` 를 실행하면 THE SYSTEM SHALL 원본 프로필의 서버에 런타임 링크로 데스크톱 클라이언트를 먼저 등록하고, 별도 프로필의 데스크톱 앱에서 서버 워크스페이스를 열며, 지속 서버 실행 중 현재 유효한 모바일 링크를 보관한다. Windows 는 재부팅 후 서버를 자동 시작한다. 페어링 전과 데스크톱 ID 저장 직후 복구 가능한 영수증을 기록하고, 임시 런타임이 활성인 동안 지속 서비스를 시작하지 않으며 재시도 시 링크 재발급 없이 이어간다. 같은 이름의 미확인 환경은 재사용하지 않는다. ai-setup 소유 활성 구성은 검증 후 재사용하고, 미구성 활성 서버는 재시작하지 않으며 실패 처리한다. 제거는 ai-setup 소유 서비스만 중단하고 프로필 데이터는 보존한다 | `tests/test_orca_server.py::test_issue_pairings_registers_desktop_before_stopping_runtime_offer`, `tests/test_orca_server.py::test_setup_records_pairing_state_and_environment_before_service_start`, `tests/test_orca_server.py::test_setup_keeps_recoverable_pairing_receipt_when_temporary_server_remains_active`, `tests/test_orca_server.py::test_setup_resumes_pairing_receipt_without_reissuing_desktop_offer`, `tests/test_orca_server.py::test_setup_recovers_environment_saved_before_pairing_receipt_id`, `tests/test_orca_server.py::test_issue_pairings_preflight_failure_does_not_start_offer`, `tests/test_orca_server.py::test_service_runner_persists_live_mobile_offer_for_connected_desktop`, `tests/test_orca_server.py::test_windows_service_starts_at_boot_without_stored_credentials`, `tests/test_orca_server.py::test_setup_server_client_does_not_report_an_active_profile_as_configured`, `tests/test_orca_server.py::test_setup_server_client_reuses_active_managed_setup`, `tests/test_orca_server.py::test_setup_server_client_resumes_an_interrupted_managed_setup`, `tests/test_orca_server.py::test_remove_user_service_deletes_only_its_files_and_keeps_extra_contents`, `tests/test_orca_server.py::test_remove_user_service_rejects_symlink_root`, `tests/test_orca_install.py::test_uninstall_preserves_pairing_receipt_when_new_desktop_environment_may_exist`, `tests/test_orca_install.py::test_server_setup_failure_keeps_recoverable_ownership_receipt`, `tests/test_orca_server.py::test_environment_add_refuses_to_reuse_an_unverified_saved_environment`, Windows 임시 S4U 예약 작업 설치·실행·재실행·중지 후 복구·제거 실측(2026-10-26) | RED (Windows 통합 통과; 실제 재부팅·POSIX 서비스 미검증) |
+| AI-48 | WHEN `--tools orca` 를 실행하면 THE SYSTEM SHALL 원본 프로필의 서버에 런타임 링크로 별도 프로필의 데스크톱 클라이언트를 먼저 등록하고, 지속 서버 실행 중 현재 유효한 모바일 링크를 보관한다. 데스크톱 앱 실행과 Windows 바로가기 변경은 `--orca-desktop` 을 줄 때만 한다. Windows 는 재부팅 후 서버를 자동 시작한다. 페어링 전과 데스크톱 ID 저장 직후 복구 가능한 영수증을 기록하고, 임시 런타임이 활성인 동안 지속 서비스를 시작하지 않으며 재시도 시 링크 재발급 없이 이어간다. 같은 이름의 미확인 환경은 재사용하지 않는다. ai-setup 소유 활성 구성은 검증 후 재사용하고, 미구성 활성 서버는 재시작하지 않으며 실패 처리한다. 제거는 실행 중인 ai-setup 소유 서비스를 직접 멈춘 뒤 지우고, 그 서비스를 멈춘 뒤에도 남는 서버는 끊지 않고 제거를 거부하며, 프로필 데이터는 보존한다 | `tests/test_orca_server.py::test_issue_pairings_registers_desktop_before_stopping_runtime_offer`, `tests/test_orca_server.py::test_setup_records_pairing_state_and_environment_before_service_start`, `tests/test_orca_server.py::test_setup_keeps_recoverable_pairing_receipt_when_temporary_server_remains_active`, `tests/test_orca_server.py::test_setup_resumes_pairing_receipt_without_reissuing_desktop_offer`, `tests/test_orca_server.py::test_setup_recovers_environment_saved_before_pairing_receipt_id`, `tests/test_orca_server.py::test_issue_pairings_preflight_failure_does_not_start_offer`, `tests/test_orca_server.py::test_service_runner_persists_live_mobile_offer_for_connected_desktop`, `tests/test_orca_server.py::test_windows_service_starts_at_boot_without_stored_credentials`, `tests/test_orca_server.py::test_setup_server_client_does_not_report_an_active_profile_as_configured`, `tests/test_orca_server.py::test_setup_server_client_reuses_active_managed_setup`, `tests/test_orca_server.py::test_setup_server_client_resumes_an_interrupted_managed_setup`, `tests/test_orca_server.py::test_remove_user_service_deletes_only_its_files_and_keeps_extra_contents`, `tests/test_orca_server.py::test_remove_user_service_stops_its_own_running_service_first`, `tests/test_orca_server.py::test_remove_user_service_preserves_a_server_it_does_not_run`, `tests/test_orca_install.py::test_default_setup_pairs_the_desktop_without_opening_the_gui`, `tests/test_orca_install.py::test_existing_install_configures_server_and_records_before_open`, `tests/test_stages.py::test_orca_desktop_app_is_opt_in`, `tests/test_orca_server.py::test_remove_user_service_rejects_symlink_root`, `tests/test_orca_install.py::test_uninstall_preserves_pairing_receipt_when_new_desktop_environment_may_exist`, `tests/test_orca_install.py::test_server_setup_failure_keeps_recoverable_ownership_receipt`, `tests/test_orca_server.py::test_environment_add_refuses_to_reuse_an_unverified_saved_environment`, Windows 임시 S4U 예약 작업 설치·실행·재실행·중지 후 복구·제거 실측(2026-10-26) | RED (Windows 통합 통과; 실제 재부팅·POSIX 서비스 미검증) |
 
 ### 플러그인
 
@@ -70,7 +70,7 @@
 
 | ID | 케이스 | 테스트 | 상태 |
 | -- | ------ | ------ | ---- |
-| AI-28 | WHEN `--mcp` 를 실행하면 THE SYSTEM SHALL 설치된 하네스마다 SPEC 의 user scope 등록 명령을 호출하고 하네스별로 영수증에 기록한다 | | 미착수 |
+| AI-28 | WHEN mcp 단계를 계획하면 THE SYSTEM SHALL 선택된 하네스마다 SPEC 의 CodeGraph user scope 등록 명령(`codegraph serve --mcp`)을 액션으로 내고, 패키지 액션보다 뒤에 둔다. 실제 등록 호출과 영수증 기록은 아직 이 케이스의 실행 경로가 아니다 | `test_mcp_registration_uses_codegraph_serve_for_each_selected_harness` | 미착수 |
 | AI-29 | WHEN 같은 이름의 MCP 서버가 이미 등록되어 있으면 THE SYSTEM SHALL 덮어쓰지 않고 영수증에 기록하지 않는다 | | 미착수 |
 | AI-30 | WHEN OpenCode 설정에 MCP 를 등록하면 THE SYSTEM SHALL `mcp.<name>` 키만 추가하고 나머지 키·플러그인 항목을 보존하며, 파싱할 수 없으면 쓰기 전에 멈춘다 | | 미착수 |
 | AI-31 | WHEN `--mcp --uninstall` 을 실행하면 THE SYSTEM SHALL 영수증에 기록된 하네스·서버 쌍만 제거한다 | | 미착수 |
@@ -81,13 +81,20 @@
 | -- | ------ | ------ | ---- |
 | AI-32 | WHEN 새 단계를 설치한 뒤 같은 명령을 다시 실행하면 THE SYSTEM SHALL 추가 변경 없이 끝난다 (멱등) | | 미착수 |
 | AI-33 | WHEN 새 단계가 하네스 설정을 쓸 때 다른 도구가 넣은 훅·플러그인 항목이 있으면 THE SYSTEM SHALL 그 항목을 그대로 보존한다 | | 미착수 |
+| AI-41 | WHEN 전체 단계 선택을 계획하면 THE SYSTEM SHALL CodeGraph npm 패키지 액션을 MCP 등록보다 앞에 두고 graft 또는 Trail 설치 명령을 내지 않는다 | `test_full_selection_orders_codegraph_package_before_mcp` | GREEN |
+| AI-42 | WHEN 인자 없이 TTY 또는 CI 가 아니면 THE SYSTEM SHALL 아무것도 설치하지 않는다 | `test_ci_skips_onboarding_and_installs_all_with_shift_enter` | GREEN |
+| AI-43 | WHEN 같은 단계 선택을 첫 계획이 만든 상태에 다시 계획하면 THE SYSTEM SHALL 추가 쓰기 액션을 내지 않는다 | `test_second_plan_against_post_state_does_not_write` | GREEN |
+| AI-44 | WHEN Jarvis 역할을 고르지 않으면 THE SYSTEM SHALL Jarvis 설치를 계획하지 않고, Tailscale 제거는 logout 을 포함하지 않으며, 기록하지 않은 Jarvis 유닛은 지우지 않는다 | `test_jarvis_herdr_and_setcap_follow_explicit_choice`, `test_uninstall_removes_only_recorded_units_and_packages` | GREEN |
+| AI-45 | WHEN 첫 실행에서 Skip 을 고르면 THE SYSTEM SHALL 아무것도 설치하지 않고 카테고리 허브를 열며, 허브에서 바꾼 선택은 Apply 를 고를 때만 답으로 기록한다 | `test_skip_opens_hub_and_apply_records_the_edited_selection` | GREEN |
+| AI-46 | WHEN 영수증이 있는 머신에서 인자 없이 TTY 로 실행하면 THE SYSTEM SHALL 산책 질문 없이 허브부터 연다 | `test_receipt_opens_hub_without_the_walk` | GREEN |
+| AI-47 | WHEN 허브에서 Quit 을 고르거나 모든 단계를 끈 채 Apply 하면 THE SYSTEM SHALL 아무것도 설치하지 않는다 | `test_skip_then_quit_selects_nothing`, `test_apply_with_every_stage_off_selects_nothing` | GREEN |
 
 상태는 `미착수` / `RED` / `GREEN` 중 하나다. 러너가 없어 건너뛴 것은 `GREEN`이 아니다.
 
 ## 범위 밖
 
 - 실제 네트워크 설치·업데이트의 성공 여부: 자동 테스트는 스텁으로 호출 명령만 검증한다. 실제 동작은 장비 3대에서 수동 실측으로 확인한다.
-- AI-41 의 실제 사용자 로그인 후 자동 시작과 GUI 워크스페이스 표시는 설치 통합 단계에서 검증한다.
+- AI-48 의 실제 사용자 로그인 후 자동 시작과 `--orca-desktop` 의 GUI 워크스페이스 표시는 설치 통합 단계에서 검증한다.
 - 영수증 드리프트 수정: doctor 의 보고(AI-4)까지만 범위다.
 
 ## 미검증

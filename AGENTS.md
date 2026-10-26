@@ -30,7 +30,6 @@ Claude Code·Codex·Grok·OpenCode 하네스와 Windows 네이티브·WSL·Linux
 | `docs/REPORTING.md`                            | 작업 보고·검수 보고서 작성         |
 | `docs/CONTEXT.md`                              | 용어의 뜻이 갈릴 때                |
 | `docs/2026-07-31-delete-guard-architecture.md` | 삭제 가드 설계 배경                |
-| `docs/AUTHENTICATION.md`                       | GitHub 인증                        |
 
 ### SSoT 계층 (SSoT 태그가 붙은 문서)
 

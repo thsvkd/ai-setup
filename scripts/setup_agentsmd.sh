@@ -44,7 +44,7 @@ while [[ $# -gt 0 ]]; do
         --force) FORCE=1; shift ;;
         --harness)
             if [[ -z "${2:-}" ]]; then
-                echo "--harness requires a value (claude|codex|grok|opencode|all)" >&2
+                echo "--harness requires a value (claude|codex|grok|opencode|agy|gemini|copilot|all)" >&2
                 exit 1
             fi
             HARNESS_ARG="$2"; shift 2 ;;
@@ -65,8 +65,8 @@ normalize_harnesses() {
         case "$item" in
             all) item="claude codex grok opencode" ;;
             claude|claude-code) item="claude" ;;
-            codex|grok|opencode) ;;
-            *) echo "Unknown harness: $item (claude|codex|grok|opencode|all)" >&2; return 1 ;;
+            codex|grok|opencode|agy|gemini|copilot) ;;
+            *) echo "Unknown harness: $item (claude|codex|grok|opencode|agy|gemini|copilot|all)" >&2; return 1 ;;
         esac
         for seen in $item; do
             case " $SELECTED " in
@@ -77,7 +77,7 @@ normalize_harnesses() {
     done
     SELECTED="${SELECTED# }"
     if [[ -z "$SELECTED" ]]; then
-        echo "Pick at least one harness (claude|codex|grok|opencode|all)" >&2
+        echo "Pick at least one harness (claude|codex|grok|opencode|agy|gemini|copilot|all)" >&2
         return 1
     fi
     return 0

@@ -7,18 +7,21 @@ scripts/setup.sh (와 setup.ps1) 가 **인자 없이** 호출됐을 때만 실�
 선택 결과는 stdout 이 아니라 --out 파일에 KEY=VALUE 로 쓴다. stdout 은 프롬프트 UI 가
 쓰기 때문이다. 호출부는 이 파일을 읽어 기존 플래그로 옮긴다.
 
-  SCOPE=all|hooks|agentsmd     설치 범위
+  SKIP=0|1                     1 이면 아무것도 설치하지 않는다 (허브의 Quit, 빈 선택의 Apply).
+                               1 일 때는 다른 키를 쓰지 않는다.
+  STAGES=base,harness,...      켠 단계, stages.STAGE_ORDER 순서. 비어 있으면 SKIP=1 로 쓴다
+  HARNESSES=claude,codex,...   선택한 하네스
   DEFAULT_MODE=auto|bypassPermissions
   NEWLINE_CHORD=shift-enter|ctrl-enter
-                               줄바꿈 키 (SCOPE=all 일 때만 기록)
-  HARNESSES=claude,codex,...   지침을 설치할 하네스 (SCOPE=all|agentsmd 일 때만 기록)
+                               줄바꿈 키 (newline 단계가 켜졌을 때만 기록)
+  JARVIS_ROLE=none|gateway|core
+  HERDR=0|1
+  OMC=0|1                      이미 OMC HUD 인 statusLine 의 캐시 래퍼
+  OUTPUT_STYLE=0|1             fluent-korean 출력 스타일
+  MODS=0|1                     Claude Code mod
+                               (위 셋은 claude_special 단계와 Claude Code 가 모두 켜졌을 때만 1)
   OVERWRITE_AGENTSMD=0|1       기존 지침 파일을 덮어쓸지
-  OMC=0|1                      oh-my-claudecode 플러그인 + 캐시 TTL HUD 도 설치할지
-                               (SCOPE=all|hooks 일 때만 기록)
-  OUTPUT_STYLE=0|1             fluent-korean 플러그인 설치 + outputStyle 지정 여부
-                               (SCOPE=all|hooks 일 때만 기록)
-  MODS=0|1                     Claude Code mod 설치 여부 (SCOPE=all|hooks 일 때만 기록)
-  DRY_RUN=0|1                  실제 적용 전에 변경 계획만 볼지
+  DRY_RUN=0|1                  실제 적용 전에 변경 계획만 볼지 (허브의 Preview)
 
 종료 코드로 네 상황을 구분한다:
 
@@ -26,11 +29,11 @@ scripts/setup.sh (와 setup.ps1) 가 **인자 없이** 호출됐을 때만 실�
   1   프롬프트를 띄우다가 깨졌다 (렌더·입력 오류). 사용자는 무언가를 고르던 중이었으므로
       호출부는 설치를 중단해야 한다. 고르지도 않은 기본값으로 설치하면 안 된다.
   2   대화형으로 물을 수 없는 환경이다 (TTY 없음 / CI / Git Bash / 콘솔 준비 실패). 프롬프트를
-      띄우기 전에 판정한다. 호출부는 지금까지처럼 기본값으로 그냥 진행해야 한다. 실패가 아니다.
+      띄우기 전에 판정한다. 호출부는 아무것도 설치하지 않고 끝낸다. 실패가 아니다.
   130 사용자가 Ctrl+C 로 취소했다. 호출부는 설치를 중단해야 한다.
       2 와 달리 "기본값으로 진행"으로 해석하면 안 된다 — 명시적 거부다.
 
-호출부는 2 일 때만 기본값으로 진행한다. 파이썬이 traceback 으로 죽는 경우(1)도 중단이다.
+호출부는 2 이면 설치하지 않고 끝낸다. 파이썬이 traceback 으로 죽는 경우(1)도 중단이다.
 
 ## curl … | sh 에서 프롬프트가 동작하는 이유
 
@@ -63,7 +66,33 @@ HARNESS_CHOICES = (
     ("claude", "Claude Code", "AGENTS.md + CLAUDE.md, imported via @AGENTS.md"),
     ("codex", "Codex", "reads AGENTS.md directly"),
     ("grok", "Grok", "reads AGENTS.md directly"),
+    ("agy", "Antigravity", "listed, off unless chosen"),
     ("opencode", "OpenCode", "reads AGENTS.md directly"),
+    ("gemini", "Gemini", "listed, off unless chosen"),
+    ("copilot", "Copilot", "listed, off unless chosen"),
+)
+
+# 기본으로 켜 두는 하네스. 나머지는 목록에만 있다.
+DEFAULT_HARNESSES = ("claude", "codex")
+
+# 단계 실행 순서. stages.STAGE_ORDER 와 같아야 한다 — STAGES 답을 이 순서로 쓴다.
+STAGE_ORDER = (
+    "base", "harness", "plugins", "skills", "codegraph", "mcp",
+    "newline", "claude_special", "tools", "hooks", "agentsmd",
+)
+
+# 허브의 카테고리. 내부 단계는 11개지만 codegraph 와 mcp 는 한 화면에서 고른다.
+CATEGORIES = (
+    ("base", "Base", "git, Python, Node if a later item needs it"),
+    ("harness", "Harnesses", "which harnesses, and whether to install missing ones"),
+    ("plugins", "Plugins", "Claude Code plugins for the selected harnesses"),
+    ("skills", "Skills", "bundled skills for the selected harnesses"),
+    ("codegraph", "CodeGraph", "package, then MCP on the selected harnesses"),
+    ("newline", "Newline key", "the key that inserts a newline"),
+    ("claude_special", "Claude extras", "output style, mods, OMC HUD wrap"),
+    ("tools", "Tools", "Orca, Tailscale, Jarvis, herdr"),
+    ("hooks", "Guard hooks", "with the permission mode"),
+    ("agentsmd", "AGENTS.md", "in the current directory"),
 )
 
 
@@ -103,7 +132,7 @@ def attach_terminal():
     # Git Bash(mintty) 는 Windows 프로그램에 콘솔 대신 파이프를 준다. 여기서 CONOUT$ 를 열면
     # 보이지 않는 숨은 콘솔에 프롬프트를 그리고 키를 기다려, 설치가 멈춘 것처럼 보인다.
     if os.name == "nt" and os.environ.get("MSYSTEM") and not sys.stdout.isatty():
-        print("  Interactive onboarding is unavailable in Git Bash; continuing with defaults. "
+        print("  Interactive onboarding is unavailable in Git Bash; nothing was installed. "
               "Run from PowerShell, or use --no-onboard with a scope flag.", file=sys.stderr)
         return False
 
@@ -142,133 +171,298 @@ def attach_terminal():
     return os.isatty(0) and os.isatty(1)
 
 
-def ask_all(tui, project_dir):
-    """선택 결과 dict 를 반환. 사용자가 취소하면 None."""
-    tui.intro("ai-setup — Claude Code safety setup")
+def _stopped(value):
+    return value is None
 
-    scope = tui.select(
-        "What would you like to install?",
-        [
-            (SCOPE_ALL, "Everything", "guard hooks/permissions (global) + AGENTS.md (current folder) + bundled skills"),
-            (SCOPE_HOOKS, "Guard hooks + permissions only", "~/.claude, applies to all projects"),
-            (SCOPE_AGENTSMD, "AGENTS.md only", "current folder"),
-        ],
-    )
-    if scope is None:
-        return None
 
-    answers = {
-        "SCOPE": scope,
-        "DEFAULT_MODE": "auto",
-        "OVERWRITE_AGENTSMD": "0",
-        "DRY_RUN": "0",
+def default_state():
+    """아무것도 묻기 전의 선택. 산책과 허브가 같은 기본값에서 시작한다."""
+    return {
+        "stages": {stage for stage in STAGE_ORDER},
+        "harnesses": list(DEFAULT_HARNESSES),
+        "chord": "shift-enter",
+        "output_style": True,
+        "mods": True,
+        "omc": True,
+        "jarvis_role": "none",
+        "herdr": False,
+        "mode": "auto",
+        "overwrite": False,
     }
 
-    if scope in (SCOPE_ALL, SCOPE_HOOKS):
-        mode = tui.select(
-            "Which permission mode?",
-            [
-                ("auto", "auto", "safe actions auto-approved, only risky ones ask · recommended"),
-                ("bypassPermissions", "bypassPermissions",
-                 "skip all permission prompts, guard hooks still run"),
-            ],
-        )
-        if mode is None:
+
+def _include(tui, state, stage, prompt):
+    value = tui.confirm(prompt, default=stage in state["stages"])
+    if _stopped(value):
+        return False
+    if value:
+        state["stages"].add(stage)
+    else:
+        state["stages"].discard(stage)
+    return True
+
+
+def _edit_base(tui, state, project_dir):
+    return _include(tui, state, "base",
+                    "Include base prerequisites (git, Python, Node if a later item needs it)?")
+
+
+def _edit_harness(tui, state, project_dir):
+    harnesses = tui.multiselect(
+        "Which harnesses should be selected?",
+        HARNESS_CHOICES,
+        initial_values=state["harnesses"],
+    )
+    if _stopped(harnesses):
+        return False
+    if harnesses != state["harnesses"]:
+        # 덮어쓰기 질문이 가리키던 파일 목록이 바뀌었으므로 안전한 기본값으로 되돌린다.
+        state["overwrite"] = False
+    state["harnesses"] = harnesses
+    return _include(tui, state, "harness", "Install the selected harnesses that are missing?")
+
+
+def _edit_plugins(tui, state, project_dir):
+    return _include(tui, state, "plugins", "Include plugin install?")
+
+
+def _edit_skills(tui, state, project_dir):
+    return _include(tui, state, "skills", "Include skill install?")
+
+
+def _edit_codegraph(tui, state, project_dir):
+    return (_include(tui, state, "codegraph", "Include the CodeGraph package?")
+            and _include(tui, state, "mcp", "Include CodeGraph MCP registration?"))
+
+
+def _edit_newline(tui, state, project_dir):
+    if not _include(tui, state, "newline", "Include newline key setup?"):
+        return False
+    if "newline" not in state["stages"]:
+        return True
+    options = [
+        ("shift-enter", "Shift+Enter", "inserts a newline without sending · default"),
+        ("ctrl-enter", "Ctrl+Enter", "inserts a newline without sending"),
+    ]
+    chord = tui.select("Which key combination for a newline?", options,
+                       initial=[o[0] for o in options].index(state["chord"]))
+    if _stopped(chord):
+        return False
+    state["chord"] = chord
+    return True
+
+
+def _edit_claude_special(tui, state, project_dir):
+    if not _include(tui, state, "claude_special", "Include Claude-only special setup?"):
+        return False
+    if "claude_special" not in state["stages"] or "claude" not in state["harnesses"]:
+        return True
+    for key, prompt in (
+        ("output_style", "Set the output style to fluent-korean?"),
+        ("mods", "Install Claude Code mods (bash-diff-filter, cache-ttl-status, "
+                 "korean-reply-rewrite, v2.1.290 or later)?"),
+        ("omc", "Wrap the OMC HUD cache when statusLine is already the OMC HUD?"),
+    ):
+        value = tui.confirm(prompt, default=state[key])
+        if _stopped(value):
+            return False
+        state[key] = value
+    return True
+
+
+def _edit_tools(tui, state, project_dir):
+    if not _include(tui, state, "tools", "Include tool install (Orca, Tailscale, Jarvis)?"):
+        return False
+    if "tools" not in state["stages"]:
+        return True
+    options = [
+        ("none", "Do not install", "leave Jarvis alone"),
+        ("gateway", "Gateway", "deploy/gateway.toml"),
+        ("core", "Core", "deploy/s2.toml"),
+    ]
+    role = tui.select("Jarvis role?", options,
+                      initial=[o[0] for o in options].index(state["jarvis_role"]))
+    if _stopped(role):
+        return False
+    state["jarvis_role"] = role
+    herdr = tui.confirm("Install herdr?", default=state["herdr"])
+    if _stopped(herdr):
+        return False
+    state["herdr"] = herdr
+    return True
+
+
+def _edit_hooks(tui, state, project_dir):
+    if not _include(tui, state, "hooks", "Include guard hooks?"):
+        return False
+    if "hooks" not in state["stages"]:
+        return True
+    options = [
+        ("auto", "auto", "safe actions auto-approved, only risky ones ask · recommended"),
+        ("bypassPermissions", "bypassPermissions",
+         "skip all permission prompts, guard hooks still run"),
+    ]
+    mode = tui.select("Which permission mode?", options,
+                      initial=[o[0] for o in options].index(state["mode"]))
+    if _stopped(mode):
+        return False
+    state["mode"] = mode
+    if mode == "bypassPermissions":
+        tui.warn([
+            "bypassPermissions skips all of Claude Code's permission prompts.",
+            "This repo's guard hooks (rm to trash, git backup, etc.) still run,",
+            "but commands the hooks do not judge run without confirmation.",
+        ])
+    return True
+
+
+def _edit_agentsmd(tui, state, project_dir):
+    if not _include(tui, state, "agentsmd", "Include AGENTS.md in the current directory?"):
+        return False
+    if "agentsmd" not in state["stages"]:
+        return True
+    names = ("AGENTS.md", "CLAUDE.md") if "claude" in state["harnesses"] else ("AGENTS.md",)
+    existing = [os.path.join(project_dir, name) for name in names
+                if os.path.isfile(os.path.join(project_dir, name))]
+    if existing:
+        overwrite = tui.confirm("%s already exists. Overwrite?" % ", ".join(existing),
+                                default=state["overwrite"])
+        if _stopped(overwrite):
+            return False
+        state["overwrite"] = overwrite
+    return True
+
+
+EDITORS = {
+    "base": _edit_base,
+    "harness": _edit_harness,
+    "plugins": _edit_plugins,
+    "skills": _edit_skills,
+    "codegraph": _edit_codegraph,
+    "newline": _edit_newline,
+    "claude_special": _edit_claude_special,
+    "tools": _edit_tools,
+    "hooks": _edit_hooks,
+    "agentsmd": _edit_agentsmd,
+}
+
+
+def _summary(state, category):
+    """허브 한 줄에 붙는 현재 선택. 꺼진 카테고리는 off 다."""
+    on = state["stages"]
+    names = dict((value, label) for value, label, _ in HARNESS_CHOICES)
+    if category == "harness":
+        picked = ", ".join(names[h] for h in state["harnesses"]) or "none"
+        return picked + ("" if "harness" in on else " · no install")
+    if category == "codegraph":
+        parts = [label for stage, label in (("codegraph", "package"), ("mcp", "MCP")) if stage in on]
+        return ", ".join(parts) or "off"
+    if category not in on:
+        return "off"
+    if category == "newline":
+        return "Shift+Enter" if state["chord"] == "shift-enter" else "Ctrl+Enter"
+    if category == "claude_special":
+        if "claude" not in state["harnesses"]:
+            return "on · needs Claude Code"
+        parts = [label for key, label in (("output_style", "fluent-korean"), ("mods", "mods"),
+                                          ("omc", "HUD wrap")) if state[key]]
+        return ", ".join(parts) or "on · nothing chosen"
+    if category == "tools":
+        return "Jarvis: %s%s" % (state["jarvis_role"], " · herdr" if state["herdr"] else "")
+    if category == "hooks":
+        return state["mode"]
+    return "on"
+
+
+def hub_options(state):
+    """허브 select 의 항목. 카테고리 다음에 Apply, Preview, Quit 순서다. 테스트가 직접 부른다."""
+    options = [(category, "%s · %s" % (label, _summary(state, category)), hint)
+               for category, label, hint in CATEGORIES]
+    options += [
+        ("apply", "Apply", "install the selection above"),
+        ("dry", "Preview the plan", "--dry-run, changes nothing"),
+        ("quit", "Quit", "install nothing"),
+    ]
+    return options
+
+
+def _answers(state, plan):
+    # 빈 STAGES 를 쓰면 setup.sh·setup.ps1 은 범위 플래그가 없다고 보고 예전 전체 설치로 간다.
+    # 아무 단계도 켜지 않은 Apply 는 Quit 과 같다.
+    if not state["stages"]:
+        return {"SKIP": "1"}
+    answers = {
+        "SKIP": "0",
+        "STAGES": ",".join(stage for stage in STAGE_ORDER if stage in state["stages"]),
+        "HARNESSES": ",".join(state["harnesses"]),
+        "DEFAULT_MODE": state["mode"] if "hooks" in state["stages"] else "auto",
+        "JARVIS_ROLE": state["jarvis_role"] if "tools" in state["stages"] else "none",
+        "HERDR": "1" if state["herdr"] and "tools" in state["stages"] else "0",
+        "DRY_RUN": "1" if plan == "dry" else "0",
+    }
+    special = "claude_special" in state["stages"] and "claude" in state["harnesses"]
+    for key in ("omc", "output_style", "mods"):
+        answers[key.upper()] = "1" if special and state[key] else "0"
+    answers["OVERWRITE_AGENTSMD"] = "1" if state["overwrite"] and "agentsmd" in state["stages"] else "0"
+    if "newline" in state["stages"]:
+        answers["NEWLINE_CHORD"] = state["chord"]
+    return answers
+
+
+def _hub(tui, state, project_dir, cursor):
+    """카테고리 메뉴. Apply·Preview 는 답을, Quit 은 SKIP 을, 취소는 None 을 반환한다."""
+    while True:
+        options = hub_options(state)
+        choice = tui.select("Choose a category to change, then Apply.", options, initial=cursor)
+        if _stopped(choice):
             return None
-        answers["DEFAULT_MODE"] = mode
-
-        if mode == "bypassPermissions":
-            tui.warn([
-                "bypassPermissions skips all of Claude Code's permission prompts.",
-                "This repo's guard hooks (rm to trash, git backup, etc.) still run,",
-                "but commands the hooks do not judge run without confirmation.",
-            ])
-
-    # 줄바꿈 키는 전체 설치에만 포함된다. 훅/AGENTS.md 단독 범위에서는 묻지 않는다.
-    if scope == SCOPE_ALL:
-        chord = tui.select(
-            "Which key combination for a newline?",
-            [
-                ("shift-enter", "Shift+Enter", "inserts a newline without sending · default"),
-                ("ctrl-enter", "Ctrl+Enter", "inserts a newline without sending"),
-            ],
-        )
-        if chord is None:
+        if choice == "quit":
+            return {"SKIP": "1"}
+        if choice in ("apply", "dry"):
+            tui.outro("Showing the change plan." if choice == "dry" else "Starting installation.")
+            return _answers(state, choice)
+        if not EDITORS[choice](tui, state, project_dir):
             return None
-        answers["NEWLINE_CHORD"] = chord
+        cursor = [o[0] for o in options].index(choice)
 
-    if scope in (SCOPE_ALL, SCOPE_AGENTSMD):
-        # Multi-select: one project is often driven by more than one agent, and
-        # the artefacts are additive, so there is no reason to force a choice of
-        # exactly one. Selecting none would install nothing, so it is rejected
-        # rather than silently treated as "all".
-        harnesses = tui.multiselect(
-            "Which harnesses should get the instructions?",
-            HARNESS_CHOICES,
-            initial_values=[name for name, _, _ in HARNESS_CHOICES],
-        )
-        if harnesses is None:
-            return None
-        answers["HARNESSES"] = ",".join(harnesses)
 
-        # 지침 파일은 프로젝트별로 손보는 파일이라 기본이 '건너뛰기'다. 이미 있을 때만 묻는다.
-        # 하나라도 있으면 묻는다 — 덮어쓰기 결정은 파일별이 아니라 이 설치 전체에 적용된다.
-        existing = [
-            os.path.join(project_dir, name)
-            for name in ("AGENTS.md", "CLAUDE.md")
-            if os.path.isfile(os.path.join(project_dir, name))
-        ]
-        # CLAUDE.md 는 claude 를 고른 경우에만 설치 대상이므로, 그 경우에만 묻는 근거가 된다.
-        if "claude" not in harnesses:
-            existing = [p for p in existing if not p.endswith("CLAUDE.md")]
-        if existing:
-            overwrite = tui.confirm(
-                "%s already exists. Overwrite?" % ", ".join(existing),
-                default=False,
-            )
-            if overwrite is None:
-                return None
-            answers["OVERWRITE_AGENTSMD"] = "1" if overwrite else "0"
+def has_receipt():
+    """이 setup 이 이미 한 번 설치한 머신인가. 그렇다면 산책 없이 허브부터 연다.
 
-    # OMC 는 전역(~/.claude) 설치라 AGENTS.md 단독 범위에서는 묻지 않는다.
-    if scope in (SCOPE_ALL, SCOPE_HOOKS):
-        omc = tui.confirm(
-            "Also install the oh-my-claudecode (OMC) plugin? (includes the prompt cache TTL in the HUD)",
-            default=False,
-        )
-        if omc is None:
-            return None
-        answers["OMC"] = "1" if omc else "0"
+    경로 규칙은 stages._receipt_path 와 같다. stages 를 import 하지 않는 것은 onboard.py 가
+    tui.py 만 옆에 둔 채로도 돌아야 하기 때문이다.
+    """
+    home = os.environ.get("USERPROFILE") if os.name == "nt" else os.environ.get("HOME")
+    return os.path.isfile(os.path.join(home or os.path.expanduser("~"), ".claude", ".claude-code-setup.json"))
 
-        fluent = tui.confirm(
-            "Set the output style to fluent-korean? (includes installing the plugin)",
-            default=False,
-        )
-        if fluent is None:
-            return None
-        answers["OUTPUT_STYLE"] = "1" if fluent else "0"
 
-        mods = tui.confirm(
-            "Also install the Claude Code mod? (excludes the HUD cache from the Bash change display, cache TTL status line — v2.1.290 or later)",
-            default=False,
-        )
-        if mods is None:
-            return None
-        answers["MODS"] = "1" if mods else "0"
+def ask_all(tui, project_dir, first_run=True):
+    """선택 결과 dict 를 반환. 사용자가 취소하면 None.
 
-    plan = tui.select(
-        "Apply now?",
+    첫 실행이면 산책과 Skip 을 묻는다. 산책은 카테고리 편집기를 순서대로 연 뒤 허브로
+    가고, Skip 은 허브로 바로 간다. 영수증이 있는 머신은 허브부터 연다. 설치는 허브의
+    Apply 에서만 일어나고, Quit 은 아무것도 설치하지 않는다.
+    """
+    tui.intro("ai-setup — Claude Code safety setup")
+    state = default_state()
+    if not first_run:
+        return _hub(tui, state, project_dir, 0)
+
+    start = tui.select(
+        "Set up this machine?",
         [
-            ("apply", "Apply", ""),
-            ("dry", "Preview the plan first", "--dry-run, changes nothing"),
+            ("walk", "Walk the stages", "accept or skip each stage"),
+            ("skip", "Skip", "go to the category menu"),
         ],
     )
-    if plan is None:
+    if _stopped(start):
         return None
-    answers["DRY_RUN"] = "1" if plan == "dry" else "0"
-
-    tui.outro("Showing the change plan." if plan == "dry" else "Starting installation.")
-    return answers
+    if start == "skip":
+        return _hub(tui, state, project_dir, 0)
+    for category, _, _ in CATEGORIES:
+        if not EDITORS[category](tui, state, project_dir):
+            return None
+    return _hub(tui, state, project_dir, [o[0] for o in hub_options(state)].index("apply"))
 
 
 def write_answers(out_path, answers):
@@ -300,11 +494,11 @@ def main(argv) -> int:
         # 아무것도 보지 못했으므로 '물을 수 없음'이다.
         tui.prepare_console()
     except Exception as exc:
-        print("  Interactive onboarding is unavailable; continuing with defaults (%s)." % exc, file=sys.stderr)
+        print("  Interactive onboarding is unavailable; nothing was installed (%s)." % exc, file=sys.stderr)
         return EXIT_NON_INTERACTIVE
 
     try:
-        answers = ask_all(tui, project_dir)
+        answers = ask_all(tui, project_dir, first_run=not has_receipt())
     except KeyboardInterrupt:
         return EXIT_CANCELLED
     except Exception as exc:
