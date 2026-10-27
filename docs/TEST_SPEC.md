@@ -23,11 +23,19 @@
 | -- | ------ | ------ | ---- |
 | AI-7 | WHEN `update-ai --check` 를 실행하면 THE SYSTEM SHALL 현재·최신 버전만 보고하고 업데이트 명령을 호출하지 않는다 | `test_check_only_reads_versions_and_never_updates`, bats `update-ai.sh --check` | GREEN |
 | AI-8 | WHEN 카탈로그의 도구가 설치되어 있지 않으면 THE SYSTEM SHALL 그 도구를 건너뛰고 설치 명령을 호출하지 않는다 | `test_missing_tools_are_skipped_without_installing` | GREEN |
-| AI-9 | WHEN 대상 하네스의 프로세스가 실행 중이고 `--allow-interrupt` 가 없으면 THE SYSTEM SHALL 그 하네스를 업데이트하지 않고 실패로 보고한다 | `test_running_harness_is_not_updated_without_allow_interrupt` | GREEN |
+| AI-9 | WHEN 대상의 세션이 실행 중이고 그 설치가 버전별 배치(native 버전 디렉터리, npm-release, brew)이면 THE SYSTEM SHALL `--allow-interrupt` 없이 업데이트한다 | `test_running_harness_with_a_versioned_install_is_updated_without_allow_interrupt`, `tests/test_npm_release.py::test_update_ai_updates_an_npm_release_install_while_its_session_runs` | GREEN (Linux; Windows 미검증) |
 | AI-10 | WHEN 다른 update-ai 가 lock 을 잡고 있으면 THE SYSTEM SHALL 아무것도 업데이트하지 않고 종료하며, lock 의 PID 가 죽어 있으면 lock 을 회수하고 진행한다 | `test_live_lock_stops_the_run_and_dead_lock_is_reclaimed` | GREEN |
 | AI-11 | WHEN `--only a,b` 를 주면 THE SYSTEM SHALL a, b 만 업데이트한다 | `test_only_updates_the_chosen_targets`, `test_unknown_only_target_is_rejected` | GREEN |
 | AI-12 | WHEN 어느 한 항목이라도 업데이트에 실패하면 THE SYSTEM SHALL 나머지를 계속 진행하고 결과 표를 출력한 뒤 exit 1 로 끝낸다 | `test_one_failure_does_not_stop_the_rest_and_exits_1` | GREEN |
 | AI-13 | WHEN npm 으로 설치된 하네스를 업데이트하면 THE SYSTEM SHALL 그 실행 파일을 설치한 npm(같은 node 접두 경로)을 사용한다 | `test_npm_harness_is_updated_with_the_npm_that_installed_it` | GREEN |
+| AI-56 | WHEN 실행 중 세션이 쓰는 설치가 버전별 배치가 아니면(npm -g, winget portable) THE SYSTEM SHALL 그 대상을 바꾸지 않고 보류로 보고하며 옮기는 방법을 안내한다 | `test_running_session_of_an_in_place_npm_install_defers_the_update`, `test_session_detection` | GREEN (Linux; Windows 미검증) |
+| AI-57 | WHEN npm-release 로 설치하거나 업데이트하면 THE SYSTEM SHALL 새 버전을 버전 디렉터리에 완성한 뒤에만 `current` 를 원자적으로 바꾸고, 이미 있는 셔임은 다시 쓰지 않는다 | `tests/test_npm_release.py::test_update_switches_current_only_after_the_new_version_is_complete_and_never_rewrites_the_shim` | GREEN (Linux; Windows 미검증) |
+| AI-58 | WHEN npm-release 가 이전 버전을 정리하면 THE SYSTEM SHALL current, previous, 그리고 실행 중인 프로세스가 쓰는 버전을 남기고, 프로세스 목록을 읽을 수 없으면 아무것도 지우지 않는다 | `tests/test_npm_release.py::test_prune_keeps_current_previous_and_versions_a_running_session_uses` | GREEN (Linux; Windows 미검증) |
+| AI-59 | WHEN npm-release 설치 시 같은 패키지의 npm -g 사본이 있으면 THE SYSTEM SHALL 그 사본을 쓰는 프로세스가 없을 때만 제거하고, 있으면 남긴 뒤 보고한다 | `tests/test_npm_release.py::test_old_global_copy_is_removed_only_when_no_process_uses_it` | GREEN (POSIX 만; Windows 는 셔임 위치가 달라 해당 테스트 건너뜀) |
+| AI-60 | WHEN 셔임 경로에 ai-setup 셔임도 아니고 그 패키지의 npm 링크도 아닌 파일이 있으면 THE SYSTEM SHALL 덮어쓰지 않고 실패한다 | `tests/test_npm_release.py::test_a_file_ai_setup_did_not_write_at_the_shim_path_is_never_overwritten` | GREEN (Linux; Windows 미검증) |
+| AI-61 | WHEN npm-release 대상을 uninstall 하면 THE SYSTEM SHALL 셔임과 사용 중이 아닌 버전만 지우고, 남긴 버전을 보고한다 | `tests/test_npm_release.py::test_uninstall_removes_the_shim_and_keeps_only_a_version_still_in_use` | GREEN (Linux; Windows 미검증) |
+| AI-62 | WHEN brew 로 설치된 대상을 업데이트하면 THE SYSTEM SHALL `HOMEBREW_NO_INSTALL_CLEANUP=1` 을 주고 실행한다 | `test_brew_update_keeps_the_old_version_for_running_sessions` | GREEN (단위; macOS 실측 전) |
+| AI-63 | WHEN Orca deb 세션이 실행 중이고 `--allow-interrupt` 가 없으면 THE SYSTEM SHALL Orca 패키지를 설치하지 않고 보류로 보고한다 | `test_orca_deb_is_not_installed_under_a_running_session_without_allow_interrupt` | GREEN |
 
 ### 하네스·도구 설치
 

@@ -31,7 +31,7 @@ AI 하네스와 그 주변 도구의 설정이 장비마다 손으로 관리되�
 ## 사용자와 시나리오
 
 - 새 장비: 사용자가 `install.sh`/`install.ps1` 원라이너를 실행하고 온보딩에서 하네스·도구·플러그인·스킬·MCP 를 고르면, 선택한 구성이 설치된다.
-- 정기 업데이트: 사용자가 `update-ai` 를 실행하면 설치된 하네스·도구·플러그인이 최신으로 올라가고, 실행 중인 세션은 보호된다.
+- 정기 업데이트: 사용자가 `update-ai` 를 실행하면 설치된 하네스·도구·플러그인이 최신으로 올라가고, 실행 중인 세션을 끊지 않는다.
 - 점검: 사용자가 `setup --doctor` 를 실행하면 설치 상태, 버전, 중복 설치, 드리프트, 평문 시크릿 위치(키 이름만)를 본다.
 - 되돌리기: 사용자가 `--uninstall` 을 실행하면 이 레포가 추가한 플러그인·스킬·MCP 등록만 제거된다.
 
@@ -40,7 +40,7 @@ AI 하네스와 그 주변 도구의 설정이 장비마다 손으로 관리되�
 | ID  | 요구사항 | 필수/선택 |
 | --- | -------- | --------- |
 | R1  | doctor: 선언된 구성 대비 하네스·도구 설치 여부와 버전, 중복 설치, PATH 가림, 영수증 드리프트, 하네스 설정의 평문 시크릿 위치(키 이름만)를 읽기 전용으로 보고한다. | 필수 |
-| R2  | update-ai: 설치된 하네스(claude, codex, grok, agy, gemini, opencode, copilot)와 플러그인, 도구(CodeGraph, herdr, Orca)를 업데이트한다. CodeGraph 는 npm 전역 패키지를 올리고 `codegraph upgrade` 는 호출하지 않는다. `--check`, `--only`, `--allow-interrupt`, lock, 실행 중 세션 보호, 전후 버전 비교를 유지한다. 없는 것은 설치하지 않는다. | 필수 |
+| R2  | update-ai: 설치된 하네스(claude, codex, grok, agy, gemini, opencode, copilot)와 플러그인, 도구(CodeGraph, herdr, Orca)를 업데이트한다. CodeGraph 는 npm-release 배치로 올리고 `codegraph upgrade` 는 호출하지 않는다. `--check`, `--only`, `--allow-interrupt`, lock, 전후 버전 비교를 유지한다. 실행 중 세션이 있어도 업데이트하며, 그 세션이 쓰는 파일을 지우거나 바꾸지 않는다(버전별 배치). 세션을 실제로 끊는 단계만 `--allow-interrupt` 를 요구한다. 없는 것은 설치하지 않는다. | 필수 |
 | R3  | 하네스 설치: 선택한 하네스 가운데 없는 것을 공식 설치 방법으로 설치한다. 있는 것은 건드리지 않는다. | 필수 |
 | R4  | 도구 설치: Orca, Tailscale(패키지만), herdr, CodeGraph, Jarvis 가운데 선택한 것을 설치한다. CodeGraph 는 `npm install -g @colbymchenry/codegraph` 만 쓰고 OMC HUD statusLine 을 바꾸지 않는다. herdr 는 목록에 있으나 기본은 꺼져 있다. Jarvis 는 gateway 또는 core 를 고른 뒤에만 클론·사용자 유닛을 등록하고, `ss` 능력 부여는 추가 확인이 있을 때만 한다. Tailscale 은 인증 키나 `tailscale up` 을 실행하지 않는다. | 필수 |
 | R5  | 플러그인: 선언 목록의 Claude Code 마켓플레이스·플러그인을 user scope 로 설치한다. 기존 `--omc`, `--output-style` 은 호환을 유지한다. 플러그인으로 옮겨 간 스킬(mattpocock-skills, korean-skills)은 이 단계가 맡는다. | 필수 |

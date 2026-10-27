@@ -6,7 +6,9 @@
 
 - 깔려 있는 것만 손댄다. 없는 것은 설치하지 않고 건너뛴다(SPEC 불변식).
 - --check 는 현재·최신 버전만 읽는다. 업데이트 명령과 잠금을 만들지 않는다.
-- 실행 중인 세션이 있으면 --allow-interrupt 없이는 그 대상을 건드리지 않고 실패로 남긴다.
+- 실행 중인 세션이 있어도 올린다. 버전별 배치(native 버전 디렉터리, npm-release, brew)는 세션이 쓰는
+  파일을 지우거나 바꾸지 않기 때문이다. 세션을 실제로 끊을 수 있는 단계(이전 설치 npm -g·winget,
+  Orca deb, codex 관리형 데몬 교체)만 세션이 돌 때 --allow-interrupt 를 요구하고, 없으면 보류(실패)로 남긴다.
 - 하나가 실패해도 나머지를 계속하고, 결과 표를 찍은 뒤 exit 1 로 끝난다.
 - sudo 가 필요한 단계는 명령 전체를 보여 주고, 표준 입력이 TTY 가 아니면 건너뛴다(D3).
 
@@ -31,8 +33,12 @@ sys.path.insert(0, str(ROOT / "res" / "tools"))
 from doctor import kill_tree, locations, platform_key  # noqa: E402
 import orca as orca_release  # noqa: E402
 import orca_server  # noqa: E402
+import npm_release  # noqa: E402
 
 CATALOG = ROOT / "res" / "catalog.json"
+# 세션이 쓰는 파일을 그 자리에서 바꾸거나 세션을 끝내는 설치 방식. 세션이 돌면 --allow-interrupt 없이는 손대지 않는다.
+# user-setup: Windows Orca 설치기는 설치 폴더에서 도는 데스크톱 앱을 끝낸다(ai-setup 서버 복사본은 세션이 아니다).
+INTERRUPTING = ("npm", "winget", "deb", "user-setup")
 STEP_TIMEOUT = 900
 VERSION_RE = re.compile(r"\d+\.\d+\.\d+[-.\w]*")
 # winget 은 올릴 것이 없으면 0x8A15002B 로 끝난다. 실패가 아니다.
@@ -103,6 +109,8 @@ def method_for(entry, path):
     """
     packages = entry.get("packages") or {}
     plat = platform_key()
+    if packages.get("npm") and npm_release.owns(path):
+        return "npm-release", None
     if packages.get("npm"):
         npm = npm_for(path, packages["npm"])
         if npm:
@@ -154,6 +162,8 @@ def latest_of(entry, path, method, value):
     if method == "npm":
         out = run_quiet([value, "view", packages["npm"], "version"], env=path_first(os.path.dirname(value)))
         return out.stdout.strip() if out and out.returncode == 0 else ""
+    if method == "npm-release":
+        return npm_release.latest(packages["npm"])
     if entry["id"] == "grok":
         out = run_quiet([path, "update", "--check", "--json"])
         if out and out.returncode == 0:
@@ -187,7 +197,8 @@ def process_table():
             return None
         rows = [line.split("\t", 1) for line in out.stdout.splitlines() if "\t" in line]
     else:
-        out = run_quiet([shutil.which("ps") or "/bin/ps", "-U", str(os.getuid()), "-o", "pid=", "-o", "args="])
+        # -ww: 터미널이 아니면 ps 가 명령줄을 COLUMNS(기본 80)에서 잘라, 버전 경로가 뒤에 있는 세션을 놓친다.
+        out = run_quiet([shutil.which("ps") or "/bin/ps", "-ww", "-U", str(os.getuid()), "-o", "pid=", "-o", "args="])
         if not out or out.returncode != 0:
             return None
         rows = [line.strip().split(None, 1) for line in out.stdout.splitlines() if line.strip()]
@@ -541,13 +552,25 @@ def update_target(entry, path, method, value, allow_interrupt=False):
     """(필수 단계 실패 목록, 선택 단계 실패 목록, 건너뛴 이유 또는 None)."""
     broke, warnings = [], []
     packages = entry.get("packages") or {}
-    if method == "npm":
+    if method == "npm-release":
+        try:
+            outcome = npm_release.install(entry, process_table)
+        except OSError as error:
+            # 이 대상만 실패로 남기고 나머지 대상과 결과 표는 그대로 간다.
+            say("      {}: {}".format(type(error).__name__, error))
+            outcome = "failed"
+        if outcome == "partial":
+            warnings.append("old npm copy in use")
+            outcome = "ok"
+    elif method == "npm":
         outcome = run_step("package", [value, "install", "-g", packages["npm"] + "@latest"],
                            env=path_first(os.path.dirname(value)))
     elif method == "winget":
         outcome = run_step("package", ["winget", "upgrade", "--id", value] + WINGET_FLAGS, ok_codes=(0, WINGET_NO_UPDATE))
     elif method in ("brew", "brew_cask"):
-        outcome = run_step("package", ["brew", "upgrade"] + (["--cask"] if method == "brew_cask" else []) + [value])
+        # 기본값이면 brew 가 올린 직후 이전 버전(Cellar·Caskroom)을 지워 실행 중인 세션의 파일이 사라진다.
+        outcome = run_step("package", ["brew", "upgrade"] + (["--cask"] if method == "brew_cask" else []) + [value],
+                           env=dict(os.environ, HOMEBREW_NO_INSTALL_CLEANUP="1"))
     elif method == "deb" and entry["id"] == "orca":
         outcome = update_orca_deb(path)
     elif method == "user-setup" and entry["id"] == "orca":
@@ -585,7 +608,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="update-ai", description=__doc__.splitlines()[0])
     parser.add_argument("--check", action="store_true", help="only read current and latest versions; change nothing")
     parser.add_argument("--only", action="append", default=[], metavar="A,B", help="update only these targets")
-    parser.add_argument("--allow-interrupt", action="store_true", help="update targets even while a session of them is running")
+    parser.add_argument("--allow-interrupt", action="store_true",
+                        help="also run steps that can break running sessions (old npm -g/winget installs, "
+                             "Orca .deb, restarting the codex daemon)")
     parser.add_argument("targets", nargs="*", help="same as --only")
     args = parser.parse_args(argv)
 
@@ -623,7 +648,7 @@ def run_all(catalog, only, args):
             cache["table"] = process_table()
         return cache["table"]
 
-    results, failed = [], 0
+    results, failed, notes = [], 0, []
     for entry in catalog:
         if only and entry["id"] not in only:
             continue
@@ -652,14 +677,19 @@ def run_all(catalog, only, args):
                 results.append((entry["id"], "failed: unmanaged app-server", before, before))
                 failed += 1
                 continue
-        if not args.allow_interrupt:
-            pids = running_pids(entry, table()) if table() is not None else ["unknown"]
-            if pids:
-                say("  {:<14}  a {} session is running (PID {}); not updated".format("blocked", entry["id"], " ".join(map(str, pids))))
-                say("  {:<14}  close it and run again, or pass --allow-interrupt".format(""))
-                results.append((entry["id"], "failed: running", before, before))
-                failed += 1
-                continue
+        pids = running_pids(entry, table()) if table() is not None else ["unknown"]
+        if pids and method in INTERRUPTING and not args.allow_interrupt:
+            say("  {:<14}  a {} session is running (PID {}) and a {} update replaces its files in place; deferred".format(
+                "deferred", entry["id"], " ".join(map(str, pids)), method))
+            say("  {:<14}  close it and run again, or pass --allow-interrupt".format(""))
+            official = ((entry.get("install") or {}).get(platform_key()) or [{}])[0]
+            if method != "deb" and official.get("method") not in (None, method):
+                # 카탈로그 명령은 저장소 기준 상대 경로(res/tools/...)라, 어디서든 되게 절대 경로로 보인다.
+                say("  {:<14}  installed the catalog way ({}), it updates live: {}".format(
+                    "", official["method"], official["cmd"].replace(" res/", " " + str(ROOT / "res") + os.sep, 1)))
+            results.append((entry["id"], "failed: deferred (in use)", before, before))
+            failed += 1
+            continue
         broke, warnings, skipped = update_target(entry, path, method, value, args.allow_interrupt)
         if skipped:
             results.append((entry["id"], skipped, before, before))
@@ -680,6 +710,9 @@ def run_all(catalog, only, args):
         else:
             state = "updated" if before != after else "up to date"
         results.append((entry["id"], state, before, after))
+        if before != after and pids and pids != ["unknown"]:
+            notes.append("{}: running sessions (PID {}) keep {} until restarted".format(
+                entry["id"], " ".join(map(str, pids)), before or "the old version"))
 
     say("")
     say("── Results ──")
@@ -694,6 +727,8 @@ def run_all(catalog, only, args):
             say("  x {:<10} {}  ({})".format(name, after, state))
         else:
             say("  v {:<10} {}  ({})".format(name, after, state))
+    for note in notes:
+        say("  note: " + note)
     return 1 if failed else 0
 
 

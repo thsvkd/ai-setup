@@ -303,7 +303,7 @@ PowerShell에서는 `| iex`로 인자를 넘길 수 없으므로 scriptblock으�
 
 ## update-ai
 
-저장소를 clone해 두면, 설치된 하네스(claude, codex, grok, opencode, gemini, agy, copilot)와 도구(Orca, herdr, CodeGraph), 그 플러그인을 한 번에 최신으로 올릴 수 있다. 설치되지 않은 것은 건너뛰고 새로 설치하지 않으며, npm·winget·brew·deb 중 실제로 설치한 방식으로 올린다. CodeGraph는 npm 전역 패키지만 올리고 `codegraph upgrade`는 호출하지 않는다.
+저장소를 clone해 두면, 설치된 하네스(claude, codex, grok, opencode, gemini, agy, copilot)와 도구(Orca, herdr, CodeGraph), 그 플러그인을 한 번에 최신으로 올릴 수 있다. 설치되지 않은 것은 건너뛰고 새로 설치하지 않으며, npm·winget·brew·deb 중 실제로 설치한 방식으로 올린다. npm 외의 공식 설치 방식이 없는 gemini·CodeGraph(와 Windows의 opencode·copilot)는 버전마다 디렉터리를 따로 두는 npm-release 배치(`res/tools/npm_release.py`)로 깔고 올린다. CodeGraph의 `codegraph upgrade`는 호출하지 않는다.
 
 ```sh
 git clone https://github.com/thsvkd/ai-setup.git && cd ai-setup
@@ -316,7 +316,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Update-Ai.ps1 -Check
 powershell -ExecutionPolicy Bypass -File .\scripts\Update-Ai.ps1 -Only claude,codex
 ```
 
-실행 중인 세션이 있는 대상은 건드리지 않고 실패로 남긴다. 세션을 끊어도 되면 `--allow-interrupt`(PowerShell `-AllowInterrupt`)를 준다. 하나가 실패해도 나머지를 계속하고, 마지막에 종료 코드 1로 끝난다.
+실행 중인 세션이 있어도 올린다. 새 버전은 다른 디렉터리에 깔리고 진입점만 바뀌므로, 이미 떠 있는 세션은 재시작할 때까지 이전 버전으로 계속 돈다. 파일을 제자리에서 바꾸는 예전 설치(npm -g, winget, Orca deb)와 codex 데몬 교체만 세션이 돌면 보류로 남기며, 세션을 끊어도 되면 `--allow-interrupt`(PowerShell `-AllowInterrupt`)를 준다. 하나가 실패해도 나머지를 계속하고, 마지막에 종료 코드 1로 끝난다.
 
 </details>
 

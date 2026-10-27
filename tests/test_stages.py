@@ -135,10 +135,10 @@ def test_full_selection_orders_codegraph_package_before_mcp():
     mcp_at = next(i for i, action in enumerate(actions) if action.stage == "mcp")
     assert codegraph_at < mcp_at
     blob = _blob(actions)
-    assert "@colbymchenry/codegraph" in blob
+    assert "npm_release.py install codegraph" in blob
     assert "CodeGraph" in stages.render(actions)
     assert "codegraph serve --mcp" in blob
-    assert "npm install -g @colbymchenry/codegraph" in blob
+    assert "npm install -g" not in blob
     lowered = blob.lower()
     for banned in BANNED:
         assert banned not in lowered
@@ -460,10 +460,10 @@ def test_agentsmd_existing_file_is_left_unless_overwrite_is_set():
     "platform",
     ["linux", "macos", "windows"],
 )
-def test_codegraph_package_command_is_npm_on_every_platform(platform):
+def test_codegraph_package_command_is_npm_release_on_every_platform(platform):
     actions = stages.plan_actions(_full(stages=["codegraph"], harnesses=[]), _empty(platform=platform))
     assert any(
-        action.argv == ("npm", "install", "-g", "@colbymchenry/codegraph") for action in actions if action.writes
+        action.argv[1:] == (stages.NPM_RELEASE, "install", "codegraph") for action in actions if action.writes
     )
 
 
@@ -493,7 +493,7 @@ def test_full_apply_invokes_harness_plugins_and_codegraph_mcp(monkeypatch, tmp_p
     assert "https://claude.ai/install.sh" in blob
     assert "https://chatgpt.com/codex/install.sh" in blob
     assert "claude plugin install oh-my-claudecode@omc --scope user" in blob
-    assert "npm install -g @colbymchenry/codegraph" in blob
+    assert "npm_release.py install codegraph" in blob
     assert "claude mcp add -s user codegraph -- codegraph serve --mcp" in blob
     assert "codex mcp add codegraph -- codegraph serve --mcp" in blob
     assert "gemini mcp add -s user codegraph codegraph serve --mcp" in blob
@@ -505,7 +505,7 @@ def test_full_apply_invokes_harness_plugins_and_codegraph_mcp(monkeypatch, tmp_p
         assert banned not in blob.lower()
     install_at = blob.index("https://claude.ai/install.sh")
     plugin_at = blob.index("claude plugin install oh-my-claudecode")
-    package_at = blob.index("npm install -g @colbymchenry/codegraph")
+    package_at = blob.index("npm_release.py install codegraph")
     mcp_at = blob.index("claude mcp add -s user codegraph")
     assert install_at < plugin_at < package_at < mcp_at
     config = json.loads((tmp_path / ".config" / "opencode" / "opencode.json").read_text(encoding="utf-8"))

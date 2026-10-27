@@ -237,8 +237,8 @@
       ],
       "windows": [
         {
-          "method": "npm",
-          "cmd": "npm install -g opencode-ai"
+          "method": "npm-release",
+          "cmd": "python res/tools/npm_release.py install opencode"
         }
       ]
     },
@@ -266,8 +266,8 @@
       ],
       "windows": [
         {
-          "method": "npm",
-          "cmd": "npm uninstall -g opencode-ai"
+          "method": "npm-release",
+          "cmd": "python res/tools/npm_release.py uninstall opencode"
         }
       ]
     }
@@ -285,20 +285,20 @@
     "install": {
       "linux": [
         {
-          "method": "npm",
-          "cmd": "npm install -g @google/gemini-cli"
+          "method": "npm-release",
+          "cmd": "python3 res/tools/npm_release.py install gemini"
         }
       ],
       "macos": [
         {
-          "method": "npm",
-          "cmd": "npm install -g @google/gemini-cli"
+          "method": "npm-release",
+          "cmd": "python3 res/tools/npm_release.py install gemini"
         }
       ],
       "windows": [
         {
-          "method": "npm",
-          "cmd": "npm install -g @google/gemini-cli"
+          "method": "npm-release",
+          "cmd": "python res/tools/npm_release.py install gemini"
         }
       ]
     },
@@ -318,20 +318,20 @@
     "uninstall": {
       "linux": [
         {
-          "method": "npm",
-          "cmd": "npm uninstall -g @google/gemini-cli"
+          "method": "npm-release",
+          "cmd": "python3 res/tools/npm_release.py uninstall gemini"
         }
       ],
       "macos": [
         {
-          "method": "npm",
-          "cmd": "npm uninstall -g @google/gemini-cli"
+          "method": "npm-release",
+          "cmd": "python3 res/tools/npm_release.py uninstall gemini"
         }
       ],
       "windows": [
         {
-          "method": "npm",
-          "cmd": "npm uninstall -g @google/gemini-cli"
+          "method": "npm-release",
+          "cmd": "python res/tools/npm_release.py uninstall gemini"
         }
       ]
     }
@@ -404,20 +404,20 @@
     "install": {
       "linux": [
         {
-          "method": "npm",
-          "cmd": "npm install -g @github/copilot"
+          "method": "native",
+          "cmd": "curl -fsSL https://gh.io/copilot-install | bash"
         }
       ],
       "macos": [
         {
-          "method": "npm",
-          "cmd": "npm install -g @github/copilot"
+          "method": "native",
+          "cmd": "curl -fsSL https://gh.io/copilot-install | bash"
         }
       ],
       "windows": [
         {
-          "method": "winget",
-          "cmd": "winget install GitHub.Copilot"
+          "method": "npm-release",
+          "cmd": "python res/tools/npm_release.py install copilot"
         }
       ]
     },
@@ -426,24 +426,27 @@
       "winget": "GitHub.Copilot",
       "brew_cask": "copilot-cli"
     },
-    "update": null,
+    "update": [
+      "copilot",
+      "update"
+    ],
     "uninstall": {
       "linux": [
         {
-          "method": "npm",
-          "cmd": "npm uninstall -g @github/copilot"
+          "method": "native",
+          "cmd": "rm -f \"$HOME/.local/bin/copilot\"; if command -v npm >/dev/null 2>&1 && npm ls -g @github/copilot >/dev/null 2>&1; then npm uninstall -g @github/copilot; fi"
         }
       ],
       "macos": [
         {
-          "method": "npm",
-          "cmd": "npm uninstall -g @github/copilot"
+          "method": "native",
+          "cmd": "rm -f \"$HOME/.local/bin/copilot\"; if command -v npm >/dev/null 2>&1 && npm ls -g @github/copilot >/dev/null 2>&1; then npm uninstall -g @github/copilot; fi"
         }
       ],
       "windows": [
         {
-          "method": "winget",
-          "cmd": "winget uninstall --id GitHub.Copilot --exact"
+          "method": "npm-release",
+          "cmd": "python res/tools/npm_release.py uninstall copilot"
         }
       ]
     }
@@ -575,25 +578,45 @@
     "install": {
       "linux": [
         {
-          "method": "npm",
-          "cmd": "npm install -g @colbymchenry/codegraph"
+          "method": "npm-release",
+          "cmd": "python3 res/tools/npm_release.py install codegraph"
         }
       ],
       "macos": [
         {
-          "method": "npm",
-          "cmd": "npm install -g @colbymchenry/codegraph"
+          "method": "npm-release",
+          "cmd": "python3 res/tools/npm_release.py install codegraph"
         }
       ],
       "windows": [
         {
-          "method": "npm",
-          "cmd": "npm install -g @colbymchenry/codegraph"
+          "method": "npm-release",
+          "cmd": "python res/tools/npm_release.py install codegraph"
         }
       ]
     },
     "packages": {
       "npm": "@colbymchenry/codegraph"
+    },
+    "uninstall": {
+      "linux": [
+        {
+          "method": "npm-release",
+          "cmd": "python3 res/tools/npm_release.py uninstall codegraph"
+        }
+      ],
+      "macos": [
+        {
+          "method": "npm-release",
+          "cmd": "python3 res/tools/npm_release.py uninstall codegraph"
+        }
+      ],
+      "windows": [
+        {
+          "method": "npm-release",
+          "cmd": "python res/tools/npm_release.py uninstall codegraph"
+        }
+      ]
     }
   }
 ]

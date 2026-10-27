@@ -46,7 +46,10 @@ BUNDLED_SKILLS = ("design-lab", "tailnet-report")
 
 NVM_INSTALL_URL = "https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh"
 
-CODEGRAPH_ARGV = ("npm", "install", "-g", "@colbymchenry/codegraph")
+# CodeGraph 는 npm 전용이라 버전별 배치(npm-release)로 깐다. `npm install -g` 는 돌고 있는
+# `codegraph serve --mcp` 의 파일을 그 자리에서 바꾼다(SPEC npm-release).
+NPM_RELEASE = str(Path(__file__).resolve().parent / "tools" / "npm_release.py")
+CODEGRAPH_ARGV = ("python3", NPM_RELEASE, "install", "codegraph")
 
 MCP_ADD = {
     "claude": ("claude", "mcp", "add", "-s", "user", "codegraph", "--", "codegraph", "serve", "--mcp"),
@@ -710,7 +713,7 @@ def _uninstall(selection, world) -> list[Action]:
                 Action("mcp", detail, True, argv, (f"del:mcp_registered:{harness}",))
             )
     if "codegraph" in selected and "codegraph" in world["receipt_tools"]:
-        argv = ("npm", "uninstall", "-g", "@colbymchenry/codegraph")
+        argv = ("python3", NPM_RELEASE, "uninstall", "codegraph")
         actions.append(
             Action(
                 "codegraph",
@@ -1127,6 +1130,10 @@ def _run_harness(argv) -> int:
         kind = "uninstall" if remove else "install"
         print(f"no catalog {kind} command for {harness}", file=sys.stderr)
         return 1
+    head, _, rest = cmd.partition(" ")
+    if head in ("python3", "python"):
+        # npm-release 명령. Windows 의 python 은 실행되지 않는 Store 별칭일 수 있어 지금 인터프리터를 쓴다.
+        cmd = (f'& "{sys.executable}" ' if os.name == "nt" else f"'{sys.executable}' ") + rest
     # 공식 설치기는 끝에 "지금 실행할까?"를 묻기도 한다(Codex). stdin 을 닫아 기본값(아니오)으로 끝낸다.
     # Codex 설치기는 /dev/tty 를 직접 열어 묻기 때문에 문서화된 CODEX_NON_INTERACTIVE 로 끈다.
     # 이 프로세스가 앞에 붙인 ~/.local/bin 은 빼고 넘긴다. 보이면 설치기가 "이미 PATH 에 있다"며
@@ -1139,8 +1146,9 @@ def _run_harness(argv) -> int:
         if remove:
             cmd = "$ErrorActionPreference = 'Stop'; " + cmd
         return _run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd],
-                    stdin=subprocess.DEVNULL, env=env)
-    return _run(["bash", "-c", cmd], stdin=subprocess.DEVNULL, env=env)
+                    cwd=str(_repo_root()), stdin=subprocess.DEVNULL, env=env)
+    # npm-release 명령은 저장소 기준 상대 경로(res/tools/...)다.
+    return _run(["bash", "-c", cmd], cwd=str(_repo_root()), stdin=subprocess.DEVNULL, env=env)
 
 
 def _opencode_config_path() -> Path:
@@ -1429,6 +1437,7 @@ def _harness_bin_dirs() -> list[str]:
     if os.name == "nt" and local:
         dirs.append(os.environ.get("CODEX_INSTALL_DIR") or str(Path(local) / "Programs" / "OpenAI" / "Codex" / "bin"))
         dirs.append(str(Path(local) / "agy" / "bin"))
+        dirs.append(str(Path(local) / "ai-setup" / "bin"))  # npm-release 셔임
     return dirs
 
 

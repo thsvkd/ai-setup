@@ -125,7 +125,7 @@ def test_missing_tools_are_skipped_without_installing(tmp_path):
     assert any("codex" in line and "not installed" in line for line in result.stdout.splitlines()), result.stdout
 
 
-def test_running_harness_is_not_updated_without_allow_interrupt(tmp_path):
+def test_running_harness_with_a_versioned_install_is_updated_without_allow_interrupt(tmp_path):
     """covers: AI-9"""
     bin_dir = tmp_path / "bin"
     stub = make_stub(bin_dir, "agy")
@@ -135,14 +135,33 @@ def test_running_harness_is_not_updated_without_allow_interrupt(tmp_path):
     try:
         time.sleep(1)
         result = run_update(tmp_path / "home", [bin_dir], log, "--only", "agy")
-        assert result.returncode == 1, result.stdout + result.stderr
-        assert "agy update" not in updates(log)
-        # 프로세스 목록을 못 읽어도 '실행 중'으로 막는다. 진짜로 찾았는지 그 PID 로 확인한다.
-        blocked = [line for line in result.stdout.splitlines() if "agy" in line and "running" in line]
-        assert blocked and str(session.pid) in blocked[0], result.stdout
-        result = run_update(tmp_path / "home", [bin_dir], log, "--only", "agy", "--allow-interrupt")
         assert result.returncode == 0, result.stdout + result.stderr
         assert "agy update" in updates(log)
+        assert "deferred" not in result.stdout, result.stdout
+        assert session.poll() is None
+    finally:
+        session.kill()
+        session.wait()
+
+
+def test_running_session_of_an_in_place_npm_install_defers_the_update(tmp_path):
+    """covers: AI-56"""
+    prefix_bin = npm_layout(tmp_path / "node-prefix", "@google/gemini-cli", "gemini", "prefix-npm")
+    log = tmp_path / "calls.log"
+    env = env_for(tmp_path / "home", [prefix_bin], log)
+    session = subprocess.Popen([str(prefix_bin / ("gemini.cmd" if WINDOWS else "gemini")), "--sleep"], env=env,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        time.sleep(1)
+        result = run_update(tmp_path / "home", [prefix_bin], log, "--only", "gemini")
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert not any(" install -g " in c for c in updates(log)), updates(log)
+        # 진짜로 그 세션을 찾았는지 PID 로 확인하고, 실시간 갱신되는 카탈로그 설치 방법을 알려 준다.
+        deferred = [line for line in result.stdout.splitlines() if "deferred" in line and "gemini" in line]
+        assert deferred and str(session.pid) in deferred[0], result.stdout
+        assert "npm_release.py install gemini" in result.stdout, result.stdout
+        result = run_update(tmp_path / "home", [prefix_bin], log, "--only", "gemini", "--allow-interrupt")
+        assert "prefix-npm install -g @google/gemini-cli@latest" in updates(log), result.stdout
     finally:
         session.kill()
         session.wait()
@@ -282,8 +301,41 @@ CATALOG = {e["id"]: e for e in update_ai.json.loads(update_ai.CATALOG.read_text(
     ("claude", r'C:\WINDOWS\system32\cmd.exe /c ""C:\t\bin\claude.cmd" --sleep"', True),
 ])
 def test_session_detection(target, args, expected):
-    """covers: AI-9"""
+    """covers: AI-56"""
     assert update_ai.runs_target(args, CATALOG[target]) is expected
+
+
+def test_brew_update_keeps_the_old_version_for_running_sessions(monkeypatch):
+    """covers: AI-62"""
+    seen = []
+    monkeypatch.setattr(update_ai, "run_step", lambda label, argv, **kw: seen.append((argv, kw.get("env"))) or True)
+    for method in ("brew", "brew_cask"):
+        broke, _, skipped = update_ai.update_target(CATALOG["opencode"], "/opt/homebrew/bin/opencode", method, "opencode")
+        assert broke == [] and skipped is None
+    assert [argv[:2] for argv, _ in seen] == [["brew", "upgrade"], ["brew", "upgrade"]]
+    assert all(env and env.get("HOMEBREW_NO_INSTALL_CLEANUP") == "1" for _, env in seen), seen
+
+
+def test_orca_deb_is_not_installed_under_a_running_session_without_allow_interrupt(monkeypatch, capsys):
+    """covers: AI-63"""
+    import argparse
+
+    monkeypatch.setattr(update_ai, "locations", lambda name: ["/opt/Orca/orca-ide"])
+    monkeypatch.setattr(update_ai, "method_for", lambda entry, path: ("deb", "orca-ide"))
+    monkeypatch.setattr(update_ai, "version_of", lambda path: "1.0.0")
+    monkeypatch.setattr(update_ai, "process_table", lambda: [(4321, "/opt/Orca/orca-ide --no-sandbox")])
+    installs = []
+    monkeypatch.setattr(update_ai, "update_orca_deb", lambda path: installs.append(path) or "ok")
+    catalog = [CATALOG["orca"]]
+    args = argparse.Namespace(check=False, allow_interrupt=False)
+    assert update_ai.run_all(catalog, ["orca"], args) == 1
+    assert installs == []
+    out = capsys.readouterr().out
+    assert "deferred" in out and "4321" in out
+    args.allow_interrupt = True
+    monkeypatch.setattr(update_ai, "latest_of", lambda *a: "")
+    update_ai.run_all(catalog, ["orca"], args)
+    assert installs == ["/opt/Orca/orca-ide"]
 
 
 def test_codegraph_catalog_updates_through_npm_without_an_upgrade_command():
