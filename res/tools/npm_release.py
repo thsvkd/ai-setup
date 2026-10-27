@@ -254,15 +254,35 @@ def install_version(entry, root, version):
         return False
     # postinstall 이 실제 바이너리를 못 놓으면(opencode-ai 의 자리표시자 exe) 링크만 있고 실행은 안 된다.
     # current 로 바꾸기 전에 그 버전을 직접 실행해 본다.
-    probe = run_quiet((["cmd", "/c"] if WINDOWS else []) + [str(entry_bin), "--version"], timeout=60)
-    if not probe or probe.returncode != 0:
-        for line in ((probe.stdout + probe.stderr) if probe else "it did not start").splitlines()[-3:]:
-            say("      " + line)
+    if not runs(entry_bin):
         say("      -> the new version does not run ({} --version failed); current version left as is".format(name))
         shutil.rmtree(target, ignore_errors=True)
         return False
     (target / ".complete").write_text(version + "\n", encoding="utf-8")
     return True
+
+
+def runs(entry_bin):
+    """entry_bin --version 이 60초 안에 0 으로 끝나면 True.
+
+    출력을 파이프로 받지 않는다. Windows 는 cmd 가 node 를 손자로 띄워, 시간 초과에 cmd 만 끝내면
+    파이프를 쥔 node 때문에 기다림이 끝나지 않는다. 시간이 지나면 프로세스 트리째 끝낸다.
+    """
+    sys.path.insert(0, str(ROOT / "res" / "doctor"))
+    from doctor import kill_tree  # noqa: E402
+
+    # /s 와 바깥 따옴표: 경로에 ( ) & 가 있어도 cmd 가 따옴표를 지운다. /d: AutoRun 을 건너뛴다.
+    argv = 'cmd /d /s /c ""{}" --version"'.format(entry_bin) if WINDOWS else [str(entry_bin), "--version"]
+    try:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, start_new_session=not WINDOWS)
+    except OSError:
+        return False
+    try:
+        return proc.wait(timeout=60) == 0
+    except subprocess.TimeoutExpired:
+        kill_tree(proc)
+        return False
 
 
 def prune(entry, root, table):
@@ -334,13 +354,18 @@ def foreign_command(entry):
     found = shutil.which(entry["detect"]["bin"])
     if not found or owns(found):
         return None
-    tool = npm()
-    out = run_quiet([tool, "root", "-g"]) if tool else None
+    # 찾은 명령 자체가 같은 패키지를 가리킬 때만 옮겨 갈 예전 사본이다. POSIX 는 링크, Windows 는 npm 셔임 내용.
     package = entry["packages"]["npm"]
-    if out and out.returncode == 0 and (Path(out.stdout.strip()) / Path(*package.split("/"))).is_dir():
-        return None  # 같은 패키지의 npm -g 사본: 옮겨 갈 대상이다
-    if not WINDOWS and "/node_modules/{}/".format(package) in os.path.realpath(found):
+    if "/node_modules/{}/".format(package) in norm(os.path.realpath(found)).replace("\\", "/"):
         return None
+    if WINDOWS:
+        try:
+            with open(found, "rb") as handle:
+                text = handle.read(4000).decode("utf-8", "replace")
+        except OSError:
+            text = ""
+        if "node_modules\\{}\\".format(package.replace("/", "\\")).lower() in text.lower():
+            return None
     return "{} already provides {} from another install; remove it first, or keep it and skip this".format(
         found, entry["detect"]["bin"])
 

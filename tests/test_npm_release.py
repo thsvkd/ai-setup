@@ -229,6 +229,11 @@ def test_a_command_of_the_same_name_from_another_install_is_left_alone(world, mo
     assert not any(c.startswith("install") for c in npm_calls(world))
     assert not os.path.lexists(npm_release.shim_path(ENTRY))
 
+    # 같은 패키지의 npm -g 사본이 있어도, PATH 의 명령이 그것이 아니면 여전히 다른 설치다.
+    (world / "home" / ".local" / "lib" / "node_modules" / "@google" / "gemini-cli").mkdir(parents=True)
+    assert npm_release.install(ENTRY, update_ai.process_table) == "failed"
+    assert not any(c.startswith("install") for c in npm_calls(world))
+
 
 def test_uninstall_removes_the_shim_and_keeps_only_a_version_still_in_use(world, monkeypatch):
     """covers: AI-61"""
