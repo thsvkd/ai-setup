@@ -44,7 +44,7 @@ param(
     # "값은 shift-enter 또는 ctrl-enter 여야 합니다 (받은 값: --help)" 라는 엉뚱한 오류가
     # 나갔다. 그래서 위치 바인딩을 끄고, 남은 토큰은 여기 모아 아래에서 직접 읽는다.
     [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$Rest = @()
+    [object[]]$Rest = @()
 )
 
 Set-StrictMode -Version Latest
@@ -79,7 +79,10 @@ Usage: .\setup.ps1 [options]
                 · korean-reply-rewrite: after a Korean prompt, stores English replies in Korean so later replies stay Korean
                 (not included in the default install without a scope)
   -Uninstall    remove guard hooks + managed keybindings/skills + cache TTL HUD + outputStyle + mod settings
-                (permissions, user entries and the OMC/fluent-korean plugins are kept)
+                plus the permissions this setup added (your own entries and the OMC/fluent-korean plugins are kept).
+                For a staged install (no options or --stages) name the stages, e.g.
+                --stages hooks,newline,claude_special --uninstall (settings only).
+                --stages all --uninstall also removes the programs this setup installed.
   -DryRun       print the change plan only, without changing anything
   --stages L    all or a comma list, in stage order. -DryRun prints the list only
   --jarvis-role gateway|core
@@ -149,7 +152,8 @@ for ($i = 0; $i -lt $Rest.Count; $i++) {
         '^--harness=(.*)$'       { $Harness = @($Matches[1]); $harnessGiven = $true }
         '^--harness$' {
             $harnessGiven = $true
-            $Harness = if ($i + 1 -lt $Rest.Count) { @($Rest[++$i]) } else { @("") }
+            # PowerShell 명령줄의 `a,b` 는 배열로 온다. 쉼표 목록으로 되돌린다.
+            $Harness = if ($i + 1 -lt $Rest.Count) { @(@($Rest[++$i]) -join ",") } else { @("") }
         }
         '^--newline$' {
             # 값이 없으면 빈 문자열로 둬서 아래 검증에 걸리게 한다 (--newline "" 도 오류다).
@@ -159,7 +163,7 @@ for ($i = 0; $i -lt $Rest.Count; $i++) {
         '^--stages=(.*)$' { $stagesValue = $Matches[1]; $stageRun = $true }
         '^--stages$' {
             $stageRun = $true
-            $stagesValue = if ($i + 1 -lt $Rest.Count) { $Rest[++$i] } else { "" }
+            $stagesValue = if ($i + 1 -lt $Rest.Count) { @($Rest[++$i]) -join "," } else { "" }
             if (-not $stagesValue) { Write-Host "--stages requires all or a comma-separated list."; exit 1 }
         }
         '^--jarvis-role=(.*)$' { $jarvisRole = $Matches[1] }

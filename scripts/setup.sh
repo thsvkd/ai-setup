@@ -59,7 +59,10 @@ Usage: bash setup.sh [options]
                 · korean-reply-rewrite: after a Korean prompt, stores English replies in Korean so later replies stay Korean
                 (not included in the default install without a scope)
   --uninstall   remove guard hooks + managed keybindings/skills + cache TTL HUD + outputStyle + mod settings
-                (permissions, user entries and the OMC/fluent-korean plugins are kept)
+                plus the permissions this setup added (your own entries and the OMC/fluent-korean plugins are kept).
+                For a staged install (no options or --stages) name the stages, e.g.
+                --stages hooks,newline,claude_special --uninstall (settings only).
+                --stages all --uninstall also removes the programs this setup installed.
   --dry-run     print the change plan only, without changing anything
   --no-onboard  run with defaults without interactive onboarding
   --doctor      read-only health report: installed harnesses/tools and versions, duplicate installs,
@@ -437,7 +440,14 @@ run_stage_plan() {
     [[ -n "$INCLUDE_MODS" ]] && args+=(--include-mods "$INCLUDE_MODS")
     [[ -n "$INCLUDE_OMC" ]] && args+=(--include-omc "$INCLUDE_OMC")
     set +e
-    "$py" -B -X utf8 "$REPO_ROOT/res/stages.py" "${args[@]}"
+    # curl | sh 로 실행되면 stdin 은 스크립트 본문 파이프다. 그대로 물려주면 sudo 가 필요한 단계(Linux 의
+    # Orca deb 등)가 대화형 터미널이 없다며 실패하고 뒤 단계가 실행되지 않는다. 온보딩처럼 제어 터미널을
+    # 직접 연결하고, 터미널이 없으면(CI) 그대로 둔다.
+    if [[ ! -t 0 && "$DRY_RUN" -eq 0 ]] && (: </dev/tty) 2>/dev/null; then
+        "$py" -B -X utf8 "$REPO_ROOT/res/stages.py" "${args[@]}" </dev/tty
+    else
+        "$py" -B -X utf8 "$REPO_ROOT/res/stages.py" "${args[@]}"
+    fi
     status=$?
     set -e
     if [[ "$DRY_RUN" -eq 1 && "$status" -eq 0 ]]; then

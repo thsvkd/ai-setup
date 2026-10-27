@@ -42,7 +42,7 @@ param(
     [switch]$Doctor,
     [Alias("h")]
     [switch]$Help,
-    [Parameter(ValueFromRemainingArguments = $true)] [string[]]$Rest = @()
+    [Parameter(ValueFromRemainingArguments = $true)] [object[]]$Rest = @()
 )
 
 Set-StrictMode -Version Latest
@@ -85,7 +85,7 @@ function Invoke-Install {
         [switch]$Doctor,
         [Alias("h")]
         [switch]$Help,
-        [Parameter(ValueFromRemainingArguments = $true)] [string[]]$Rest = @()
+        [Parameter(ValueFromRemainingArguments = $true)] [object[]]$Rest = @()
     )
 
     # 남은 토큰을 install.sh 와 같은 긴 표기로 해석한다. PowerShell 은 이름에 하이픈이
@@ -126,7 +126,8 @@ function Invoke-Install {
             '^--harness=(.*)$'       { $Harness = @($Matches[1]); $harnessGiven = $true }
             '^--harness$' {
                 $harnessGiven = $true
-                $Harness = if ($i + 1 -lt $restTokens.Count) { @([string]$restTokens[++$i]) } else { @("") }
+                # PowerShell 명령줄의 `a,b` 는 배열로 온다. 쉼표 목록으로 되돌린다.
+                $Harness = if ($i + 1 -lt $restTokens.Count) { @(@($restTokens[++$i]) -join ",") } else { @("") }
             }
             '^--newline$' {
                 $newlineGiven = $true
@@ -135,7 +136,7 @@ function Invoke-Install {
             '^--stages=(.*)$' { $stagesValue = $Matches[1]; $stageRun = $true }
             '^--stages$' {
                 $stageRun = $true
-                $stagesValue = if ($i + 1 -lt $restTokens.Count) { [string]$restTokens[++$i] } else { "" }
+                $stagesValue = if ($i + 1 -lt $restTokens.Count) { @($restTokens[++$i]) -join "," } else { "" }
             }
             '^--jarvis-role=(.*)$' { $jarvisRole = $Matches[1] }
             '^--jarvis-role$' {
@@ -236,8 +237,23 @@ Environment variables:
         if ($herdrFlag) { $extra += '--herdr' }
         if ($ssCaps) { $extra += '--ss-caps' }
         if ($orcaDesktop) { $extra += '--orca-desktop' }
-        & $setup @fwd @extra
-        $code = $LASTEXITCODE
+        # irm | iex 는 메모리에서 돌지만 setup.ps1 은 내려받은 파일이라, Windows 기본 실행 정책
+        # (Restricted)에서 막힌다. 이 프로세스에만 Bypass 를 걸고 끝나면 원래 값으로 돌린다.
+        # Linux·macOS 의 pwsh 는 실행 정책이 없고 Set-ExecutionPolicy 가 예외를 낸다.
+        $onWindows = ($PSVersionTable.PSEdition -eq 'Desktop') -or $IsWindows
+        $previousPolicy = $null
+        if ($onWindows) {
+            $previousPolicy = Get-ExecutionPolicy -Scope Process
+            try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force } catch {}
+        }
+        try {
+            & $setup @fwd @extra
+            $code = $LASTEXITCODE
+        } finally {
+            if ($onWindows) {
+                try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy $previousPolicy -Force } catch {}
+            }
+        }
     } finally {
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
     }

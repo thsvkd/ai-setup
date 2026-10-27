@@ -960,3 +960,33 @@ def test_without_force_existing_agentsmd_is_untouched(tmp_path):
     assert proc.returncode == 0
     assert target.read_text(encoding="utf-8") == "사용자가 손댄 내용\n"
     assert not list(tmp_path.glob("AGENTS.md.bak.*"))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX pty")
+def test_piped_install_runs_stages_with_the_terminal_as_stdin(tmp_path):
+    """curl | sh 에서는 stdin 이 스크립트 본문 파이프다. 단계 실행이 그 파이프를 물려받으면 sudo 가 필요한
+    단계(Linux Orca deb)가 대화형 터미널이 없다며 실패하고, 뒤의 hooks·agentsmd 단계가 실행되지 않는다."""
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    real = shutil.which("python3")
+    (fake / "python3").write_text(
+        '#!/bin/sh\ncase "$*" in *stages.py*) [ -t 0 ] && echo STDIN_TTY=1 || echo STDIN_TTY=0; exit 0 ;; esac\n'
+        'exec "%s" "$@"\n' % real, encoding="utf-8")
+    (fake / "python3").chmod(0o755)
+    env = clean_env(PATH=str(fake) + os.pathsep + os.environ["PATH"])
+    rc, out = run_in_pty(["bash", str(ROOT / "scripts" / "setup.sh"), "--stages", "hooks"], [],
+                         cwd=tmp_path, env=env, stdin_pipe=True)
+    assert rc == 0, out.decode(errors="replace")
+    assert b"STDIN_TTY=1" in out, out.decode(errors="replace")
+
+
+def test_install_ps1_runs_setup_under_a_process_scoped_bypass_policy():
+    """irm | iex 는 메모리에서 돌지만, install.ps1 이 내려받은 setup.ps1 은 파일이라 Windows 기본
+    실행 정책(Restricted)에서 막힌다. 이 프로세스에만 Bypass 를 걸고, 끝나면 원래 값으로 돌린다.
+    pwsh on Linux 는 실행 정책을 무시하므로 순서를 정적으로 검사한다."""
+    source = (ROOT / "install.ps1").read_text(encoding="utf-8-sig")
+    run = source.index("& $setup @fwd @extra")
+    bypass = source.find("Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass")
+    assert 0 <= bypass < run, "setup.ps1 must run after a process-scoped Bypass"
+    restore = source.find("Set-ExecutionPolicy -Scope Process -ExecutionPolicy $previousPolicy")
+    assert restore > run, "the caller's process policy must be restored afterwards"

@@ -628,3 +628,29 @@ def test_powershell_hooks_uninstall_keeps_the_stage_records_it_does_not_revert(t
     )
     assert p.returncode == 0, p.stdout + p.stderr
     assert json.loads(manifest.read_text(encoding='utf-8-sig')) == STAGE_RECORDS
+
+
+@pytest.mark.parametrize('target', ['setup', 'install'])
+def test_powershell_comma_list_for_stages_is_one_value(tmp_path, target):
+    """PowerShell 명령줄에서 `--stages hooks,newline` 의 쉼표 목록은 배열로 넘어온다. 공백으로 이어 붙이면
+    'hooks newline' 이라는 없는 단계가 되어, Windows 의 설정만 되돌리기 명령이 실패한다."""
+    import os,shutil,zipfile
+    pwsh=shutil.which('pwsh')
+    if not pwsh:pytest.skip('PowerShell is unavailable')
+    env=dict(os.environ,HOME=str(tmp_path),USERPROFILE=str(tmp_path),TEMP=str(tmp_path))
+    if target=='setup':
+        script=ROOT/'scripts'/'setup.ps1'
+    else:
+        archive=tmp_path/'repo.zip'
+        with zipfile.ZipFile(archive,'w') as z:
+            z.writestr('repo/scripts/setup.ps1', 'param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Rest=@())\nWrite-Output ("ARGS=" + ($Rest -join "|"))\nexit 0\n')
+        mock="function Invoke-WebRequest { param($Uri,$OutFile,$UseBasicParsing) Copy-Item '"+str(archive).replace("'","''")+"' $OutFile }\n"
+        text=(ROOT/'install.ps1').read_text(encoding='utf-8').replace('Set-StrictMode -Version Latest','Set-StrictMode -Version Latest\n'+mock)
+        script=tmp_path/'install.ps1';script.write_text(text,encoding='utf-8-sig')
+    cmd="& '"+str(script).replace("'","''")+"' --stages hooks,newline --dry-run"
+    p=subprocess.run([pwsh,'-NoProfile','-Command',cmd],capture_output=True,text=True,encoding='utf-8',errors='replace',env=env,timeout=120)
+    assert p.returncode==0,p.stdout+p.stderr
+    if target=='setup':
+        assert 'newline' in p.stdout and 'hooks' in p.stdout, p.stdout
+    else:
+        assert '--stages|hooks,newline' in p.stdout, p.stdout
