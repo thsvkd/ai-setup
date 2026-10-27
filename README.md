@@ -1,153 +1,228 @@
 # ai-setup
 
-Claude Code를 **실수해도 되돌릴 수 있게** 만드는 사용자 레벨 설정 모음. 명령 한 줄로 Windows / macOS / Linux에 설치한다.
+Claude Code·Codex 같은 AI 코딩 에이전트의 작업 환경을 명령 한 줄로 설치한다. 중심은 **에이전트가 실수해도 되돌릴 수 있게 만드는 안전 장치**이고, 줄바꿈 키 통일과 플러그인·도구 설치를 함께 묶었다. Windows·macOS·Linux에서 동작한다.
 
-- 🗑️ **삭제는 휴지통으로** — Claude가 `rm`·`Remove-Item`으로 지운 파일을 휴지통에서 되살릴 수 있다
-- 💾 **git 작업 자동 백업** — `git reset --hard`·`git clean` 같은 명령 전에 미커밋 변경을 스냅샷으로 남긴다
-- ⛔ **되돌릴 수 없는 것만 차단** — 루트/홈 전체 삭제, 디스크 포맷. 그 밖에는 작업을 막지 않는다
-- ⏎ **줄바꿈 키 통일** — Claude Code·Codex·Grok CLI에서 Shift+Enter(또는 Ctrl+Enter)로 줄바꿈
-- 🎨 **design-lab** — 디자인 시안마다 풀 앱을 체험하고 선택·의견을 남기는 갤러리 제작 스킬
-- 📊 **tailnet-report** — 실측한 근거로 보고서를 HTML 페이지로 만들어 tailnet에만 게시하는 스킬
-- 📄 **AGENTS.md** — 프로젝트에 에이전트용 작업 규칙 파일을 깔아 준다
+작성자가 실제로 쓰는 구성을 공개한 것이라, 기본값은 **한국어로 Claude Code를 쓰는 사용자**에게 맞춰져 있다(한국어 응답, 한국어 출력 스타일 등). 설치하기 전에 [미리보기](#빠른-시작)로 바뀌는 내용을 확인하고, 필요 없는 단계는 끄고 설치하기를 권한다.
 
-기존 설정은 덮어쓰지 않고 필요한 항목만 끼워 넣으며, `--uninstall`로 설치가 넣은 항목만 골라 뺄 수 있다.
+## 무엇을 해 주나
+
+- 🗑️ **삭제는 휴지통으로**: Claude Code가 `rm`·`Remove-Item`으로 지운 파일을 휴지통에서 되살릴 수 있다.
+- 💾 **git 작업 자동 백업**: Claude Code가 `git reset --hard`·`git clean` 같은 명령을 실행하기 전에, 커밋하지 않은 변경을 스냅샷으로 남긴다.
+- ⛔ **되돌릴 수 없는 것만 차단**: 루트·홈 디렉터리 전체 삭제와 디스크 포맷만 막고, 그 밖의 작업은 막지 않는다.
+- ⏎ **줄바꿈 키 통일**: Claude Code·Codex·Grok CLI에서 Shift+Enter(또는 Ctrl+Enter)를 줄바꿈 키로 맞춘다.
+- 🧩 **에이전트·플러그인·도구 설치**: Claude Code와 Codex, Claude Code 플러그인, CodeGraph, Orca 등을 고른 만큼 설치한다.
+- 📄 **AGENTS.md**: 현재 프로젝트에 에이전트가 따를 작업 규칙 템플릿 [`res/AGENTS.md`](res/AGENTS.md)를 복사한다. 작성자의 규칙을 한국어로 쓴 것으로, 변경 원칙, 승인이 필요한 작업, "식별자와 문자열은 영어로, 한국어는 주석에만" 같은 코드 규칙, `docs/PRD.md`·`docs/SPEC.md` 등을 가리키는 문서 구조가 들어 있다. 그 문서들은 함께 만들지 않으므로(틀은 [`res/docs/`](res/docs)에 있다) 필요하면 직접 복사하고, `<채워 넣기>` 칸과 함께 프로젝트에 맞게 고쳐 쓴다.
+
+**한계**
+
+- 위의 안전 장치(휴지통·git 백업·차단)는 **Claude Code에만** 적용된다. Codex·Grok 같은 다른 에이전트가 지운 파일은 복구되지 않는다.
+- 휴지통 복구는 `rm`·`Remove-Item`을 거치는 삭제에만 적용된다. `sudo rm`, `find … -delete`, `python -c "shutil.rmtree(...)"` 같은 삭제와 메모리 위에 있는 경로(tmpfs로 마운트된 `/tmp` 등)의 삭제는 복구되지 않는다.
+- 휴지통 도구(`trash-cli` 등)를 설치하지 못하면 `rm`은 경고만 남기고 실제로 지운다. 설치 출력에 휴지통 관련 `⚠️`(또는 `▲`) 경고가 없는지 확인하고, 경고가 있으면 그 경고에 적힌 명령(예: `sudo apt-get install trash-cli`)으로 직접 설치한다.
+- `git push`는 force push를 포함해 훅이 판정하지 않는다. 공유 브랜치 보호는 Claude Code의 `auto` 권한 모드(계정에 따라 쓸 수 없을 수 있다)나 원격 저장소의 브랜치 보호에 맡긴다.
+- 훅이 오류로 멈추면 Claude Code는 명령을 그대로 실행한다. 그래서 설치할 때 자체 테스트가 통과했는지 확인해야 한다.
+- 설치하기 전부터 열려 있던 Claude Code 세션에는 적용되지 않으므로, 설치 후 Claude Code를 다시 시작해야 한다.
+
+**되살리는 법**: 지운 파일은 OS의 휴지통(Linux는 `trash-list`·`trash-restore`)에서 되살린다. git 스냅샷은 `git for-each-ref refs/claude-backups/`로 찾는다(가장 최근 것이 맨 아래). 되돌리기 전에 `git diff <ref>`로 차이를 확인한다. `git checkout <ref> -- .`는 스냅샷 이후의 변경을 덮어쓰기 때문이다.
+
+자세한 내용은 [가드 정책](#가드-정책)에 정리해 두었다.
+
+## 설치 전에 알아 둘 것
+
+> [!WARNING]
+> **에이전트의 권한이 넓어진다.** 가드 훅 단계는 `~/.claude/settings.json`에 셸 실행(`Bash`·`PowerShell`), 파일 쓰기(`Write`·`Edit`), 웹 접근(`WebFetch`·`WebSearch`), 하위 에이전트 실행(`Agent`) 등을 묻지 않고 허용하는 규칙을 추가하고, 기본 권한 모드를 `auto`로 바꾼다. 온보딩에서는 `bypassPermissions`도 고를 수 있다. 이 설정은 **이 사용자가 여는 모든 프로젝트**에 적용된다. 가드는 루트·홈 전체 삭제와 디스크 파괴만 막으므로, 그 밖의 명령은 확인 없이 실행된다고 생각해야 한다.
+>
+> **사용량과 비용에 영향을 주는 기본값이 있다.** `model`·`effortLevel`·`language`가 비어 있으면 각각 `opus`·`xhigh`·`korean`으로 채운다(이미 값이 있으면 건드리지 않는다). claude_special 단계가 설치하는 mod `korean-reply-rewrite`는 한국어로 물었는데 영어로 답한 응답을 Haiku로 번역해 대화 기록에 저장하므로, 그만큼 호출이 늘고 기록에 남는 응답이 바뀐다.
+>
+> **sudo와 pip를 쓴다.** Linux에서 git이 없으면 패키지 관리자로 설치하고(sudo), 휴지통 도구 `trash-cli`는 pip로 설치하고(필요하면 `--break-system-packages`를 붙인다), 그래도 실패하면 터미널에서 실행한 경우에만 `sudo apt-get`으로 설치한다. Orca는 sudo로 deb 패키지를 설치하고, Tailscale은 공식 설치 스크립트로 설치하므로 Linux에서는 Tailscale 패키지 저장소도 추가된다.
+
+인자 없이 실행하면 **단계형 설치**가 시작된다. 아래 11개 단계를 차례로 보여 주며, 모든 단계가 기본으로 켜져 있다. 이미 설치된 프로그램은 다시 설치하지 않는다. 새 장비에서 기본값 그대로 설치하면 다음이 설치된다.
+
+| 단계 | 기본으로 하는 일 | 주의할 점 |
+| --- | --- | --- |
+| base | git이 없으면 설치하고, 뒤 단계에 필요하면 Node 20을 nvm으로 설치한다 | Linux에서는 sudo를 쓴다 |
+| harness | Claude Code와 Codex를 각 공식 설치 스크립트로 설치한다 | Grok·OpenCode·Gemini·Antigravity·Copilot은 직접 골라야 설치한다 |
+| plugins | Claude Code 플러그인 8개를 사용자 범위로 설치한다: oh-my-claudecode, fluent-korean, ponytail, codex, commit-commands, context7, typescript-lsp, pyright-lsp | 서드파티 마켓플레이스가 포함된다 |
+| skills | 번들 스킬 design-lab, tailnet-report를 설치한다 | |
+| codegraph | 코드 그래프 도구 CodeGraph를 `npm install -g`로 설치한다 | |
+| mcp | Claude Code와 Codex에 CodeGraph MCP 서버를 등록한다 | |
+| newline | 줄바꿈 키를 설정한다(기본 Shift+Enter) | |
+| claude_special | 출력 스타일을 fluent-korean으로 지정하고, Claude Code mod 3개를 설치하며, OMC HUD를 쓰고 있으면 캐시 표시 래퍼를 붙인다 | |
+| tools | 여러 에이전트를 데스크톱·모바일·원격에서 함께 다루는 도구 Orca와 Tailscale을 설치한다. Tailscale에 로그인되어 있으면 Orca 상시 실행 서버도 설정한다 | Linux에서는 **sudo**가 필요하다. Orca는 Linux에서 **Debian·Ubuntu만** 지원하므로 다른 배포판에서는 이 단계를 끈다. Orca 서버는 **6768 포트**를 연다 |
+| hooks | 가드 훅을 설치하고 권한 규칙과 권한 모드를 설정한다. 비어 있는 `model`·`effortLevel`·`language`도 이 단계에서 채운다 | 위 경고를 참고한다 |
+| agentsmd | 현재 폴더에 `AGENTS.md`(와 `CLAUDE.md`)를 만든다. 내용은 위 [AGENTS.md](#무엇을-해-주나) 설명을 참고한다 | 이미 있으면 온보딩에서 덮어쓸지 묻고, 기본은 그대로 둔다 |
+
+- Orca 서버는 모든 네트워크 인터페이스의 6768 포트에서 연결을 받고, 페어링 토큰으로만 보호된다. 그래서 설치기는 Tailscale 주소를 찾을 수 있을 때만 서버를 설정한다. 자세한 내용은 [Orca](#orca)에 있다.
+- Tailscale은 설치만 하며, 로그인(`tailscale up`)은 하지 않는다.
+- Jarvis(작성자의 [홈 서버 모니터링 대시보드](https://github.com/thsvkd/jarvis))와 herdr은 직접 골랐을 때만 설치한다.
+- 단계 하나가 실패하면 **거기서 멈추고** 뒤 단계는 실행하지 않는다. tools 단계는 hooks 단계보다 앞에 있으므로, 예를 들어 Orca 설치가 실패하면 가드 훅도 설치되지 않는다. 원인을 고치거나 실패한 단계를 끈 뒤, 남은 단계만 `--stages hooks,agentsmd`처럼 지정해 이어서 실행한다.
+- 각 용어의 뜻은 [용어](#용어)에 정리해 두었다.
 
 ---
 
 ## 빠른 시작
 
-**1. 준비** — [Python 3.9+](https://www.python.org/downloads/)가 필요하다. GitHub 로그인은 필요 없다.
+**0. 준비**
 
-**2. 설치** — `AGENTS.md`(와 `CLAUDE.md`)는 현재 폴더에 생기므로 프로젝트 루트에서 실행한다.
+| 환경 | 필요한 것 |
+| --- | --- |
+| 공통 | Python 3.9 이상(설치기와 훅이 Python으로 동작하므로 미리 설치해 둔다), 인터넷 연결(GitHub·npm 등에서 내려받는다). GitHub 로그인은 필요 없다 |
+| macOS | `bash`·`curl`·`tar`(기본 포함), Homebrew(git·Tailscale 설치에 쓴다. 없으면 tools 단계가 실패하므로 그 단계를 끈다). 새 Mac에서는 `xcode-select --install`로 Command Line Tools를 먼저 설치해야 `python3`가 생긴다 |
+| Linux | `bash`, `curl` 또는 `wget`, `tar`, `sudo`(git·`trash-cli`·Orca·Tailscale 설치에 쓴다) |
+| Windows | PowerShell 5.1 이상, winget(Git·Node·Tailscale 설치에 쓴다). Python은 python.org 설치본을 쓴다(Microsoft Store의 `python.exe` 바로가기로는 실행되지 않는다) |
+
+**1. 미리보기**: 아무것도 바꾸지 않고, 기본 설치가 실행할 작업 목록만 출력한다. 이 목록은 단계별 작업 이름만 보여 주므로, 권한 규칙처럼 `settings.json`에 실제로 들어갈 내용은 `--hooks --dry-run`으로 따로 확인한다. 이미 설치된 프로그램은 `present, not claimed`(이미 있으므로 설치하지 않고 설치 기록에도 넣지 않음)로 표시된다.
+
+macOS / Linux:
+```sh
+curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh -s -- --stages all --dry-run
+```
+Windows(PowerShell):
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1))) --stages all --dry-run
+```
+
+**2. 설치**: `AGENTS.md`가 현재 폴더에 생기므로 프로젝트 루트로 이동한 뒤 실행한다. 새 터미널을 열자마자(홈 디렉터리에서) 실행하면 `~/AGENTS.md`·`~/CLAUDE.md`가 생기고, Claude Code가 홈 아래의 모든 프로젝트에서 이 파일을 읽는다. 원하지 않으면 온보딩에서 agentsmd 단계를 끈다.
+
+하네스·플러그인·도구 없이 **가드 훅과 권한 규칙만** 설치하려면 단계를 `hooks` 하나로 지정한다. 이 단계는 [위 경고](#설치-전에-알아-둘-것)의 권한 확대(`auto` 모드와 넓은 허용 규칙)와, 비어 있는 `model`·`effortLevel`·`language`를 `opus`·`xhigh`·`korean`으로 채우는 일을 함께 적용한다. 공개된 옵션으로는 이것들을 나눌 수 없으므로, 원하지 않으면 설치 뒤 `~/.claude/settings.json`을 직접 고친다. 단, 나중에 `--hooks`로 업데이트하면 `auto` 모드와 허용 규칙이 다시 적용되므로 그때마다 다시 고쳐야 한다.
+```sh
+curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh -s -- --stages hooks
+```
+Windows(PowerShell):
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1))) --stages hooks
+```
+
+전체 단계를 고르며 설치하려면 인자 없이 실행한다.
 
 macOS / Linux:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh
 ```
 
-Windows — Git Bash가 아니라 PowerShell에서 실행한다(Git Bash로 설치하면 Windows 휴지통 연동이 빠진다):
+Windows에서는 Git Bash가 아니라 PowerShell에서 실행한다. Git Bash로 설치하면 Windows 휴지통 연동이 빠진다.
 ```powershell
 irm https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1 | iex
 ```
 
-**3. 고르기** — 터미널에서 인자 없이 실행하면 단계를 순서대로 묻는다. 방향키로 고르고 Enter. 마우스는 쓰지 않는다.
+위 명령을 실행하면 온보딩 화면이 뜬다. 화면은 영어이며, 방향키로 고르고 Enter로 확정한다.
 
-첫 질문에서 Walk 를 고르면 아래 순서로 각 단계를 켤지 묻는다. 기본은 켜짐이다. 산책을 마치거나 Skip 을 고르면 카테고리 메뉴(허브)가 열린다. 허브에서 카테고리를 골라 선택을 바꾸고, Apply 로 설치하거나 Preview 로 dry-run 을 본다. Quit 은 아무것도 설치하지 않는다. 이미 한 번 설치한 머신(영수증이 있음)에서는 산책 없이 허브부터 열린다.
+1. 첫 화면에서 **Walk**를 고르면 위 11개 단계를 하나씩 켤지 묻는다. **Skip**을 고르면 바로 허브로 간다.
+2. **허브**는 단계별 선택을 한 화면에 모아 보여 주는 메뉴다. 여기서 선택을 고친 뒤 **Apply**로 설치하거나, **Preview**로 계획만 보거나, **Quit**으로 아무것도 하지 않고 끝낸다.
+3. 이미 설치한 적이 있는 장비에서는 첫 화면 없이 허브부터 열린다.
 
-1. base — git, Python 3.9+. Node 는 뒤에서 고른 항목이 요구할 때만
-2. harness — 기본 Claude Code 와 Codex. Grok, Antigravity, OpenCode, Gemini, Copilot 은 목록에만 있다
-3. plugins — 선택된 Claude Code 의 플러그인
-4. skills — 번들 design-lab, tailnet-report. Orca 스킬은 여기 없다
-5. codegraph — `npm install -g @colbymchenry/codegraph`
-6. mcp — 선택된 하네스에 `codegraph serve --mcp`
-7. newline — 줄바꿈 키. 기본 Shift+Enter
-8. claude_special — fluent-korean, mods, 이미 OMC HUD 인 statusLine 의 캐시 래퍼
-9. tools — Orca, Tailscale 패키지. Jarvis 는 역할을 고를 때만. herdr 는 기본 꺼짐
-10. hooks — 가드 훅과 권한 모드
-11. agentsmd — 현재 폴더의 AGENTS.md
+**3. 마무리**: 설치가 끝나면 출력에 휴지통 관련 `⚠️`(또는 `▲`) 경고가 없고 `Self-test 5/5 passed`가 있는지 확인한 뒤, Claude Code를 다시 시작한다. 훅과 권한은 새 세션부터 적용된다. `--doctor`로 설치 상태를 다시 점검할 수 있다.
 
-이미 있는 하네스와 도구는 다시 설치하거나 영수증에 새로 넣지 않는다. 끝나면 Claude Code를 다시 시작한다.
+> 터미널이 없는 환경(CI, 다른 에이전트 안에서 실행하는 경우 등)에서 인자 없이 실행하면 묻지 않고 **아무것도 설치하지 않는다**. `--stages`나 개별 옵션을 주면 터미널이 없어도 그대로 설치한다.
 
-> 터미널이 없는 환경(CI, 에이전트 안에서 실행 등)에서는 **묻지 않고 아무것도 설치하지 않는다**. 질문 없이 예전 기본 설치(훅, AGENTS.md, 키바인딩, 번들 스킬)를 하려면 `--no-onboard` 를 쓴다. 단계 계획을 먼저 보려면 `--stages all --dry-run` 을 쓴다.
-
-> ⚠️ 가드 훅과 권한은 `~/.claude`에 설치되어 **이 사용자가 여는 모든 프로젝트**에 적용된다.
+특정 버전으로 고정하려면 [태그 목록](https://github.com/thsvkd/ai-setup/tags)에서 버전을 골라, 그 버전의 설치 스크립트를 받고 `CLAUDE_SETUP_REF`를 함께 준다(`<태그>`를 바꿔 넣는다).
+```sh
+curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/<태그>/install.sh | CLAUDE_SETUP_REF=<태그> sh
+```
 
 ---
 
-## 옵션
+## 업데이트
 
-플래그를 하나라도 주면 질문 없이 바로 실행한다.
+단계형 설치를 다시 실행하면 이미 설치한 항목은 건너뛰므로 파일이 최신으로 바뀌지 않는다. 항목별로 아래 옵션을 주고 다시 실행한다(옵션 넘기는 법은 [옵션](#옵션)에 있다).
 
-| POSIX | PowerShell | 동작 |
-| --- | --- | --- |
-| `--dry-run` | `-DryRun` | 아무것도 바꾸지 않고 변경 계획만 출력 |
-| `--hooks` | `-Hooks` | 가드 훅 + 권한만 설치 (`~/.claude`) |
-| `--agentsmd` | `-AgentsMd` | 현재 폴더에 `AGENTS.md`만 설치 |
-| `--harness <목록>` | `-Harness <목록>` | 지침을 설치할 하네스: `claude`,`codex`,`grok`,`opencode`,`all` (기본 `all`) |
-| `--skills` | `-Skills` | 번들 스킬만 설치 (`~/.claude/skills`) |
-| `--tools orca` | `-Tools orca` | 공식 Orca 패키지와 그 빌드의 번들 스킬을 설치하고, Orca 지속 서버와 데스크톱·모바일 페어링을 구성. `--dry-run`·`--uninstall`과 조합 가능 |
-| `--orca-desktop` | `--orca-desktop` | `--tools orca`·`--stages`와 함께 쓰면 설치 뒤 페어링된 데스크톱 앱을 연다(Windows는 바로가기도 데스크톱 프로필로 바꿈). 기본은 꺼짐 |
-| `--keybinds` | `-Keybinds` | 줄바꿈 키바인딩만 설치 |
-| `--newline <값>` | `-Newline <값>` | 줄바꿈 키: `shift-enter`(기본) 또는 `ctrl-enter` |
-| `--omc` | `-Omc` | oh-my-claudecode 플러그인 설치 + HUD에 프롬프트 캐시 TTL 표시. 전체 설치에는 포함되지 않는다 |
-| `--mods` | `-Mods` | Claude Code mod 설치(`bash-diff-filter`, `cache-ttl-status`, `korean-reply-rewrite`). Claude Code v2.1.290 이상. 전체 설치에는 포함되지 않는다 |
-| `--output-style` | `-OutputStyle` | [fluent-korean](https://github.com/snflkd/fluent-korean) 플러그인 설치 + 출력 스타일을 `fluent-korean`으로 지정. 전체 설치에는 포함되지 않는다 |
-| `--stages <목록>` | `--stages <목록>` | `all` 또는 단계 목록. 위 순서로 계획하고, `--dry-run` 이면 목록만 출력한다 |
-| `--no-onboard` | `-NoOnboard` | 질문 없이 예전 기본 설치(훅, AGENTS.md, 키바인딩, 번들 스킬) |
-| `--uninstall` | `-Uninstall` | 설치한 것만 골라 되돌리기 |
-| `--doctor` | `-Doctor` | 읽기 전용 점검: 하네스·도구 설치와 버전, PATH 중복 설치, 은퇴한 훅의 잔존, 하네스 설정의 평문 시크릿 위치(키 이름만), lock 밖 스킬. 다른 옵션과 함께 쓸 수 없다 |
-| `--help` | `-Help` | 도움말 |
-
-플래그 넘기는 법 — POSIX는 `sh -s --` 뒤에 붙인다:
-```sh
-curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh -s -- --hooks --dry-run
-```
-
-PowerShell은 `| iex`로는 인자를 넘길 수 없어서 scriptblock으로 감싼다:
-```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1))) -Hooks -DryRun
-```
-
-레포를 clone했다면 `bash scripts/setup.sh --dry-run` / `.\scripts\setup.ps1 -DryRun`처럼 직접 실행해도 된다.
-
-### Orca 설치
-
-`bash scripts/setup.sh --tools orca --dry-run`으로 설치 계획을 확인하고, 실제 설치에는 `--dry-run`을 뺀다.
-Windows에서는 `.\scripts\setup.ps1 -Tools orca -DryRun`을 사용한다.
-기존 Orca 설치가 있으면 유지하며 소유권을 새로 기록하지 않는다.
-
-새 설치 형태는 Debian/Ubuntu의 공식 deb(`/opt/Orca`), macOS의 공식 `/Applications/Orca.app`,
-Windows의 공식 사용자 설치본(`%LOCALAPPDATA%\Programs\orca`)이다. 공식 stable 매니페스트의 크기와 SHA-512가
-일치한 패키지만 실행한다. Mac 앱은 서명·Gatekeeper 검사 후 설치한다. Linux의 sudo 설치는 대화형 터미널에서 실행한다.
-CLI는 이 설치본 안의 것을 사용해 번들 목록을 읽고, 기존 디렉터리·링크·lock 항목이 없는 스킬만 `skills install --skill <name> --agent universal`로 추가한다.
-사용자 설정·프로젝트·페어링 데이터는 유지한다.
-
-설치는 기존 Orca 프로필로 지속 서버(Linux systemd 사용자 서비스, macOS LaunchAgent, Windows 예약 작업)를 띄우고,
-별도 `orca-desktop` 프로필에 데스크톱 연결을 등록하며, 모바일 페어링 링크를 서비스 디렉터리의 `pairing-codes.txt`에 보관한다.
-데스크톱 앱을 여는 것은 `--orca-desktop`을 줄 때만이다. 이 옵션이 없으면 Windows 바로가기는 바꾸지 않으므로,
-평소처럼 연 Orca 앱은 서버와 같은 기본 프로필을 쓴다. 같은 머신에서 데스크톱 앱도 쓰려면 `--orca-desktop`으로 다시 실행한다.
-
-> **네트워크 노출**: `orca serve`는 바인드 주소를 고를 수 없어 모든 인터페이스의 6768 포트에서 수신하고, 접속은 페어링 링크의 토큰으로만 보호된다. 그래서 설치기는 Tailscale IPv4 주소를 페어링 주소로 쓸 수 있을 때만 서버를 설정하고, 찾지 못하면 기본 경로 IP로 폴백하지 않고 서버 설정만 경고와 함께 건너뛴다(나머지 설치는 계속된다). `tailscale up` 뒤 `--tools orca`로 다시 실행하면 서버를 설정한다. 공인 IP가 붙은 서버라면 방화벽으로 6768 포트를 막아 두고, `pairing-codes.txt`는 비밀번호처럼 다룬다.
-
-`--tools orca --uninstall`은 이 설치기가 기록한 패키지·서버 서비스와 새로 추가한 스킬만 제거한다.
-실행 중인 ai-setup 서버 서비스는 제거가 먼저 멈춘다. ai-setup이 띄우지 않은 서버가 같은 프로필로 돌고 있으면 끊지 않고 제거를 멈춘다.
-스킬의 공용 경로·새로 만든 링크·lock 항목은 영수증과 일치할 때 함께 정리한다. 변경된 스킬은 보존하며, 스킬 설치가 중단되면 다음 실행에서 패키지를 유지하고 스킬만 재시도한다.
-기존 서버의 갱신은 Jarvis에서 실행한다.
-Mac의 앱 업데이터와 함께 Homebrew cask를 추가 설치하지 않는다.
-
-공식 계약: [릴리스](https://github.com/stablyai/orca/releases/latest),
-[번들 스킬 설치](https://www.onorca.dev/docs/cli/reference).
-
-### update-ai
-
-설치된 하네스(claude, codex, grok, opencode, gemini, agy, copilot)와 도구(Orca, herdr, CodeGraph), 그 플러그인을 한 번에 최신으로 올린다. CodeGraph 는 npm 전역 패키지를 올리고 `codegraph upgrade` 는 호출하지 않는다. 설치되지 않은 것은 건너뛰고 새로 설치하지 않는다. npm·winget·brew·deb 중 실제로 설치한 방식으로 올린다.
+| 업데이트할 것 | 방법 |
+| --- | --- |
+| 가드 훅 | `--hooks`. 권한 모드를 `auto`로, 허용 규칙을 기본값으로 다시 적용한다. 온보딩에서 `bypassPermissions`를 골랐거나 권한을 직접 고쳤다면 다시 바꿔야 한다. `--hooks`와 `--stages hooks`는 같은 설치 기록을 남기므로, 어느 쪽으로 설치했든 `--uninstall`과 `--stages hooks --uninstall` 둘 다 쓸 수 있다 |
+| 줄바꿈 키 | `--keybinds` |
+| 번들 스킬 | `--skills`. 사용자가 고친 스킬은 바꾸지 않는다 |
+| mod | `--mods`. 사용자가 고친 mod 파일은 바꾸지 않는다 |
+| 하네스·도구·플러그인 | 저장소를 clone한 뒤 [update-ai](#update-ai)를 실행한다 |
 
 ```sh
-bash scripts/update-ai.sh --check            # 현재·최신 버전만 본다
-bash scripts/update-ai.sh                    # 전부 올린다
-bash scripts/update-ai.sh --only claude,codex
+curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh -s -- --hooks
 ```
-```powershell
-.\scripts\Update-Ai.ps1 -Check
-.\scripts\Update-Ai.ps1 -Only claude,codex
-```
-
-실행 중인 세션이 있는 대상은 건드리지 않고 실패로 남긴다. 세션을 끊어도 되면 `--allow-interrupt` / `-AllowInterrupt` 를 준다. 하나가 실패해도 나머지를 계속하고 마지막에 exit 1 로 끝난다.
 
 ---
 
 ## 제거
 
+제거는 설치 기록(`~/.claude/.claude-code-setup.json`)에 남은 항목만 되돌리고, 원래 있던 설정은 그대로 둔다. 바뀌는 설정 파일은 `<파일>.bak.<타임스탬프>`로 백업된다. 설치한 방식(단계형 설치와 개별 옵션 설치의 차이는 [옵션](#옵션)에 있다)에 따라 명령이 다르다.
+
+| 설치한 방식 | 제거 명령 |
+| --- | --- |
+| 단계형 설치(인자 없이 실행, `--stages`) | `--stages <단계 목록> --uninstall` |
+| 개별 옵션 설치(`--hooks`, `--keybinds`, `--no-onboard` 등) | `--uninstall`. `--omc`·`--output-style`로 설치한 플러그인은 남긴다 |
+| `--tools orca` | `--tools orca --uninstall`. 위의 `--uninstall`은 Orca를 건드리지 않는다 |
+
+**1. 먼저 미리보기로 무엇이 빠지는지 확인한다.**
 ```sh
-curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh -s -- --stages all --uninstall --dry-run
 ```
+
+**2. 설정만 되돌린다.** 가드 훅·권한 규칙, 줄바꿈 키, 출력 스타일·mod를 되돌리고, 설치한 프로그램은 남긴다. 가드 훅만 빼려면 목록을 `hooks` 하나로 쓴다. 플러그인·MCP 등록·번들 스킬도 빼려면 목록에 `plugins,mcp,skills`를 더한다. 이렇게 제거해도 **Orca 서버는 계속 6768 포트에서 연결을 받는다**. 서버도 멈추려면 `tools`를 더한다(이때는 Orca·Tailscale 패키지도 지운다).
+```sh
+curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh -s -- --stages hooks,newline,claude_special --uninstall
+```
+
+> [!WARNING]
+> `--stages all --uninstall`은 이 설치기가 **설치한 프로그램 자체를 지운다**. Claude Code·Codex 같은 하네스, Claude Code 플러그인과 마켓플레이스, CodeGraph와 MCP 등록, Orca·Tailscale 패키지(`sudo apt-get remove` 등)가 여기에 해당한다. 원격에서 Tailscale로 접속한 채 제거하면 그 연결이 끊긴다.
+
+**3. 설치한 프로그램까지 모두 지운다.**
+```sh
+curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh -s -- --stages all --uninstall
+```
+
+PowerShell에서는 같은 인자를 scriptblock 형태로 넘긴다. 예: `& ([scriptblock]::Create((irm https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1))) --stages all --uninstall --dry-run`
+
+다음은 남는다.
+
+- 설치하기 전부터 있던 프로그램과 설정, 그리고 nvm으로 설치한 Node
+- 프로젝트의 `AGENTS.md`·`CLAUDE.md`(필요하면 직접 지운다)
+- 설치가 새로 만든 키바인딩 파일 중 우리 항목만 빠진 빈 파일(`[]` 등). VS Code·Cursor가 없어도 그 `keybindings.json`을 만들기 때문에, 이 빈 파일이 남을 수 있다
+- Orca의 프로필·페어링·워크스페이스 데이터
+
+자세한 규칙은 [제거가 되돌리는 것](#제거가-되돌리는-것)에 있다.
+
+---
+
+## 옵션
+
+설치 방식은 두 가지다.
+
+- **단계형 설치**: 인자 없이 실행하거나 `--stages`를 준다. 위 11개 단계를 계획하고 설치 기록에 남긴다.
+- **개별 옵션 설치**: `--hooks`, `--keybinds` 같은 옵션으로 원하는 부분만 설치한다. `--no-onboard`는 질문 없이 가드 훅·`AGENTS.md`·키바인딩·번들 스킬을 설치한다. 옵션을 하나라도 주면 질문 없이 바로 실행한다.
+
+`--dry-run`만 주면 `--no-onboard`의 계획을 보여 준다. 단계형 설치의 계획은 `--stages all --dry-run`으로 본다.
+
+| POSIX | PowerShell | 동작 |
+| --- | --- | --- |
+| `--stages <목록>` | `--stages <목록>` | 단계형 설치. `all` 또는 쉼표로 구분한 단계 이름(예: `hooks,newline`) |
+| `--jarvis-role <역할>` | `--jarvis-role <역할>` | `--stages`와 함께 Jarvis를 `gateway` 또는 `core` 역할로 설치 |
+| `--herdr` | `--herdr` | `--stages`와 함께 herdr 설치 |
+| `--ss-caps` | `--ss-caps` | `--stages`와 함께, Jarvis용 `ss` 복사본에 `cap_sys_ptrace`·`cap_dac_read_search` 권한을 준다(sudo). 이 복사본은 모든 파일을 읽을 수 있으므로 필요할 때만 쓴다 |
+| `--orca-desktop` | `--orca-desktop` | `--tools orca`나 `--stages`와 함께, 설치 뒤 페어링된 Orca 데스크톱 앱을 연다 |
+| `--dry-run` | `-DryRun` | 아무것도 바꾸지 않고 변경 계획만 출력 |
+| `--no-onboard` | `-NoOnboard` | 질문 없이 가드 훅·`AGENTS.md`·키바인딩·번들 스킬 설치 |
+| `--hooks` | `-Hooks` | 가드 훅과 권한 규칙만 설치(`~/.claude`) |
+| `--agentsmd` | `-AgentsMd` | 현재 폴더에 `AGENTS.md`만 설치 |
+| `--harness <목록>` | `-Harness <목록>` | 대상 하네스: `claude`·`codex`·`grok`·`opencode`·`agy`·`gemini`·`copilot`. 개별 옵션 설치에서는 `AGENTS.md`를 읽게 할 하네스를 고르며, `all`(기본)은 `claude`·`codex`·`grok`·`opencode`를 뜻한다. 단계형 설치에서는 설치할 하네스를 고르며, 기본은 Claude Code와 Codex다 |
+| `--skills` | `-Skills` | 번들 스킬만 설치(`~/.claude/skills`) |
+| `--tools orca` | `-Tools orca` | Orca 패키지·번들 스킬 설치와 서버 설정만 실행 |
+| `--keybinds` | `-Keybinds` | 줄바꿈 키바인딩만 설치 |
+| `--newline <값>` | `-Newline <값>` | 줄바꿈 키: `shift-enter`(기본) 또는 `ctrl-enter` |
+| `--omc` | `-Omc` | oh-my-claudecode 플러그인 설치와 HUD 캐시 표시 래퍼 |
+| `--mods` | `-Mods` | Claude Code mod 3개 설치(Claude Code v2.1.290 이상) |
+| `--output-style` | `-OutputStyle` | [fluent-korean](https://github.com/snflkd/fluent-korean) 플러그인 설치와 출력 스타일 지정 |
+| `--uninstall` | `-Uninstall` | 설치한 것만 골라 되돌리기. 단계형 설치는 `--stages <목록>`과 함께 쓴다 |
+| `--doctor` | `-Doctor` | 읽기 전용 점검: 설치된 하네스·도구와 버전, 중복 설치, 남아 있는 옛 훅, 설정 파일의 평문 시크릿 위치(키 이름만), 스킬 잠금 파일 밖의 스킬. 다른 옵션과 함께 쓸 수 없다 |
+| `--help` | `-Help` | 도움말 |
+
+옵션을 넘기는 방법은 다음과 같다. POSIX에서는 `sh -s --` 뒤에 붙인다.
+```sh
+curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh -s -- --hooks --dry-run
+```
+
+PowerShell에서는 `| iex`로 인자를 넘길 수 없으므로 scriptblock으로 감싼다. PowerShell은 `-DryRun` 같은 PowerShell 형식과 `--dry-run` 같은 긴 형식을 모두 받으며, `--stages`처럼 PowerShell 형식이 없는 옵션은 긴 형식으로 쓴다.
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1))) -Uninstall
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1))) -Hooks -DryRun
 ```
 
-설치가 추가한 훅·권한·키바인딩·수정되지 않은 관리 스킬만 빼고, 원래 있던 설정은 그대로 둔다. 바뀌는 파일은 `<파일>.bak.<타임스탬프>`로 백업된다.
-
-남는 것도 있다 — 프로젝트의 `AGENTS.md`/`CLAUDE.md`는 지우지 않으니 필요하면 직접 지운다. 설치가 새로 만든 키바인딩 파일은 우리 항목만 빠진 빈 파일(`[]` 등)로 남는다. 자세한 규칙은 [아래](#제거가-되돌리는-것).
+저장소를 clone했다면 `bash scripts/setup.sh --dry-run`이나 `powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -DryRun`처럼 직접 실행해도 된다. Windows 기본 실행 정책은 내려받은 스크립트 파일을 막으므로 `-ExecutionPolicy Bypass`를 붙인다(원라이너는 이 처리를 스스로 한다).
 
 ---
 
@@ -155,61 +230,95 @@ curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | s
 
 | 위치 | 내용 |
 | --- | --- |
-| `~/.claude/settings.json` | 권한, 훅 등록, 없을 때만 채우는 기본값(`model`·`effortLevel`·`language` 등) |
-| `~/.claude/hooks/` | 가드 훅 `danger_guard.py`, 삭제를 휴지통으로 돌리는 셰임(`shims/rm`, `shims/RmShim.psm1`), Windows 휴지통 헬퍼와 graft 동기화 래퍼 |
-| `./AGENTS.md`, `./CLAUDE.md` | 프로젝트 작업 규칙. `CLAUDE.md`는 `@AGENTS.md` 한 줄짜리(하네스에 `claude`가 있을 때만). 이미 있으면 건너뜀 |
-| `~/.claude/skills/design-lab/SKILL.md` | 시안 갤러리·풀 앱 체험·모바일·라이트/다크·선택/의견·브라우저 검증 절차 |
-| `~/.claude/skills/tailnet-report/SKILL.md` | 근거 수집·사실 자료 고정·visual-explainer로 페이지 작성·브라우저 검증·`tailscale serve` 게시 절차 |
+| `~/.claude/settings.json` | 권한 규칙, 훅 등록, 비어 있을 때만 채우는 기본값(`model`·`effortLevel`·`language` 등) |
+| `~/.claude/hooks/` | 가드 훅 `danger_guard.py`, 삭제를 휴지통으로 돌리는 shim(`shims/rm`, `shims/RmShim.psm1`), Windows 휴지통 헬퍼, graft 동기화 래퍼 |
+| `~/.claude/.claude-code-setup.json` | 설치 기록. 제거할 때 이 기록에 남은 것만 되돌린다 |
+| `./AGENTS.md`, `./CLAUDE.md` | 프로젝트 작업 규칙. `CLAUDE.md`는 `@AGENTS.md` 한 줄짜리 파일이며, 하네스에 `claude`가 있을 때만 만든다. 이미 있으면 건너뛴다 |
+| `~/.claude/skills/design-lab/`, `~/.claude/skills/tailnet-report/` | 번들 스킬 |
 | 줄바꿈 키 | `~/.claude/keybindings.json`, `~/.codex/config.toml`, VS Code·Cursor `keybindings.json`(에디터가 없어도 만든다), `~/.tmux.conf`(POSIX만), Windows Terminal(`ctrl-enter`일 때만) |
-| OMC (`--omc`일 때만) | oh-my-claudecode 플러그인, `~/.claude/hud/omc-hud-ttl.mjs`, `settings.json`의 `statusLine` 래퍼와 `refreshInterval` |
-| mod (`--mods`일 때만) | `~/.claude/mods/bash-diff-filter/`, `~/.claude/mods/cache-ttl-status/`, `~/.claude/mods/korean-reply-rewrite/`, `settings.json`의 `env.CLAUDE_CODE_PLUGIN_DIRS` |
-| 출력 스타일 (`--output-style`일 때만) | fluent-korean 플러그인, `~/.claude/settings.json`의 `outputStyle` = `fluent-korean:fluent-korean`. 원래 값은 영수증에 남기고 `--uninstall`이 우리가 넣은 값 그대로일 때만 되돌린다(플러그인은 유지). 새 세션부터 적용된다 |
+| OMC HUD 래퍼 | `~/.claude/hud/omc-hud-ttl.mjs`, `settings.json`의 `statusLine` 래퍼와 `refreshInterval` |
+| mod | `~/.claude/mods/bash-diff-filter/`, `~/.claude/mods/cache-ttl-status/`, `~/.claude/mods/korean-reply-rewrite/`, `settings.json`의 `env.CLAUDE_CODE_PLUGIN_DIRS` |
+| 출력 스타일 | `settings.json`의 `outputStyle` = `fluent-korean:fluent-korean`. 원래 값은 설치 기록에 남긴다 |
 
-필요한 것 — 모든 OS에서 **Python 3.9+**(훅이 `python3`, Windows에서는 `python`으로 실행된다). 휴지통 도구는 macOS 14.4+ 기본 `/usr/bin/trash`, Linux `trash-cli`, Windows `send2trash`를 쓰며, 없으면 설치 중에 pip로 설치를 시도한다.
+휴지통 도구는 macOS 14.4 이상의 기본 `/usr/bin/trash`, Linux의 `trash-cli`, Windows의 `send2trash`를 쓴다. 없으면 설치 중에 pip로 설치를 시도한다. 훅은 POSIX에서 `python3`, Windows에서 `python`으로 실행된다.
 
-> `auto` 권한 모드는 계정/버전 자격 요건을 충족해야 켜진다. 설치 후 세션에서 `Shift+Tab`으로 모드를 순환시켜 확인할 수 있다.
+> `auto` 권한 모드는 계정과 Claude Code 버전이 자격 요건을 충족해야 켜진다. 설치 후 세션에서 `Shift+Tab`으로 모드를 바꿔 보며 확인할 수 있다.
 
-**보안 주의**: `CLAUDE_SETUP_REPO`/`CLAUDE_SETUP_REF` 환경변수는 다운로드해 실행할 레포를 바꾼다. 신뢰할 수 없는 입력이 이 변수를 제어할 수 있는 환경(공유 CI 등)에서는 설정하지 않는다.
+**보안 주의**: `CLAUDE_SETUP_REPO`·`CLAUDE_SETUP_REF` 환경 변수는 내려받아 실행할 저장소와 버전을 바꾼다. 신뢰할 수 없는 입력이 이 변수를 바꿀 수 있는 환경(공유 CI 등)에서는 설정하지 않는다.
 
 ---
 
 ## 번들 스킬
 
-전체 설치 또는 `--skills` / `-Skills`로 [design-lab](res/skills/design-lab/SKILL.md)을
-설치한다. Claude Code에서 `/design-lab 예약 앱 시안 3개를 비교할 갤러리를 만들어줘`로
-사용하거나, 시안 비교를 요청하면 관련 설명에 따라 자동으로 불러올 수 있다.
-개인 스킬 경로와 호출 방식은 [Claude Code 공식 문서](https://code.claude.com/docs/en/skills)를 따른다.
+- [design-lab](res/skills/design-lab/SKILL.md): 디자인 시안마다 동작하는 앱을 만들어 비교하고, 선택과 의견을 남기는 갤러리를 만든다. Claude Code에서 `/design-lab 예약 앱 시안 3개를 비교할 갤러리를 만들어줘`처럼 부르거나, 시안 비교를 요청하면 자동으로 불러온다.
+- [tailnet-report](res/skills/tailnet-report/SKILL.md): 서버를 실제로 조사한 근거로 보고서 페이지를 만들고, `tailscale serve`로 자신의 Tailscale 네트워크(tailnet)에만 게시한다. 페이지 디자인은 외부 스킬 [visual-explainer](https://github.com/nicobailon/visual-explainer)(MIT)에 맡기므로, 먼저 `npx skills add nicobailon/visual-explainer#v0.12.0 -g`로 설치해 둔다. 이 설치기는 외부 스킬을 설치하지 않는다.
 
-같은 방식으로 [tailnet-report](res/skills/tailnet-report/SKILL.md)도 설치된다. `/tailnet-report 이 서비스가 어떻게 배포되어 돌고 있는지 tailnet 페이지로 보여줘`처럼
-요청하면 운영 서버를 실측해 사실 자료를 만들고, 그 자료로 페이지를 만들어 `tailscale serve`로 tailnet에만 게시한다.
-페이지 디자인은 외부 스킬 [visual-explainer](https://github.com/nicobailon/visual-explainer)(MIT)에 맡기므로 먼저
-`npx skills add nicobailon/visual-explainer#v0.12.0 -g`로 설치해 둔다. 이 설치기는 아직 외부 스킬을 설치하지 않는다.
+스킬 설치 기록은 `~/.claude/.claude-code-setup-skills.json`에 파일 해시로 남긴다. 같은 이름의 기존 사용자 스킬이나 설치 후 사용자가 고친 스킬은 덮어쓰거나 지우지 않고, 종료 코드 1로 알린다. `--skills --uninstall`(PowerShell `-Skills -Uninstall`)은 이 설치기가 관리하는 스킬만 제거한다. 개인 스킬 경로와 호출 방식은 [Claude Code 공식 문서](https://code.claude.com/docs/en/skills)를 따른다.
 
-각 시안은 동일한 데이터와 핵심 흐름을 가진 풀 앱이며, 모바일·라이트/다크 테마와
-시안 선택·의견 입력을 포함한다. 디자인 미리보기 요청 자체로 실제 결제나 운영 데이터
-쓰기를 수행하지 않는다. 홈서버 공유는 요청받은 LAN/tailnet 범위에서 진행한다.
+---
 
-설치 기록은 훅/키바인딩과 별도인 `~/.claude/.claude-code-setup-skills.json`에 파일 해시로
-남긴다. 동명의 기존 사용자 스킬은 소유권을 가져오지 않으며, 내용이 다르면 종료 코드 1로
-알린다. 설치된 스킬을 사용자가 수정한 경우 재설치와 제거 모두 보존하고 종료 코드 1로
-알린다. 설치 기록이 손상되었거나 경로가 심볼릭 링크·junction이면 변경하지 않고 실패한다.
-보충 파일과 다른 사용자 스킬은 제거하지 않는다. `--skills --uninstall` / `-Skills -Uninstall`은
-관리 스킬만 제거한다. `--dry-run` / `-DryRun`은 파일을 쓰지 않는다.
+## 용어
 
-`finish-session-git`은 번들에 추가하지 않는다. 브랜치 통합·worktree 정리는 기존
-[Superpowers finishing-a-development-branch](https://github.com/obra/superpowers/blob/main/skills/finishing-a-development-branch/SKILL.md),
-변경 검토·부분 스테이징·논리별 커밋은
-[commit-work](https://github.com/softaworks/agent-toolkit/blob/main/skills/commit-work/SKILL.md)가
-더 구체적으로 다룬다. 이들은 이번 설치에서 추가로 내려받거나 설치하지 않는다.
-둘 다 세션별 변경 소유권을 완전히 보장하지 않으므로 저장소 지침·사전 상태 기록과 함께
-사용하며, 기존 승인과 커밋 규칙을 우선한다. Superpowers의 worktree 폴더명만으로 소유권을
-판단하는 규칙이나 commit-work의 전체 clean 목표를 다른 사용자 변경에 적용하지 않는다.
+| 용어 | 뜻 |
+| --- | --- |
+| 하네스 | 모델을 실행하는 에이전트 프로그램. Claude Code, Codex CLI, Grok CLI 등 |
+| 단계형 설치, Walk, 허브 | 인자 없이 실행했을 때의 설치 방식. Walk는 단계를 하나씩 묻는 진행 방식이고, 허브는 단계별 선택을 모아 보여 주는 메뉴다 |
+| 설치 기록 | 이 설치기가 무엇을 넣었는지 적어 두는 `~/.claude/.claude-code-setup.json`. 제거는 이 기록에 있는 것만 되돌린다 |
+| 가드 훅 | Claude Code가 명령을 실행하기 전에 부르는 `danger_guard.py`. 위험한 삭제를 막고 git 스냅샷을 남긴다 |
+| shim | `rm`·`Remove-Item` 대신 먼저 실행되어, 삭제 대상을 휴지통으로 옮기는 작은 대리 프로그램 |
+| OMC, HUD | [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode) 플러그인과, 그 플러그인이 Claude Code 화면 아래에 띄우는 상태 표시줄(`statusLine`) |
+| mod | Claude Code의 화면과 동작을 바꾸는 확장. [공식 문서](https://code.claude.com/docs/en/plugins/mods/overview) |
+| CodeGraph, MCP | 코드베이스를 미리 색인해 두는 로컬 지식 그래프 도구와, 그 색인을 에이전트가 쓰게 해 주는 MCP(Model Context Protocol) 서버 |
+| Orca | 여러 코딩 에이전트를 데스크톱·모바일·원격 런타임에서 함께 다루는 도구. [stablyai/orca](https://github.com/stablyai/orca) |
+| Tailscale, tailnet | 기기들을 사설 네트워크로 묶는 VPN과, 그렇게 묶인 내 네트워크 |
+| Jarvis, herdr | 작성자의 홈 서버 모니터링 대시보드와, 코딩 에이전트를 실행하는 런타임 도구([herdr.dev](https://herdr.dev)). 직접 골랐을 때만 설치한다 |
 
 ---
 
 ## 상세
 
 설치해서 쓰는 데는 여기까지면 충분하다. 아래는 동작 원리와 설계 이유다.
+
+<details>
+<summary><b>Orca</b> — 설치 방식, 서버, 네트워크 노출, 제거</summary>
+
+## Orca
+
+`bash scripts/setup.sh --tools orca --dry-run`으로 설치 계획을 확인하고, 실제 설치에는 `--dry-run`을 뺀다. Windows에서는 `powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -Tools orca -DryRun`을 사용한다. 기존 Orca 설치가 있으면 그대로 두고, 설치 기록에 새로 넣지 않는다.
+
+새로 설치할 때는 Debian/Ubuntu의 공식 deb(`/opt/Orca`), macOS의 공식 `/Applications/Orca.app`, Windows의 공식 사용자 설치본(`%LOCALAPPDATA%\Programs\orca`)을 쓴다. Orca 공식 stable 릴리스 매니페스트(`latest*.yml`)에 적힌 크기와 SHA-512가 일치하는 패키지만 실행한다. Mac 앱은 서명과 Gatekeeper 검사를 거친 뒤 설치한다. Linux의 sudo 설치는 대화형 터미널에서만 실행한다. 번들 스킬은 기존 디렉터리·링크·잠금 파일 항목이 없는 것만 추가한다. 사용자 설정·프로젝트·페어링 데이터는 유지한다.
+
+설치는 기존 Orca 프로필로 상시 실행 서버(Linux systemd 사용자 서비스, macOS LaunchAgent, Windows 예약 작업)를 띄우고, 별도 `orca-desktop` 프로필에 데스크톱 연결을 등록하며, 모바일 페어링 링크를 서비스 디렉터리의 `pairing-codes.txt`에 보관한다. 데스크톱 앱은 `--orca-desktop`을 줄 때만 연다. 이 옵션이 없으면 Windows 바로가기를 바꾸지 않으므로, 평소처럼 연 Orca 앱은 서버와 같은 기본 프로필을 쓴다.
+
+> **네트워크 노출**: `orca serve`는 바인드 주소를 고를 수 없어 모든 인터페이스의 6768 포트에서 연결을 받고, 접속은 페어링 링크의 토큰으로만 보호된다. 그래서 설치기는 Tailscale IPv4 주소를 페어링 주소로 쓸 수 있을 때만 서버를 설정한다. 주소를 찾지 못하면 다른 IP로 대신하지 않고, 서버 설정만 경고와 함께 건너뛴다(나머지 설치는 계속된다). `tailscale up` 뒤 `--tools orca`로 다시 실행하면 서버를 설정한다. 공인 IP가 붙은 서버라면 방화벽으로 6768 포트를 막아 두고, `pairing-codes.txt`는 비밀번호처럼 다룬다.
+
+`--tools orca --uninstall`은 이 설치기가 기록한 패키지·서버 서비스와 새로 추가한 스킬만 제거한다. 실행 중인 ai-setup 서버 서비스는 먼저 멈춘다. ai-setup이 띄우지 않은 서버가 같은 프로필로 돌고 있으면 끊지 않고 제거를 멈춘다. 변경된 스킬은 보존한다. Mac에서는 앱 자체 업데이터를 쓰며, Homebrew cask를 추가로 설치하지 않는다.
+
+공식 자료: [릴리스](https://github.com/stablyai/orca/releases/latest), [번들 스킬 설치](https://www.onorca.dev/docs/cli/reference).
+
+</details>
+
+<details>
+<summary><b>update-ai</b> — 설치된 하네스·도구를 한 번에 최신으로</summary>
+
+## update-ai
+
+저장소를 clone해 두면, 설치된 하네스(claude, codex, grok, opencode, gemini, agy, copilot)와 도구(Orca, herdr, CodeGraph), 그 플러그인을 한 번에 최신으로 올릴 수 있다. 설치되지 않은 것은 건너뛰고 새로 설치하지 않으며, npm·winget·brew·deb 중 실제로 설치한 방식으로 올린다. CodeGraph는 npm 전역 패키지만 올리고 `codegraph upgrade`는 호출하지 않는다.
+
+```sh
+git clone https://github.com/thsvkd/ai-setup.git && cd ai-setup
+bash scripts/update-ai.sh --check            # 현재 버전과 최신 버전만 본다
+bash scripts/update-ai.sh                    # 전부 올린다
+bash scripts/update-ai.sh --only claude,codex
+```
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Update-Ai.ps1 -Check
+powershell -ExecutionPolicy Bypass -File .\scripts\Update-Ai.ps1 -Only claude,codex
+```
+
+실행 중인 세션이 있는 대상은 건드리지 않고 실패로 남긴다. 세션을 끊어도 되면 `--allow-interrupt`(PowerShell `-AllowInterrupt`)를 준다. 하나가 실패해도 나머지를 계속하고, 마지막에 종료 코드 1로 끝난다.
+
+</details>
 
 <details>
 <summary><b>가드 정책</b> — 왜 막지 않고 복구하는가, 무엇을 차단하는가</summary>
@@ -235,11 +344,11 @@ deny/ask 53건 중 진짜 위험한 명령은 **0건**이었다. 반대로 복�
 
 그래서 현재 설계는 셋뿐이다.
 
-1. **명령 문자열을 재작성하지 않는다.** 삭제를 휴지통으로 돌리는 일은 셰임(shim)이 한다. Bash 는 세션 시작 때 `PATH` 에 셰임을 한 번 끼워 두고 명령은 건드리지 않는다. PowerShell 만 모듈을 불러오는 **선행 한 줄**을 붙인다. 인자 해석은 전적으로 셸/PowerShell 몫이다.
+1. **명령 문자열을 재작성하지 않는다.** 삭제를 휴지통으로 돌리는 일은 shim이 한다. Bash 는 세션 시작 때 `PATH` 에 shim을 한 번 끼워 두고 명령은 건드리지 않는다. PowerShell 만 모듈을 불러오는 **선행 한 줄**을 붙인다. 인자 해석은 전적으로 셸/PowerShell 몫이다.
 2. **git 백업도 명령을 건드리지 않는다.** 훅 프로세스가 직접 스냅샷 커밋을 만들고 원본 명령은 그대로 흘려보낸다.
 3. **deny 는 되돌릴 수단이 아예 없는 두 부류뿐이다.** 루트/홈 전체 삭제와 디스크 파괴. 파싱하지 않고 명령 문자열의 꼴만 본다.
 
-### 삭제 → 휴지통: PATH·모듈 셰임
+### 삭제 → 휴지통: PATH·모듈 shim
 
 | 툴 | 방식 |
 | --- | --- |
@@ -252,13 +361,13 @@ deny/ask 53건 중 진짜 위험한 명령은 **0건**이었다. 반대로 복�
 | --- | --- |
 | `rm -rf "$FOO/bar"` → 확장이 깨져 실패 | ✅ 그대로 동작, 휴지통으로 |
 | `rm -f *.nomatch` → 매칭 0개라 차단 | ✅ `rm -f` 의미 그대로 성공 |
-| `find … -exec rm -rf {} +` → 확인 | ✅ 셰임을 타므로 휴지통으로 |
+| `find … -exec rm -rf {} +` → 확인 | ✅ shim을 타므로 휴지통으로 |
 | `find … \| xargs rm -f` → 확인 | ✅ 같음 |
 | 여러 줄·체이닝에 `rm` 이 섞임 → 확인 | ✅ 파싱하지 않으므로 무관 |
 | 스크립트 내부의 `rm` → 훅이 못 봄 | ✅ `PATH` 로 해석되므로 커버 |
 | 히어독 본문의 `rm -rf /` → 오탐 | ✅ 데이터로 남음 |
 
-셰임이 **원본 `rm` 에게 그대로 넘기는** 경우 — 셰임이 흉내 내면 의미가 달라지는 것들이다.
+shim이 **원본 `rm` 에게 그대로 넘기는** 경우 — shim이 흉내 내면 의미가 달라지는 것들이다.
 
 - `-i`/`-I` — 치환하면 프롬프트가 사라진다
 - `.`/`..` 로 끝나는 대상 — `rm` 이 거부하는 형태다. 치환이 원본보다 더 지우면 안 된다
@@ -266,11 +375,11 @@ deny/ask 53건 중 진짜 위험한 명령은 **0건**이었다. 반대로 복�
 - 휴지통 도구 부재 — 경고를 남기고 실제 삭제한다. `rm` 자체를 못 쓰게 만드는 쪽이 더 해롭다는 판단이다
 - `CLAUDE_NO_TRASH` 가 설정됨 — 명시적 탈출구
 
-루트/홈 전체 삭제는 셰임도 argv 수준에서 한 번 더 거부한다. `bash -c "rm -rf /"` 처럼 훅의 텍스트 규칙을 비껴가는 형태를 여기서 잡는다. 이때 홈은 환경 변수 `$HOME` 이 아니라 사용자 DB 의 홈이다 — 테스트가 `HOME` 을 임시 디렉터리로 바꿔 두고 `rm -rf "$HOME"` 으로 정리하는 것까지 막으면 안 된다.
+루트/홈 전체 삭제는 shim도 argv 수준에서 한 번 더 거부한다. `bash -c "rm -rf /"` 처럼 훅의 텍스트 규칙을 비껴가는 형태를 여기서 잡는다. 이때 홈은 환경 변수 `$HOME` 이 아니라 사용자 DB 의 홈이다 — 테스트가 `HOME` 을 임시 디렉터리로 바꿔 두고 `rm -rf "$HOME"` 으로 정리하는 것까지 막으면 안 된다.
 
-**Bash 에 선행 줄을 붙이지 않는 이유**: 명령 앞에 줄을 붙이면 Claude Code 는 **바뀐 명령**에 대해 권한 규칙을 평가한다. 그래서 `Bash(rm *)` 같은 사용자 허용 규칙이 더 이상 맞지 않고, 그렇다고 `allow` 를 붙이면 `rm` 이라는 낱말만 섞여도 어떤 명령이든 자동 승인된다(둘 다 CC 2.1.283 에서 실측).
+**Bash 에 선행 줄을 붙이지 않는 이유**: 명령 앞에 줄을 붙이면 Claude Code 는 **바뀐 명령**에 대해 권한 규칙을 평가한다. 그래서 `Bash(rm *)` 같은 사용자 허용 규칙이 더 이상 맞지 않고, 그렇다고 `allow` 를 붙이면 `rm` 이라는 낱말만 섞여도 어떤 명령이든 자동 승인된다(둘 다 Claude Code 2.1.283 에서 실측).
 
-**한계**: 세션 도중에 설치하면 다음 세션부터 셰임이 적용된다(`SessionStart` 가 다시 불려야 한다). `sudo rm` 은 sudo 의 `secure_path` 가 `PATH` 를 버려 셰임을 타지 않는다(실사용 10,329건 중 2건). `find … -delete` 처럼 `rm` 을 거치지 않는 삭제도 커버 밖이다.
+**한계**: 세션 도중에 설치하면 다음 세션부터 shim이 적용된다(`SessionStart` 가 다시 불려야 한다). `sudo rm` 은 sudo 의 `secure_path` 가 `PATH` 를 버려 shim을 타지 않는다(실사용 10,329건 중 2건). `find … -delete` 처럼 `rm` 을 거치지 않는 삭제도 커버 밖이다.
 
 ### git — 미커밋 변경만 스냅샷
 
@@ -317,7 +426,7 @@ Claude Code 의 체크포인팅(`/rewind`)은 [공식 문서상](https://code.cl
 
 그래서 push 는 auto mode 분류기에 맡긴다. 기본 규칙 `Git Destructive` 가 의미 수준에서 공유 브랜치 force push 와 원격 브랜치 삭제를 막는다(`claude auto-mode defaults` 로 규칙 원문을 확인할 수 있다). 다른 권한 모드에서는 push 를 확인하는 것이 없으므로, 중요한 저장소는 원격의 브랜치 보호로 지킨다. 훅이 남기는 것은 되돌리는 수단(휴지통, git 스냅샷)과 되돌릴 수 없는 두 부류의 차단뿐이다.
 
-**업그레이드 시 자동 마이그레이션**: 예전 버전은 `Bash(git push *)`·`Bash(git push --force*)`·`Bash(git push -f*)`·`Bash(git reset --hard *)`(및 PowerShell 짝)을 `deny`로, `Bash(git push *)`(및 PowerShell 짝)을 `ask`로 배포했다. 병합 엔진은 원래 '추가만' 하므로 그 규칙들이 기존 설치본에 그대로 남고, deny/ask가 훅보다 우선하니 **새로 설치한 사람에게는 동작하고 업그레이드한 사람에게는 조용히 죽는** 상태가 된다. 그래서 설치 중에 매니페스트가 *이 설치가 넣었다*고 기록한 규칙만 제거하고, 무엇을 지웠는지 설치 리포트에 출력한다. 같은 문자열이라도 매니페스트에 없으면 사용자가 직접 넣은 규칙일 수 있으므로 지우지 않는다(매니페스트가 없던 2026-07-04 이전 설치본이 여기에 해당한다). 그중 스냅샷 백업을 막는 `reset --hard` deny 규칙만 경고를 출력한다 — push 규칙은 이제 훅과 충돌하지 않는다. 예전 버전이 `autoMode.allow` 에 넣은 'danger_guard 가 확인한 push 는 허용' 예외도 같은 방식으로 걷어낸다 — 훅이 push 를 판정하지 않게 된 지금 그 예외는 거짓 전제로 `Git Destructive` 규칙을 약하게 만든다. 예전 설치기가 매니페스트 근거 없이 지운 규칙은 매니페스트의 `removed_legacy` 에 남아 있어 `--uninstall` 시 복원된다.
+**업그레이드 시 자동 마이그레이션**: 예전 버전은 `Bash(git push *)`·`Bash(git push --force*)`·`Bash(git push -f*)`·`Bash(git reset --hard *)`(및 PowerShell 짝)을 `deny`로, `Bash(git push *)`(및 PowerShell 짝)을 `ask`로 배포했다. 병합 엔진은 원래 '추가만' 하므로 그 규칙들이 기존 설치본에 그대로 남고, deny/ask가 훅보다 우선하니 **새로 설치한 사람에게는 동작하고 업그레이드한 사람에게는 조용히 죽는** 상태가 된다. 그래서 설치 중에 설치 기록이 *이 설치가 넣었다*고 적은 규칙만 제거하고, 무엇을 지웠는지 설치 리포트에 출력한다. 같은 문자열이라도 설치 기록에 없으면 사용자가 직접 넣은 규칙일 수 있으므로 지우지 않는다(설치 기록이 없던 2026-07-04 이전 설치본이 여기에 해당한다). 그중 스냅샷 백업을 막는 `reset --hard` deny 규칙만 경고를 출력한다 — push 규칙은 이제 훅과 충돌하지 않는다. 예전 버전이 `autoMode.allow` 에 넣은 'danger_guard 가 확인한 push 는 허용' 예외도 같은 방식으로 걷어낸다 — 훅이 push 를 판정하지 않게 된 지금 그 예외는 거짓 전제로 `Git Destructive` 규칙을 약하게 만든다. 예전 설치기가 설치 기록 근거 없이 지운 규칙은 설치 기록의 `removed_legacy` 에 남아 있어 `--uninstall` 시 복원된다.
 
 **훅이 죽어도 잃는 것은 복구 수단이지 실행 권한이 아니다.** 훅이 예외로 죽으면 Claude Code는 판정 없이 명령을 실행한다(fail-open). 종전에는 이때 확인으로 승격했지만 실측상 그 확인은 전부 마찰이기만 했으므로, 이제 내부 오류는 `guard.log`에 `guard-error`로 남기고 조용히 통과시킨다. 설치 후 셀프테스트가 통과했는지 확인하는 것이 그만큼 더 중요하다.
 
@@ -328,9 +437,9 @@ Claude Code 의 체크포인팅(`/rewind`)은 [공식 문서상](https://code.cl
 
 ### settings.json 병합
 
-`permissions.defaultMode: "auto"`, 핵심 툴 `allow`(`Bash`, `PowerShell`, `Read(*)`, `Edit(*)`, `Write(*)`, `Agent(*)`, `WebFetch(*)` 등), `ask`(위험 스킬만 — git 관련 규칙은 없음), `hooks.SessionStart`·`hooks.PreToolUse` 등록, 그리고 없을 때만 채우는 `model: "opus"` / `effortLevel: "xhigh"` / `language: "korean"` 과 `env.CLAUDE_CODE_SCROLL_SPEED: "3"`(마우스 휠 스크롤 속도, `/scroll-speed` 대응)이 병합된다. Windows에서는 `env.GRAFT_TEST_SYNC_RUN`도 없을 때만 채운다 — [graft](https://github.com/NanoNets/context-graph-engine)의 Stop 훅이 턴 종료 때 돌리는 `graft build`가 빈 콘솔 창을 띄우지 않도록, 원래 동기화 스크립트를 숨김 콘솔로 다시 실행하는 `~/.claude/hooks/graft_sync_hidden.cjs`를 가리킨다(graft가 없으면 쓰이지 않는다). git 관련 deny/ask를 `permissions`에 두지 않는 이유는 [위 절](#git-정책을-permissions가-아니라-훅이-담당하는-이유-그리고-그-대가)에 있다.
+`permissions.defaultMode: "auto"`, 핵심 툴 `allow`(`Bash`, `PowerShell`, `Read(*)`, `Edit(*)`, `Write(*)`, `Agent(*)`, `WebFetch(*)` 등), `ask`(위험 스킬만 — git 관련 규칙은 없음), `hooks.SessionStart`·`hooks.PreToolUse` 등록, 그리고 없을 때만 채우는 `model: "opus"` / `effortLevel: "xhigh"` / `language: "korean"` 과 `env.CLAUDE_CODE_SCROLL_SPEED: "3"`(마우스 휠 스크롤 속도, `/scroll-speed` 대응)이 병합된다. Windows에서는 `env.GRAFT_TEST_SYNC_RUN`도 없을 때만 채운다 — [graft](https://github.com/NanoNets/context-graph-engine)의 Stop 훅이 턴 종료 때 돌리는 `graft build`가 빈 콘솔 창을 띄우지 않도록, 원래 동기화 스크립트를 숨김 콘솔로 다시 실행하는 `~/.claude/hooks/graft_sync_hidden.cjs`를 가리킨다(graft가 없으면 쓰이지 않는다). git 관련 deny/ask를 `permissions`에 두지 않는 이유는 [push 를 훅이 판정하지 않는 이유](#push-를-훅이-판정하지-않는-이유)에 있다.
 
-사용자가 이미 고른 값과 그 외 최상위 키(`statusLine` 등), 그리고 사용자의 기존 `env` 키/값은 건드리지 않는다(우리가 관리하는 `env` 키만 없을 때 추가). 단일 소스는 [`res/settings.json`](res/settings.json)이며, 설치 시 python 실행 명령과 훅 경로만 치환된다.
+`permissions.defaultMode`는 설치할 때마다 고른 모드(기본 `auto`)로 바꾸고, 설치 전 값은 설치 기록에 남겨 제거할 때 되돌린다. `allow`·`ask`는 합집합으로 병합하므로, 사용자가 지운 규칙도 다시 설치하면 다시 들어간다. 그 밖에 사용자가 이미 고른 값(`model` 등)과 최상위 키(`statusLine` 등), 기존 `env` 키·값은 건드리지 않는다(이 설치기가 관리하는 `env` 키만 없을 때 추가한다). 단일 소스는 [`res/settings.json`](res/settings.json)이며, 설치 시 python 실행 명령과 훅 경로만 치환된다.
 
 </details>
 
@@ -354,7 +463,7 @@ CLI 에이전트의 프롬프트에서 **줄을 넣고 전송하지 않는** 키
 
 대상은 Claude Code CLI · Codex CLI · Grok Build CLI다. Gemini CLI와 Cursor/VS Code의 IDE 챗 입력창은 범위 밖이다(그쪽은 이미 Shift+Enter가 줄바꿈이다).
 
-`--newline`은 다른 플래그와 조합할 수 있다 — `--keybinds --newline ctrl-enter`는 키바인딩만 Ctrl+Enter로, `--no-onboard --newline ctrl-enter`는 전체 설치를 Ctrl+Enter로 한다. 재실행 시 `--newline`을 주지 않으면 매니페스트에 기록된 이전 선택을 그대로 쓰고, 기록이 없으면 `shift-enter`다. 값이 둘 중 하나가 아니면 아무것도 쓰지 않고 종료 코드 1로 끝난다.
+`--newline`은 다른 플래그와 조합할 수 있다 — `--keybinds --newline ctrl-enter`는 키바인딩만 Ctrl+Enter로, `--no-onboard --newline ctrl-enter`는 질문 없는 기본 설치를 Ctrl+Enter로 한다. 재실행 시 `--newline`을 주지 않으면 설치 기록에 남은 이전 선택을 그대로 쓰고, 기록이 없으면 `shift-enter`다. 값이 둘 중 하나가 아니면 아무것도 쓰지 않고 종료 코드 1로 끝난다.
 
 ### 두 층으로 맞춘다
 
@@ -382,11 +491,11 @@ VS Code / Cursor `keybindings.json` 경로는 OS별로 다르다 — Windows `%A
 
 ## OMC와 캐시 TTL HUD
 
-`--omc`(또는 온보딩의 OMC 질문에 `Yes`)를 고르면 [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode) 플러그인을 `claude plugin marketplace add` / `claude plugin install`로 설치하고, OMC HUD의 세션 경과 시간(`session:45m`) 자리에 **프롬프트 캐시 TTL 잔여 시간**(`cache:57m`)을 띄운다. 서드파티 플러그인이므로 범위를 지정하지 않은 기본 전체 설치에는 포함하지 않는다.
+`--omc`를 주면 [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode) 플러그인을 `claude plugin marketplace add` / `claude plugin install`로 설치하고, OMC HUD의 세션 경과 시간(`session:45m`) 자리에 **프롬프트 캐시 TTL 잔여 시간**(`cache:57m`)을 띄운다. 단계형 설치에서는 plugins 단계가 OMC 플러그인을 설치하고, claude_special 단계가 이미 OMC HUD를 쓰는 `statusLine`에만 이 래퍼를 붙인다. 서드파티 플러그인이므로 `--no-onboard`에는 포함하지 않는다.
 
 - 값은 Claude Code가 statusLine stdin으로 넘기는 `prompt_cache.expires_at`에서 매 렌더마다 계산한다. 2분 이하면 노랑, 만료되면 `cache:cold`(빨강)이다. 캐시 정보가 없으면(구버전 Claude Code) `session:` 표시를 그대로 둔다. OMC HUD 프리셋에서 session 요소를 끈 경우에는 바꿀 자리가 없어 표시되지 않는다.
 - `~/.claude/hud/omc-hud-ttl.mjs`를 복사하고 기존 `statusLine.command` 앞에 래퍼 실행 명령을 끼운다. node는 OMC와 같은 방식으로 찾는다 — POSIX는 OMC의 `find-node.sh`, Windows는 `~/.claude/.omc-config.json`의 `nodeBinary`, 둘 다 없으면 PATH의 `node`. 입력이 없어도 카운트다운이 흐르도록 `statusLine.refreshInterval`이 없으면 `10`(초)을 넣는다.
-- `statusLine`이 없으면 플러그인의 정본 템플릿으로 OMC HUD를 먼저 설치한다. OMC가 아닌 다른 `statusLine`이 있으면 사용자 설정이므로 파일 하나 만들지 않는다. `settings.json`이나 매니페스트를 파싱할 수 없으면 쓰지 않고 멈춘다.
+- `statusLine`이 없으면 플러그인의 정본 템플릿으로 OMC HUD를 먼저 설치한다. OMC가 아닌 다른 `statusLine`이 있으면 사용자 설정이므로 파일 하나 만들지 않는다. `settings.json`이나 설치 기록을 파싱할 수 없으면 쓰지 않고 멈춘다.
 - `--uninstall`은 이 설치가 만든 것만 되돌린다 — 래퍼, 우리가 넣은 값 그대로인 `refreshInterval`, 그리고 설치가 새로 만든 `statusLine`·`settings.json`. 설치가 복사한 HUD 파일은 그 `statusLine`도 함께 치울 때, 복사 당시 내용 그대로인 경우에만 지운다 — `omc-setup`이 다시 쓴 파일은 OMC 것이다. 원래 있던 OMC 플러그인과 OMC HUD는 남긴다.
 - OMC HUD는 렌더할 때마다(위 `refreshInterval`이면 10초마다) 프로젝트의 `.omc/state/hud-stdin-cache.json`을 다시 쓴다. 그래서 Claude Code가 Bash 실행 뒤 보여 주는 '바뀐 파일' diff에 이 파일이 거의 매번 끼어든다. 이 항목을 빼려면 `--mods`의 `bash-diff-filter`를 함께 설치한다.
 - CLAUDE.md 등 OMC의 나머지 설정은 Claude Code 안에서 `/oh-my-claudecode:omc-setup`으로 진행한다. 그 과정에서 `statusLine`이 다시 써지면 `--omc`를 한 번 더 실행하면 된다.
@@ -398,13 +507,13 @@ VS Code / Cursor `keybindings.json` 경로는 OS별로 다르다 — Windows `%A
 
 ## Claude Code mod
 
-`--mods`(또는 온보딩의 mod 질문에 `Yes`)를 고르면 `res/mods/` 의 번들 [mod](https://code.claude.com/docs/en/plugins/mods/overview)를 `~/.claude/mods/<이름>/`에 복사하고, `~/.claude/settings.json`의 `env.CLAUDE_CODE_PLUGIN_DIRS`에 그 경로를 넣어 매 세션 로드되게 한다. mod는 Claude Code v2.1.290 이상에서만 동작하므로 기본 전체 설치에는 포함하지 않는다.
+`--mods`를 주거나 단계형 설치의 claude_special 단계를 켜면 `res/mods/` 의 번들 [mod](https://code.claude.com/docs/en/plugins/mods/overview)를 `~/.claude/mods/<이름>/`에 복사하고, `~/.claude/settings.json`의 `env.CLAUDE_CODE_PLUGIN_DIRS`에 그 경로를 넣어 매 세션 로드되게 한다. mod는 Claude Code v2.1.290 이상에서만 동작하므로 `--no-onboard`에는 포함하지 않는다.
 
 | mod | 하는 일 |
 | --- | --- |
 | `bash-diff-filter` | Bash 실행 뒤 보여 주는 '바뀐 파일' diff에서 OMC HUD가 렌더마다 다시 쓰는 `.omc/state/hud-stdin-cache.json`(세션별 경로 포함)을 뺀다. 걸러내는 대상은 Bash 결과의 `bashEditDiff` 필드이며, 이 필드는 원래 모델에 전달되지 않으므로 화면 표시만 바뀐다. `OMC_STATE_DIR`로 OMC 상태를 프로젝트 밖에 두면 이 파일은 애초에 표시되지 않으므로 거르지 않는다. |
 | `cache-ttl-status` | 프롬프트 캐시 잔여 시간(`cache:57m`, 1분 미만은 초, 만료되면 `cache:cold`)을 **프롬프트 아래 상태 줄**에 띄운다. mod API는 statusLine의 `prompt_cache.expires_at`을 주지 않으므로, 메인 대화의 요청이 캐시를 읽거나 쓴 시각에 TTL을 더해 계산한다(서브에이전트 요청은 제외). TTL은 mod 설정 `ttl`(`1h` 기본, `5m`)로 시작하고, 모델을 바꾸면 엔진이 알려 주는 실제 값으로 갱신한다. 계산값이므로 실제 만료 시각과 몇 초 어긋날 수 있다. |
-| `korean-reply-rewrite` | 한국어로 물었는데 메인 루프가 영어로 답하면, 그 응답 블록을 저장 직전에 Haiku로 한국어로 번역해 기록과 다음 요청에 넣는다. 영어 응답이 기록에 쌓이면 이후 응답도 영어로 굳기 때문에, 영어 선례를 남기지 않는 것이 목적이다. 프롬프트에서 한글 단어가 영어 단어보다 적거나 영어·영작·번역·커밋·PR을 언급했으면 바꾸지 않는다. 화면이 없는 `claude -p` 실행, 서브에이전트 응답, thinking은 건드리지 않는다. 짝이 맞는 ```` ``` ```` 펜스 코드와 인라인 코드는 자리표시자로 빼 두었다가 그대로 되돌리며(`~~~` 펜스·들여쓰기 코드·닫히지 않은 펜스는 번역 지시로만 보호한다), 번역이 실패하거나 잘리거나 자리표시자가 어긋나면 원문을 그대로 둔다. 터미널에는 스트리밍과 번역이 끝날 때까지(긴 답은 수십 초) 영어 원문이 보였다가 저장되면 번역본으로 바뀐다. 영어 블록마다 Haiku 호출이 한 번 는다. |
+| `korean-reply-rewrite` | 한국어로 물었는데 메인 루프가 영어로 답하면, 그 응답 블록을 저장 직전에 Haiku로 한국어로 번역해 기록과 다음 요청에 넣는다. 영어 응답이 기록에 쌓이면 이후 응답도 영어로 굳기 때문에, 영어 선례를 남기지 않는 것이 목적이다. 프롬프트에서 한글 단어가 영어 단어보다 적거나 영어·영작·번역·커밋·PR을 언급했으면 바꾸지 않는다. 화면이 없는 `claude -p` 실행, 서브에이전트 응답, thinking은 건드리지 않는다. 짝이 맞는 ```` ``` ```` 펜스 코드와 인라인 코드는 자리표시자로 빼 두었다가 그대로 되돌리며(`~~~` 펜스·들여쓰기 코드·닫히지 않은 펜스는 번역 지시로만 보호한다), 번역이 실패하거나 잘리거나 자리표시자가 어긋나면 원문을 그대로 둔다. 터미널에는 스트리밍과 번역이 끝날 때까지(긴 답은 수십 초) 영어 원문이 보였다가 저장되면 번역본으로 바뀐다. 영어 블록마다 Haiku 호출이 한 번 늘어난다. |
 
 - `--omc`의 HUD 래퍼(`session:` 자리에 `cache:`)와는 별개다. 둘 다 설치하면 TTL이 HUD 안과 프롬프트 아래 두 곳에 보인다.
 - 테스트(`*.test.ts`)와 엔진이 로드 때 만드는 타입(`.claude-plugin/types/`)은 복사하지 않는다. 같은 이름의 폴더에 내용이 다른 파일이 있으면 덮어쓰지 않고 멈춘다.
@@ -419,10 +528,10 @@ VS Code / Cursor `keybindings.json` 경로는 OS별로 다르다 — Windows `%A
 
 ### 제거가 되돌리는 것
 
-`--uninstall`은 설치 시 기록한 매니페스트(`~/.claude/.claude-code-setup.json`)를 근거로 우리가 추가한 훅·allow/deny 항목·`model`/`effortLevel`/`language`만 제거하고, `defaultMode`를 이전 값으로 원복하며, 설치가 제거했던 구버전 규칙이 있다면 다시 넣어 준다. 사용자가 원래 갖고 있던 설정과 그 외 키는 그대로 보존되며 변경 전 `settings.json.bak.<타임스탬프>`를 남긴다. `settings.json`을 설치가 새로 만든 경우, 되돌린 뒤 비면 파일도 제거한다. 줄바꿈 키바인딩도 함께 되돌리는데, **무엇을 '우리 것'으로 볼지는 대상마다 다르다.**
+`--uninstall`은 설치 기록(`~/.claude/.claude-code-setup.json`)을 근거로 우리가 추가한 훅·allow/deny 항목·`model`/`effortLevel`/`language`만 제거하고, `defaultMode`를 이전 값으로 원복하며, 설치가 제거했던 구버전 규칙이 있다면 다시 넣어 준다. 사용자가 원래 갖고 있던 설정과 그 외 키는 그대로 보존되며 변경 전 `settings.json.bak.<타임스탬프>`를 남긴다. `settings.json`을 설치가 새로 만든 경우, 되돌린 뒤 비면 파일도 제거한다. 줄바꿈 키바인딩도 함께 되돌리는데, **무엇을 '우리 것'으로 볼지는 대상마다 다르다.**
 
 - **시그니처로 식별**(VS Code·Cursor): 명령 + `when` + 시퀀스가 우리가 쓰는 것과 정확히 같은 항목만 제거한다. 이 조합은 이 설치가 만들어내는 형태라, 누가 먼저 넣었든 같은 항목이다 — 예컨대 Claude `/terminal-setup`이 넣어둔 `shift+enter` → `sendSequence` 항목도 제거 대상이다. 시퀀스가 다른 사용자 항목(에디터·노트북의 Shift+Enter)은 그대로 둔다.
-- **영수증으로 식별**(tmux·Claude·Codex·Windows Terminal): `extended-keys` 줄, Claude의 `chat:newline`, Codex의 `shift-enter`는 전부 사용자가 직접 쓰는 값과 글자까지 같다. 값이 같다는 이유로 지우면 남의 설정을 지우는 것이므로, 매니페스트에 '설치가 넣었다'는 기록이 있는 항목만 되돌린다. 기록이 없으면 건드리지 않는다. 설치가 기존 값을 덮어썼다면 그 값도 기록해 두었다가 되돌린다.
+- **설치 기록으로 식별**(tmux·Claude·Codex·Windows Terminal): `extended-keys` 줄, Claude의 `chat:newline`, Codex의 `shift-enter`는 전부 사용자가 직접 쓰는 값과 글자까지 같다. 값이 같다는 이유로 지우면 남의 설정을 지우는 것이므로, 설치 기록에 '설치가 넣었다'고 적힌 항목만 되돌린다. 기록이 없으면 건드리지 않는다. 설치가 기존 값을 덮어썼다면 그 값도 기록해 두었다가 되돌린다.
 
 Codex의 기존 `ctrl-j` 처럼 우리가 넣지 않은 키는 남는다. 우리 키만 빠져 `insert_newline`이 비면 그 줄과 빈 `[tui.keymap.editor]` 테이블까지 지운다 — 빈 배열을 남기면 설치 전에 없던 '줄바꿈 전면 언바인드'라는 새 설정을 만드는 셈이기 때문이다. `--keybinds --uninstall`이면 키바인딩만 제거하고 훅은 건드리지 않는다.
 
@@ -465,7 +574,7 @@ Codex의 기존 `ctrl-j` 처럼 우리가 넣지 않은 키는 남는다. 우리
 
 화면은 [`@clack/prompts`](https://github.com/bombshell-dev/clack)(`npx skills` 등이 쓰는 것)의 관용구 — `┌ │ ◆ ◇ └` 거터, `●/○` 라디오, `◼/◻` 체크박스 — 를 따르되, [`res/tui.py`](res/tui.py)가 **표준 라이브러리만으로** 그린다. 필요한 것은 select·multiselect·confirm 세 가지뿐이다.
 
-예전에는 `questionary`(+`prompt_toolkit`)를 벤더링했는데, `prompt_toolkit` 3.0.53 이 Python 3.10+ 문법을 써서 **macOS 기본 `python3`(3.9)에서 import 단계에 죽었다**. 그때 온보딩은 종료 코드 `2`로 빠졌고 호출부가 기본 설치로 이어졌다. 지금은 코드 `2`에서 아무것도 설치하지 않는다. 의존성이 없으면 훅과 같은 Python 3.8+ 에서 그대로 돈다. 설치 중에 `pip install`을 하지 않는다는 원칙도 그대로 지켜진다.
+예전에는 `questionary`(+`prompt_toolkit`)를 벤더링했는데, `prompt_toolkit` 3.0.53 이 Python 3.10+ 문법을 써서 **macOS 기본 `python3`(3.9)에서 import 단계에 죽었다**. 그때 온보딩은 종료 코드 `2`로 빠졌고 호출부가 기본 설치로 이어졌다. 지금은 코드 `2`에서 아무것도 설치하지 않는다. 의존성이 없으므로 훅과 같은 Python 버전에서 그대로 돈다. 온보딩을 띄우려고 `pip install`을 하지 않는다는 원칙도 그대로 지켜진다.
 
 - 입력: POSIX는 `termios`, Windows는 `msvcrt.getwch`(stdin 과 무관하게 콘솔을 직접 읽는다).
 - 출력: Windows는 `SetConsoleMode`로 VT 처리를 켠다. 켤 수 없으면 대화형을 포기하고 그 사실을 알린다.
@@ -485,43 +594,38 @@ Codex의 기존 `ctrl-j` 처럼 우리가 넣지 않은 키는 남는다. 우리
 
 ```
 res/
-  AGENTS.md                 # 배포될 프로젝트 워크플로 규칙
-  settings.json             # 실제 settings.json 조각 (SSoT, {{PY}}·{{HOOKS_DIR}} 자리표시자)
-  onboard.py                # 대화형 온보딩 TUI (인자 없이 실행할 때만 뜸)
+  AGENTS.md, CLAUDE.md        # 프로젝트에 깔리는 작업 규칙
+  docs/                     # AGENTS.md 가 가리키는 문서 틀 (설치하지 않으므로 필요하면 직접 복사한다)
+  settings.json             # settings.json 에 병합되는 조각 ({{PY}}·{{HOOKS_DIR}} 자리표시자)
+  stages.py                 # 단계형 설치의 계획·실행·제거
+  catalog.json              # 하네스·도구의 설치·갱신 명령 목록
+  plugins/plugins.json      # 단계형 설치의 Claude Code 플러그인·마켓플레이스 목록
+  onboard.py                # 대화형 온보딩 (인자 없이 실행할 때만 뜸)
   tui.py                    # 온보딩이 쓰는 clack 스타일 프롬프트 (표준 라이브러리만 사용)
-  keybinds/
-    apply.py                # 줄바꿈 키바인딩 외과적 병합 (VS Code·Cursor·Claude·Codex·WT·tmux)
-  omc/
-    apply.py                # OMC HUD statusLine 에 캐시 TTL 래퍼 연결 / uninstall
-    omc-hud-ttl.mjs         # OMC HUD 출력의 session:NNm 을 cache:NNm 으로 바꾸는 래퍼
-  output_style/
-    apply.py                # settings.json 의 outputStyle 지정 / uninstall
-  mods/
-    apply.py                # 번들 mod 를 ~/.claude/mods 에 복사 + CLAUDE_CODE_PLUGIN_DIRS 등록 / uninstall
-    bash-diff-filter/       # Bash 변경 파일 표시에서 OMC HUD 캐시를 빼는 mod (claude plugin test 로 검증)
-    cache-ttl-status/       # 프롬프트 캐시 잔여 시간을 프롬프트 아래 상태 줄에 띄우는 mod
-    korean-reply-rewrite/   # 한국어 프롬프트 뒤 영어 응답을 한국어로 바꿔 저장하는 mod
   hooks/
     danger_guard.py         # 위험 명령 가드 (Bash + PowerShell, 전 플랫폼 공용)
     shims/rm                # 삭제 → 휴지통 (POSIX 셸·Git Bash)
     shims/RmShim.psm1       # 삭제 → 휴지통 (PowerShell)
     send_to_trash.py        # Windows 휴지통 헬퍼
     graft_sync_hidden.cjs   # Windows: graft 턴 종료 동기화를 숨김 콘솔로 실행
-    merge_and_diff.py       # 자리표시자 치환 + 외과적 병합 엔진
+    merge_and_diff.py       # 자리표시자 치환 + settings.json 병합 엔진
+  keybinds/apply.py         # 줄바꿈 키바인딩 병합 (VS Code·Cursor·Claude·Codex·Windows Terminal·tmux)
+  skills/                   # 번들 스킬과 설치기
+  omc/                      # OMC HUD 캐시 표시 래퍼
+  output_style/apply.py     # outputStyle 지정 / 제거
+  mods/                     # 번들 Claude Code mod 와 설치기
+  tools/                    # Orca 설치·서버 설정
+  update/update_ai.py       # update-ai 구현
+  doctor/doctor.py          # --doctor 읽기 전용 점검
 scripts/
-  setup.{ps1,sh}            # CLI 디스패처 (엔트리포인트)
-  setup_hooks.{ps1,sh}      # 가드 훅 + 권한 설치 / uninstall 워커
-  setup_agentsmd.{ps1,sh}   # AGENTS.md 설치 워커
-  setup_skills.{ps1,sh}     # 번들 스킬 설치 / uninstall 워커
-  setup_keybinds.{ps1,sh}   # 줄바꿈 키바인딩 설치 / uninstall 워커
-  setup_omc.{ps1,sh}        # oh-my-claudecode 설치 + 캐시 TTL HUD 워커
-  setup_output_style.{ps1,sh} # fluent-korean 플러그인 설치 + outputStyle 지정 워커
-  setup_mods.{ps1,sh}       # 번들 Claude Code mod 설치 / uninstall 워커
+  setup.{ps1,sh}            # 진입점 (옵션 해석, 온보딩, 단계형 설치 호출)
+  setup_*.{ps1,sh}          # 개별 옵션 설치 / 제거 워커 (hooks, agentsmd, skills, keybinds, omc, output_style, mods)
+  update-ai.sh, Update-Ai.ps1  # update-ai 실행기
   test.{ps1,sh}             # 테스트 러너 (pytest + bats + Pester 통합 실행)
-  lib/                      # 공용 오케스트레이션 함수
+  lib/                      # 공용 함수
 install.{ps1,sh}            # 원격 설치 부트스트랩 (curl | sh / irm | iex)
-docs/                       # 인증 등 부가 문서
-tests/                      # pytest(훅·병합) + bats(bash) + Pester(PowerShell)
+docs/                       # 요구사항·설계 계약·수용 기준과 설계 기록
+tests/                      # pytest + bats(bash) + Pester(PowerShell)
 ```
 
 ### 테스트
@@ -572,3 +676,9 @@ Linux에 python3.9를 설치하면 그쪽에서도 돈다.
 가드 없이 명령을 실행하므로(fail-open), 최신 인터프리터로만 테스트하면 위험하다.
 
 </details>
+
+---
+
+## 라이선스
+
+[MIT](LICENSE)
