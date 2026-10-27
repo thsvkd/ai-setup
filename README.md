@@ -316,7 +316,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Update-Ai.ps1 -Check
 powershell -ExecutionPolicy Bypass -File .\scripts\Update-Ai.ps1 -Only claude,codex
 ```
 
-실행 중인 세션이 있어도 올린다. 새 버전은 다른 디렉터리에 깔리고 진입점만 바뀌므로, 이미 떠 있는 세션은 재시작할 때까지 이전 버전으로 계속 돈다. 파일을 제자리에서 바꾸는 예전 설치(npm -g, winget, Orca deb)와 codex 데몬 교체만 세션이 돌면 보류로 남기며, 세션을 끊어도 되면 `--allow-interrupt`(PowerShell `-AllowInterrupt`)를 준다. 하나가 실패해도 나머지를 계속하고, 마지막에 종료 코드 1로 끝난다.
+실행 중인 세션이 있어도 올린다. 새 버전은 다른 디렉터리에 깔리고 진입점만 바뀌므로, 이미 떠 있는 세션은 재시작할 때까지 이전 버전으로 계속 돈다. 파일을 제자리에서 바꾸는 예전 설치(npm -g, winget, Orca deb), 데스크톱 앱을 닫는 Windows Orca 설치기, codex 데몬 교체만 세션이 돌면 보류로 남기며, 세션을 끊어도 되면 `--allow-interrupt`(PowerShell `-AllowInterrupt`)를 준다. 하나가 실패해도 나머지를 계속하고, 마지막에 종료 코드 1로 끝난다.
 
 </details>
 

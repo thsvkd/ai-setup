@@ -35,7 +35,7 @@
 | AI-60 | WHEN 셔임 경로에 ai-setup 셔임도 아니고 그 패키지의 npm 링크도 아닌 파일이 있으면 THE SYSTEM SHALL 덮어쓰지 않고 실패한다 | `tests/test_npm_release.py::test_a_file_ai_setup_did_not_write_at_the_shim_path_is_never_overwritten` | GREEN (Linux; Windows 미검증) |
 | AI-61 | WHEN npm-release 대상을 uninstall 하면 THE SYSTEM SHALL 셔임과 사용 중이 아닌 버전만 지우고, 남긴 버전을 보고한다 | `tests/test_npm_release.py::test_uninstall_removes_the_shim_and_keeps_only_a_version_still_in_use` | GREEN (Linux; Windows 미검증) |
 | AI-62 | WHEN brew 로 설치된 대상을 업데이트하면 THE SYSTEM SHALL `HOMEBREW_NO_INSTALL_CLEANUP=1` 을 주고 실행한다 | `test_brew_update_keeps_the_old_version_for_running_sessions` | GREEN (단위; macOS 실측 전) |
-| AI-63 | WHEN Orca deb 세션이 실행 중이고 `--allow-interrupt` 가 없으면 THE SYSTEM SHALL Orca 패키지를 설치하지 않고 보류로 보고한다 | `test_orca_deb_is_not_installed_under_a_running_session_without_allow_interrupt` | GREEN |
+| AI-63 | WHEN Orca 데스크톱 세션이 실행 중이고(deb 또는 Windows 공식 설치기) `--allow-interrupt` 가 없으면 THE SYSTEM SHALL Orca 패키지를 설치하지 않고 보류로 보고한다 | `test_orca_package_is_not_installed_under_a_running_session_without_allow_interrupt` | GREEN |
 
 ### 하네스·도구 설치
 

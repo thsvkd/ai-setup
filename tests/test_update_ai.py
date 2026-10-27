@@ -316,16 +316,21 @@ def test_brew_update_keeps_the_old_version_for_running_sessions(monkeypatch):
     assert all(env and env.get("HOMEBREW_NO_INSTALL_CLEANUP") == "1" for _, env in seen), seen
 
 
-def test_orca_deb_is_not_installed_under_a_running_session_without_allow_interrupt(monkeypatch, capsys):
+@pytest.mark.parametrize("method, app, installer", [
+    ("deb", "/opt/Orca/orca-ide", "update_orca_deb"),
+    ("user-setup", r"C:\Users\u\AppData\Local\Programs\orca\Orca.exe", "update_orca_windows"),
+])
+def test_orca_package_is_not_installed_under_a_running_session_without_allow_interrupt(
+        monkeypatch, capsys, method, app, installer):
     """covers: AI-63"""
     import argparse
 
-    monkeypatch.setattr(update_ai, "locations", lambda name: ["/opt/Orca/orca-ide"])
-    monkeypatch.setattr(update_ai, "method_for", lambda entry, path: ("deb", "orca-ide"))
+    monkeypatch.setattr(update_ai, "locations", lambda name: [app])
+    monkeypatch.setattr(update_ai, "method_for", lambda entry, path: (method, "orca"))
     monkeypatch.setattr(update_ai, "version_of", lambda path: "1.0.0")
-    monkeypatch.setattr(update_ai, "process_table", lambda: [(4321, "/opt/Orca/orca-ide --no-sandbox")])
+    monkeypatch.setattr(update_ai, "process_table", lambda: [(4321, app + " --no-sandbox")])
     installs = []
-    monkeypatch.setattr(update_ai, "update_orca_deb", lambda path: installs.append(path) or "ok")
+    monkeypatch.setattr(update_ai, installer, lambda *path: installs.append(app) or "ok")
     catalog = [CATALOG["orca"]]
     args = argparse.Namespace(check=False, allow_interrupt=False)
     assert update_ai.run_all(catalog, ["orca"], args) == 1
@@ -335,7 +340,7 @@ def test_orca_deb_is_not_installed_under_a_running_session_without_allow_interru
     args.allow_interrupt = True
     monkeypatch.setattr(update_ai, "latest_of", lambda *a: "")
     update_ai.run_all(catalog, ["orca"], args)
-    assert installs == ["/opt/Orca/orca-ide"]
+    assert installs == [app]
 
 
 def test_codegraph_catalog_updates_through_npm_without_an_upgrade_command():
