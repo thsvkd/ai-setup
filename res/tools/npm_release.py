@@ -252,7 +252,7 @@ def install_version(entry, root, version):
         say("      -> npm install failed; current version left as is")
         shutil.rmtree(target, ignore_errors=True)
         return False
-    # postinstall 이 실제 바이너리를 못 놓으면(opencode-ai 의 자리표시자 exe) 링크만 있고 실행은 안 된다.
+    # postinstall 이 실제 바이너리를 못 놓으면(opencode-ai 1.x 의 자리표시자 exe 를 실제로 봤다) 링크만 있고 실행은 안 된다.
     # current 로 바꾸기 전에 그 버전을 직접 실행해 본다.
     if not runs(entry_bin):
         say("      -> the new version does not run ({} --version failed); current version left as is".format(name))

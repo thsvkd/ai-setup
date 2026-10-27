@@ -226,13 +226,13 @@
       "linux": [
         {
           "method": "native",
-          "cmd": "curl -fsSL https://opencode.ai/install | bash"
+          "cmd": "curl -fsSL https://opencode.ai/v2/install | bash"
         }
       ],
       "macos": [
         {
           "method": "native",
-          "cmd": "curl -fsSL https://opencode.ai/install | bash"
+          "cmd": "curl -fsSL https://opencode.ai/v2/install | bash"
         }
       ],
       "windows": [
@@ -243,9 +243,9 @@
       ]
     },
     "packages": {
-      "npm": "opencode-ai",
+      "npm": "@opencode/cli",
       "winget": "SST.opencode",
-      "brew": "anomalyco/tap/opencode"
+      "brew": "anomalyco/tap/opencode-v2"
     },
     "update": [
       "opencode",
@@ -255,13 +255,13 @@
       "linux": [
         {
           "method": "native",
-          "cmd": "rm -f \"$HOME/.opencode/bin/opencode\""
+          "cmd": "rm -f \"$HOME/.opencode/bin/opencode\" \"$HOME/.opencode/bin/opencode2\""
         }
       ],
       "macos": [
         {
           "method": "native",
-          "cmd": "rm -f \"$HOME/.opencode/bin/opencode\""
+          "cmd": "rm -f \"$HOME/.opencode/bin/opencode\" \"$HOME/.opencode/bin/opencode2\""
         }
       ],
       "windows": [
