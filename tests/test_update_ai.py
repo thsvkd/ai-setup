@@ -455,3 +455,100 @@ def test_orca_deb_update_installs_only_a_verified_package(tmp_path, monkeypatch,
     monkeypatch.setattr(mod.orca_release, "open_release", lambda url: io.BytesIO(good))
     assert mod.update_orca_deb("/opt/Orca/orca-ide") == "ok"
     assert steps and steps[0][:3] == ["apt-get", "install", "-y"] and steps[0][3].endswith(meta["name"])
+
+
+def _update_ai_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("update_ai_under_test", UPDATE_AI)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _orca_windows_release(mod, monkeypatch, tmp_path, payload, server_state):
+    import base64
+    import hashlib
+    import io
+
+    good = b"official"
+    meta = {"name": "orca-windows-setup.exe", "size": len(good),
+            "sha512": base64.b64encode(hashlib.sha512(good).digest()).decode("ascii")}
+    installed = {"version": "1.0.0"}
+    steps = []
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    monkeypatch.setattr(mod.orca_release, "fetch_manifest", lambda plan: ("9.9.9", meta))
+    monkeypatch.setattr(mod.orca_release, "open_release", lambda url: io.BytesIO(payload))
+    monkeypatch.setattr(mod.orca_release, "installed_version", lambda plan: installed["version"])
+    monkeypatch.setattr(mod.orca_release, "read_receipt", lambda path: {"tool_installs": {"orca_server": {
+        "service_manager": "task-scheduler", "service_root": str(tmp_path / "service"),
+        "server_profile": str(tmp_path / "orca"), "cli": "orca.exe"}}})
+    monkeypatch.setattr(mod.orca_server, "runtime_is_active", lambda profile: True)
+    monkeypatch.setattr(mod.orca_server, "running_runner_state", lambda root: server_state.get("state"))
+    monkeypatch.setattr(mod.orca_server, "app_identity", lambda root: "build-new")
+    monkeypatch.setattr(mod.orca_server, "live_terminal_count", lambda *args: server_state.get("terminals", 0))
+    monkeypatch.setattr(mod, "ORCA_SERVER_SWITCH_SECONDS", 0)
+
+    def run_step(label, argv, **kwargs):
+        steps.append(argv)
+        installed["version"] = "9.9.9"
+        server_state["state"] = server_state.get("after", server_state.get("state"))
+        return True
+
+    monkeypatch.setattr(mod, "run_step", run_step)
+    return steps, good
+
+
+def test_orca_windows_update_runs_only_a_verified_installer_as_an_in_app_update(tmp_path, monkeypatch, capsys):
+    """covers: AI-55 — CLI 만으로 Orca 데스크톱·서버를 올린다. --updated 가 없으면 이전 언인스톨러가 터미널 호스트를 지운다."""
+    mod = _update_ai_module()
+    state = {"state": {"pid": 1, "job": True, "app": str(tmp_path / "service" / "app" / "build-old")},
+             "after": {"pid": 1, "job": True, "app": str(tmp_path / "service" / "app" / "build-new")}}
+    steps, good = _orca_windows_release(mod, monkeypatch, tmp_path, b"tampered", state)
+    assert mod.update_orca_windows() == "failed" and steps == []
+
+    monkeypatch.setattr(mod.orca_release, "open_release", lambda url: __import__("io").BytesIO(good))
+    assert mod.update_orca_windows() == "ok"
+    assert len(steps) == 1 and steps[0][0].endswith("orca-windows-setup.exe") and steps[0][1:] == ["/S", "--updated"]
+    assert "now runs the new version" in capsys.readouterr().out
+
+
+def test_orca_windows_update_reports_a_server_that_waits_for_its_terminals(tmp_path, monkeypatch, capsys):
+    """covers: AI-55 — 서버에 터미널이 있으면 패키지만 올리고 서버는 터미널이 닫힌 뒤 스스로 옮긴다."""
+    mod = _update_ai_module()
+    state = {"state": {"pid": 1, "job": True, "app": str(tmp_path / "service" / "app" / "build-old")}, "terminals": 2}
+    steps, good = _orca_windows_release(mod, monkeypatch, tmp_path, b"official", state)
+    assert mod.update_orca_windows() == "ok" and len(steps) == 1
+    assert "until it has no live terminals" in capsys.readouterr().out
+
+
+def test_orca_windows_update_refuses_while_the_server_runs_from_the_install_directory(tmp_path, monkeypatch, capsys):
+    """covers: AI-55 — 예전 구조의 서버는 설치기가 끝내지 못해 'cannot be closed' 로 멈춘다. 설치기를 띄우지 않는다."""
+    mod = _update_ai_module()
+    steps, _ = _orca_windows_release(mod, monkeypatch, tmp_path, b"official", {"state": None})
+    assert mod.update_orca_windows() == "failed" and steps == []
+    assert "setup --tools orca" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("args,expected", [
+    (r"C:\Users\u\AppData\Local\Programs\Orca\Orca.exe", True),
+    (r"C:\Users\u\AppData\Local\ai-setup\orca-server\app\build-1\resources\bin\orca.exe serve --port 6768", False),
+    (r"C:\Users\u\AppData\Local\Orca\daemon-host-profiles\5e28\1.4.242\build-8\Orca.exe --max-semi-space-size=4", False),
+])
+def test_orca_server_copies_and_terminal_hosts_are_not_sessions_an_update_interrupts(args, expected):
+    """covers: AI-55 — 업데이트가 끝내는 것은 설치 폴더의 데스크톱 앱뿐이다."""
+    mod = _update_ai_module()
+    entry = [item for item in json.loads(mod.CATALOG.read_text(encoding="utf-8")) if item["id"] == "orca"][0]
+    assert mod.runs_target(args, entry) is expected
+
+
+def test_windows_orca_install_is_updated_with_the_official_installer(tmp_path, monkeypatch):
+    """covers: AI-55"""
+    mod = _update_ai_module()
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    monkeypatch.setattr(mod, "platform_key", lambda: "windows")
+    monkeypatch.setattr(mod, "succeeded", lambda argv: pytest.fail("winget was asked about Orca"))
+    entry = [item for item in json.loads(mod.CATALOG.read_text(encoding="utf-8")) if item["id"] == "orca"][0]
+    cli = tmp_path / "Local" / "Programs" / "orca" / "resources" / "bin" / "orca.exe"
+    assert mod.method_for(entry, str(cli))[0] == "user-setup"
+    assert mod.method_for(dict(entry, packages={}), str(tmp_path / "elsewhere" / "orca.exe"))[0] == "none"

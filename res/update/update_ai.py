@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT / "res" / "doctor"))
 sys.path.insert(0, str(ROOT / "res" / "tools"))
 from doctor import kill_tree, locations, platform_key  # noqa: E402
 import orca as orca_release  # noqa: E402
+import orca_server  # noqa: E402
 
 CATALOG = ROOT / "res" / "catalog.json"
 STEP_TIMEOUT = 900
@@ -106,6 +107,11 @@ def method_for(entry, path):
         npm = npm_for(path, packages["npm"])
         if npm:
             return "npm", npm
+    if plat == "windows" and entry["id"] == "orca":
+        # winget 이 설치기에 --updated 를 넘긴다는 보장이 없다(없으면 Orca 터미널 호스트를 지운다). 공식 설치본은 여기서 고른다.
+        root, _ = orca_release.install_paths(orca_release.package_plan("win32", "AMD64"))
+        if os.path.normcase(os.path.abspath(path)).startswith(os.path.normcase(str(root)) + os.sep):
+            return "user-setup", str(root)
     if plat == "windows" and packages.get("winget") and "\\winget\\" in path.lower():
         return "winget", packages["winget"]
     if plat == "macos" and shutil.which("brew"):
@@ -155,7 +161,7 @@ def latest_of(entry, path, method, value):
                 return json.loads(out.stdout).get("latestVersion") or ""
             except ValueError:
                 return ""
-    if method == "deb" and entry["id"] == "orca":
+    if method in ("deb", "user-setup") and entry["id"] == "orca":
         return orca_latest_tag().lstrip("v")
     return ""
 
@@ -354,6 +360,79 @@ def update_orca_deb(path):
         shutil.rmtree(scratch, ignore_errors=True)
 
 
+ORCA_SERVER_SWITCH_SECONDS = 300
+
+
+def orca_server_record():
+    receipt = orca_release.read_receipt(orca_release.home_dir() / ".claude/.claude-code-setup.json")
+    record = (receipt.get("tool_installs") or {}).get("orca_server")
+    return record if isinstance(record, dict) and record.get("service_manager") == "task-scheduler" else None
+
+
+def update_orca_windows():
+    """공식 설치기를 앱 내 업데이트와 같은 `/S --updated` 로 실행한다. 결과: ok·failed.
+
+    --updated 가 없으면 이전 버전의 언인스톨러가 '제거'로 돌아 Orca 터미널 호스트를 끝내고 지운다.
+    ai-setup 서버는 설치 폴더 밖 복사본에서 돌아 설치기가 건드리지 않으며, 터미널이 없을 때 새 판으로 옮긴다.
+    """
+    plan = orca_release.package_plan("win32", "AMD64")
+    root, _ = orca_release.install_paths(plan)
+    server = orca_server_record()
+    if server and orca_server.runtime_is_active(server["server_profile"]) and not (
+            orca_server.running_runner_state(server["service_root"]) or {}).get("app"):
+        say("  {:<14}  the ai-setup Orca server runs from the install directory; the installer cannot close it".format("blocked"))
+        say("  {:<14}  run setup --tools orca first (it moves the server once its terminals are closed)".format(""))
+        return "failed"
+    try:
+        version, meta = orca_release.fetch_manifest(plan)
+        installed = orca_release.installed_version(plan)
+    except (OSError, ValueError, KeyError, RuntimeError):
+        say("  {:<14}  cannot read the latest release or the installed version".format("package"))
+        return "failed"
+    if installed == version:
+        say("  {:<14}  Orca {} is already the latest".format("package", version))
+        return "ok"
+    scratch = tempfile.mkdtemp(prefix="update-ai-orca-")
+    try:
+        say("  {:<14}  download {}".format("package", meta["name"]))
+        try:
+            target = orca_release.download(version, meta, Path(scratch))
+        except (OSError, RuntimeError) as error:
+            say("      download failed: {}".format(error if isinstance(error, RuntimeError) else type(error).__name__))
+            return "failed"
+        run_step("package", [str(target), "/S", "--updated"])
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    try:
+        installed = orca_release.installed_version(plan)
+    except (OSError, ValueError, KeyError, RuntimeError):
+        installed = ""
+    if installed != version:
+        say("  {:<14}  the installer finished but Orca is {} (expected {})".format("package", installed or "unreadable", version))
+        return "failed"
+    say("  {:<14}  reopen the Orca desktop app if it was running".format("desktop"))
+    if server:
+        wait_for_orca_server_switch(server, root)
+    return "ok"
+
+
+def wait_for_orca_server_switch(server, root):
+    """러너가 새 설치본의 복사본으로 옮겨 가는지 지켜본다. 터미널이 있으면 기다리지 않고 알린다."""
+    identity = orca_server.app_identity(root)
+    deadline = time.monotonic() + ORCA_SERVER_SWITCH_SECONDS
+    while True:
+        state = orca_server.running_runner_state(server["service_root"]) or {}
+        if identity and Path(state.get("app") or "").name == identity:
+            say("  {:<14}  the Orca server now runs the new version".format("server"))
+            return True
+        terminals = orca_server.live_terminal_count(orca_server.server_query_cli(server), server["server_profile"])
+        if terminals != 0 or time.monotonic() >= deadline:
+            say("  {:<14}  the Orca server keeps the previous version until it has no live terminals; "
+                "it switches by itself".format("server"))
+            return False
+        time.sleep(5)
+
+
 def claude_user_plugins(path):
     """사용자 범위로 설치된 Claude Code 플러그인 id. marketplace update 는 목록만 갱신하므로 따로 올린다."""
     out = run_quiet([path, "plugin", "list", "--json"])
@@ -471,6 +550,8 @@ def update_target(entry, path, method, value, allow_interrupt=False):
         outcome = run_step("package", ["brew", "upgrade"] + (["--cask"] if method == "brew_cask" else []) + [value])
     elif method == "deb" and entry["id"] == "orca":
         outcome = update_orca_deb(path)
+    elif method == "user-setup" and entry["id"] == "orca":
+        outcome = update_orca_windows()
     elif method == "default":
         outcome = run_step("self-update", [path] + list(value[1:]))
     else:

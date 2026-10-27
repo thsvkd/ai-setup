@@ -461,6 +461,10 @@
           "/opt/Orca/",
           "Orca.app/Contents/MacOS/",
           "\\Programs\\orca\\"
+        ],
+        "ignore": [
+          "\\ai-setup\\orca-server\\app\\",
+          "\\Orca\\daemon-host-profiles\\"
         ]
       }
     },

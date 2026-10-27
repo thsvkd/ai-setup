@@ -56,7 +56,29 @@ try {
             $definition.Principal.UserId
         } else { $account.Translate([Security.Principal.SecurityIdentifier]).Value }
         if ($sid -ne $data.callerSid) { throw 'The registered Orca task belongs to another user.' }
-        if ($data.operation -eq 'end') { $registered.Stop(0) } else { $folder.DeleteTask($data.task, 0) }
+        if ($data.operation -eq 'end') {
+            # Job 이 없던 예전 러너는 작업을 멈춰도 자기만 끝나고 서버 트리를 남긴다. 멈추기 전에 이 러너와
+            # 그 자손(부모보다 늦게 생긴 프로세스만: PID 재사용 방지)을 기록해 두고 그 트리만 끝낸다.
+            $all = @(Get-CimInstance Win32_Process)
+            $tree = [Collections.Generic.List[object]]::new()
+            $all | Where-Object {
+                $_.Name -like 'python*.exe' -and $_.CommandLine -and $_.CommandLine.IndexOf($data.runner, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+                $_.ProcessId -ne $PID
+            } | ForEach-Object { $tree.Add($_) }
+            for ($i = 0; $i -lt $tree.Count; $i++) {
+                $parent = $tree[$i]
+                $all | Where-Object {
+                    $_.ParentProcessId -eq $parent.ProcessId -and $_.CreationDate -ge $parent.CreationDate
+                } | ForEach-Object { $tree.Add($_) }
+            }
+            try { $registered.Stop(0) } catch { }
+            foreach ($item in $tree) {
+                $now = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $item.ProcessId) -ErrorAction SilentlyContinue
+                if ($now -and $now.CreationDate -eq $item.CreationDate) {
+                    Stop-Process -Id $item.ProcessId -Force -ErrorAction SilentlyContinue
+                }
+            }
+        } else { $folder.DeleteTask($data.task, 0) }
     } else {
         throw 'Unsupported Orca task operation.'
     }
@@ -95,6 +117,43 @@ def protect_file(path):
         [str(system / 'icacls.exe'), str(path), '/grant:r', '*' + current_user_sid() + ':(F)'],
         check=True, capture_output=True, timeout=30,
     )
+
+
+def contain_process_tree():
+    """러너를 kill-on-close Job 에 넣는다. 러너가 어떻게 끝나든 남은 자손도 함께 끝난다.
+
+    schtasks /End 는 작업이 띄운 러너만 TerminateProcess 하고 자손은 그대로 둔다.
+    Orca 는 터미널 호스트를 breakaway 없이 detached 로 띄우므로 이 Job 에 함께 묶인다.
+    """
+    from ctypes import wintypes
+
+    class Basic(ctypes.Structure):
+        _fields_ = [('PerProcessUserTimeLimit', ctypes.c_int64), ('PerJobUserTimeLimit', ctypes.c_int64),
+                    ('LimitFlags', wintypes.DWORD), ('MinimumWorkingSetSize', ctypes.c_size_t),
+                    ('MaximumWorkingSetSize', ctypes.c_size_t), ('ActiveProcessLimit', wintypes.DWORD),
+                    ('Affinity', ctypes.c_size_t), ('PriorityClass', wintypes.DWORD),
+                    ('SchedulingClass', wintypes.DWORD)]
+
+    class Extended(ctypes.Structure):
+        _fields_ = [('BasicLimitInformation', Basic), ('IoInfo', ctypes.c_uint64 * 6),
+                    ('ProcessMemoryLimit', ctypes.c_size_t), ('JobMemoryLimit', ctypes.c_size_t),
+                    ('PeakProcessMemoryUsed', ctypes.c_size_t), ('PeakJobMemoryUsed', ctypes.c_size_t)]
+
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    kernel.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    job = kernel.CreateJobObjectW(None, None)
+    info = Extended()
+    info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if (not job
+            or not kernel.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))
+            or not kernel.AssignProcessToJobObject(job, kernel.GetCurrentProcess())):
+        raise OSError(ctypes.get_last_error(), 'Could not tie the Orca server to its runner')
+    # 핸들은 상속되지 않고 닫지도 않는다. 러너가 끝날 때 커널이 닫으며 Job 을 끝낸다.
+    return job
 
 
 def change_task(plan, operation):

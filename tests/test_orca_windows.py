@@ -48,3 +48,37 @@ if ($rules.Count -eq 0) { exit 1 }
     )
     assert result.returncode == 0, result.stderr
     assert path.read_text(encoding="utf-8") == "fixture only"
+
+
+def _alive(pid):
+    listed = subprocess.run(["tasklist", "/FI", "PID eq {}".format(pid), "/FO", "CSV", "/NH"],
+                            capture_output=True, text=True, timeout=30)
+    return '"{}"'.format(pid) in listed.stdout
+
+
+def test_runner_process_tree_ends_when_the_runner_is_terminated():
+    """covers: AI-50 — schtasks /End 는 러너만 TerminateProcess 한다. 자손이 남으면 안 된다."""
+    import time
+    runner_code = (
+        "import subprocess, sys, time\n"
+        "sys.path.insert(0, {!r})\n"
+        "import orca_windows\n"
+        "orca_windows.contain_process_tree()\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'],\n"
+        "                         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS)\n"
+        "print(child.pid, flush=True)\n"
+        "time.sleep(120)\n"
+    ).format(str(Path(spec.origin).parent))
+    runner = subprocess.Popen([sys.executable, "-c", runner_code], stdout=subprocess.PIPE, text=True)
+    try:
+        grandchild = int(runner.stdout.readline())
+        assert _alive(grandchild)
+        runner.kill()
+        runner.wait(timeout=30)
+        deadline = time.monotonic() + 10
+        while _alive(grandchild) and time.monotonic() < deadline:
+            time.sleep(0.5)
+        assert not _alive(grandchild)
+    finally:
+        if runner.poll() is None:
+            runner.kill()

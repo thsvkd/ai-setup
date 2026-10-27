@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 import getpass
+import hashlib
 import uuid
 from pathlib import Path
 from xml.etree import ElementTree
@@ -170,23 +171,32 @@ def service_document(plan, python, runner, config):
 def run_service(config):
     env = os.environ.copy()
     env["ORCA_USER_DATA_PATH"] = str(config["server_profile"])
-    command = [
-        str(config["cli"]),
-        *service_command(
-            config,
-            config["pairing_address"],
-            port=config.get("port", 6768),
-            pairing_scope=config.get("pairing_scope", "runtime"),
-        ),
-    ]
+    arguments = service_command(
+        config,
+        config["pairing_address"],
+        port=config.get("port", 6768),
+        pairing_scope=config.get("pairing_scope", "runtime"),
+    )
     if config.get("pairing_scope") == "mobile" and config.get("pairing_codes_path"):
         write_pairing_codes(
             config["pairing_codes_path"],
             config.get("desktop_environment_id", "unknown"),
             None,
         )
-    process = subprocess.Popen(
-        command,
+    if config.get("app_copies"):
+        return supervise_app_copies(config, arguments, env)
+    process = start_server(config["cli"], arguments, env)
+    try:
+        relay_server_output(config, process)
+        return process.wait()
+    except KeyboardInterrupt:
+        stop_server_process(process)
+        return 0
+
+
+def start_server(cli, arguments, env):
+    return subprocess.Popen(
+        [str(cli), *arguments],
         cwd=str(Path.home()),
         env=env,
         stdout=subprocess.PIPE,
@@ -198,14 +208,198 @@ def run_service(config):
         start_new_session=os.name != "nt",
         creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0,
     )
+
+
+def relay_server_output(config, process):
+    for line in process.stdout:
+        save_mobile_pairing_offer(config, line)
+        print(redact_server_line(line.rstrip("\r\n")), flush=True)
+
+
+REFRESH_POLL_SECONDS = 60
+RESTART_DELAY_SECONDS = 30
+FAILED_COPY_RETRY_SECONDS = 3600
+# 설치기는 언인스톨러를 앱 파일을 다 푼 뒤 마지막에 쓰고, 업데이트 첫머리의 이전 버전 제거에서 지운다.
+APP_IDENTITY_FILES = ("Orca.exe", "resources/app.asar", "Uninstall Orca.exe")
+
+
+def contain_process_tree():
+    if os.name != "nt":
+        return None
+    from orca_windows import contain_process_tree as contain
     try:
-        for line in process.stdout:
-            save_mobile_pairing_offer(config, line)
-            print(redact_server_line(line.rstrip("\r\n")), flush=True)
-        return process.wait()
+        return contain()
+    except OSError as error:
+        print("Orca server processes may outlive this runner: " + str(error), flush=True)
+        return None
+
+
+def supervise_app_copies(config, arguments, env):
+    """Windows: 설치 폴더 밖 복사본에서 서버를 돌린다.
+
+    Orca 설치기(앱 내 업데이트 포함)는 경로가 설치 폴더로 시작하는 프로세스를 모두 강제 종료하려 하고,
+    세션 0 의 서버는 그 권한으로 끝낼 수 없어 업데이트가 멈춘다. 새 설치본으로는 터미널이 없을 때만 옮긴다.
+    """
+    job = contain_process_tree()  # noqa: F841 — 러너가 살아 있는 동안 Job 핸들을 쥔다
+    source = Path(config["cli"]).parents[2]
+    copies = Path(config["app_copies"])
+    root = copies.parent
+    app = refresh_app_snapshot(source, copies)
+    process = None
+    try:
+        while True:
+            write_runner_state(root, job, app)
+            if app is None:
+                print("Orca server runs from the install directory; Orca updates cannot finish while it runs", flush=True)
+            cli = app_cli(app) if app else Path(config["cli"])
+            process = start_server(cli, arguments, env)
+            relay = threading.Thread(target=relay_server_output, args=(config, process), daemon=True)
+            relay.start()
+            code, ready = watch_for_installed_update(config, process, source, copies, app, cli)
+            relay.join(timeout=5)
+            if ready is not None:
+                if app is not None:
+                    shutil.rmtree(str(app), ignore_errors=True)  # 멈춘 서버가 쓰던 복사본
+                app = ready
+                continue
+            if code == 0:
+                return 0
+            # 러너가 끝나면 Job 이 터미널 호스트까지 끝내므로 서버만 같은 복사본으로 다시 띄운다.
+            print("Orca server exited with {}; restarting in {} seconds".format(code, RESTART_DELAY_SECONDS), flush=True)
+            time.sleep(RESTART_DELAY_SECONDS)
+            if not (root / ".ai-setup-managed").is_file():
+                return 0  # 그사이 서비스가 제거됐다. 지운 디렉터리를 다시 만들지 않는다.
+            if app is None or not app.is_dir():
+                app = refresh_app_snapshot(source, copies)
     except KeyboardInterrupt:
-        stop_server_process(process)
+        if process is not None:
+            stop_server_process(process)
         return 0
+
+
+def app_cli(app):
+    return Path(app) / "resources" / "bin" / "orca.exe"
+
+
+RUNNER_STATE = "runner-state.json"
+
+
+def write_runner_state(root, job, app):
+    """지금 도는 러너가 무엇인지 남긴다. 파일이 아니라 실행 중인 러너를 판정하는 근거다."""
+    state = {"pid": os.getpid(), "job": job is not None, "app": str(app) if app else None}
+    pending = Path(root) / (RUNNER_STATE + ".tmp")
+    pending.write_text(json.dumps(state), encoding="utf-8")
+    os.replace(str(pending), str(Path(root) / RUNNER_STATE))
+
+
+def running_runner_state(root):
+    """살아 있는 러너가 남긴 상태. 예전 러너는 남기지 않으므로 None 이다."""
+    try:
+        state = json.loads((Path(root) / RUNNER_STATE).read_text(encoding="utf-8"))
+        pid = int(state["pid"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return state if isinstance(state, dict) and pid > 0 and process_is_alive(pid) else None
+
+
+def watch_for_installed_update(config, process, source, copies, app, cli):
+    """(종료 코드, None) 또는 새 복사본으로 옮기려고 서버를 멈췄으면 (None, 새 복사본).
+
+    새 설치본은 서버가 도는 동안 미리 복사하고, 복사가 끝난 뒤 터미널이 없을 때만 멈춘다.
+    복사에 실패한 빌드는 설치본이 다시 바뀔 때까지 재시도하지 않는다.
+    """
+    seen = failed = ready = None
+    failed_at = 0
+    while True:
+        try:
+            return process.wait(timeout=REFRESH_POLL_SECONDS), None
+        except subprocess.TimeoutExpired:
+            pass
+        installed = app_identity(source)
+        if installed == failed and time.monotonic() - failed_at >= FAILED_COPY_RETRY_SECONDS:
+            failed = None
+        if installed is None or (app is not None and installed == app.name) or installed == failed:
+            seen = None
+            continue
+        if installed != seen:  # 설치가 끝났는지 한 주기 더 지켜본다
+            seen = installed
+            continue
+        if ready is None or ready.name != installed:
+            ready = refresh_app_snapshot(source, copies, keep=app)
+            if ready is None or ready.name != installed:
+                failed, failed_at, ready = installed, time.monotonic(), None
+                continue
+        if live_terminal_count(cli, config["server_profile"]) == 0:
+            stop_server_process(process)
+            return None, ready
+
+
+def app_identity(app):
+    """설치본 빌드 식별자. 식별 파일이 하나라도 없으면 설치 중으로 보고 None."""
+    stamp = hashlib.sha256()
+    try:
+        for name in APP_IDENTITY_FILES:
+            info = (Path(app) / name).stat()
+            stamp.update("{}:{}:{};".format(name, info.st_size, info.st_mtime_ns).encode("utf-8"))
+    except OSError:
+        return None
+    return "build-" + stamp.hexdigest()[:16]
+
+
+def refresh_app_snapshot(source, copies, keep=None):
+    """설치본과 같은 빌드의 복사본을 돌려준다. 만들 수 없으면 마지막 완성본, 그것도 없으면 None.
+
+    keep 은 지금 서버가 쓰는 복사본이라 정리에서 뺀다.
+    """
+    copies = Path(copies)
+    identity = app_identity(source)
+    current = None
+    if identity:
+        target = copies / identity
+        if (target / ".complete").is_file():
+            current = target
+        else:
+            pending = copies / (".tmp-" + identity)
+            try:
+                copies.mkdir(exist_ok=True)  # 서비스가 제거됐으면 다시 만들지 않는다
+                shutil.rmtree(str(pending), ignore_errors=True)
+                shutil.copytree(str(source), str(pending))
+                if app_identity(source) != identity:
+                    raise OSError("Orca changed while it was being copied")
+                (pending / ".complete").write_text(identity, encoding="utf-8")
+                os.replace(str(pending), str(target))
+                current = target
+            except OSError as error:
+                shutil.rmtree(str(pending), ignore_errors=True)
+                print("Could not copy Orca for the server: " + str(error), flush=True)
+    if current is None and copies.is_dir():
+        finished = [item for item in copies.glob("build-*") if (item / ".complete").is_file()]
+        current = max(finished, key=lambda item: item.stat().st_mtime, default=None)
+    if copies.is_dir():
+        # 서버가 떠나며 잠금이 남은 복사본은 다음 기회에 지운다.
+        for item in copies.iterdir():
+            if item not in (current, keep):
+                shutil.rmtree(str(item), ignore_errors=True)
+    return current
+
+
+def live_terminal_count(cli, server_profile):
+    """서버의 살아 있는 Orca 터미널 수. 확인하지 못하면 None 이며, 호출자는 활성으로 다룬다."""
+    if not cli:
+        return None
+    env = os.environ.copy()
+    env["ORCA_USER_DATA_PATH"] = str(server_profile)
+    try:
+        result = subprocess.run(
+            [str(cli), "terminal", "list", "--json"], check=False, capture_output=True,
+            text=True, encoding="utf-8", errors="replace", env=env, timeout=60,
+        )
+        payload = json.loads(result.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    listed = payload.get("result") if isinstance(payload, dict) and payload.get("ok") else None
+    count = listed.get("totalCount") if isinstance(listed, dict) and not result.returncode else None
+    return count if isinstance(count, int) and not isinstance(count, bool) else None
 
 
 def write_pairing_codes(path, desktop_environment_id, mobile_url):
@@ -350,27 +544,54 @@ def install_user_service(plan, username=None, uid=None):
 STOP_WAIT_SECONDS = 30
 
 
+def server_query_cli(record):
+    """서버에 물을 CLI. 러너가 지금 쓰는 복사본이 있으면 그 판의 CLI 를, 없으면 설치본 CLI 를 쓴다."""
+    state = running_runner_state(record["service_root"]) or {}
+    if state.get("app") and app_cli(state["app"]).is_file():
+        return app_cli(state["app"])
+    return record.get("cli")
+
+
+def runner_has_process_job(record):
+    """지금 도는 러너가 Job 을 걸었는가. Job 이 없는 예전 러너는 /End 뒤 서버 트리를 남긴다."""
+    return bool((running_runner_state(record["service_root"]) or {}).get("job"))
+
+
 def stop_managed_service(record, service):
-    """ai-setup 이 등록한 서비스만 멈춘다. 다른 런타임은 건드리지 않는다."""
+    """ai-setup 이 등록한 서비스만 멈춘다. 다른 런타임은 건드리지 않는다.
+
+    서비스를 멈추면 Orca 터미널 호스트도 함께 끝나므로 터미널이 있거나 확인할 수 없으면 멈추지 않는다.
+    """
+    if live_terminal_count(server_query_cli(record), record["server_profile"]) != 0:
+        raise RuntimeError(
+            "The Orca server has live terminals, or they could not be checked; "
+            "close them (or stop the service yourself) and retry"
+        )
     manager = record["service_manager"]
-    if manager == "task-scheduler":
-        command = ["schtasks.exe", "/End", "/TN", record["service_task"]]
-    elif manager == "launchd":
-        command = ["launchctl", "bootout", "gui/{}".format(os.getuid()), str(service)]
-    elif manager == "systemd-user":
-        command = ["systemctl", "--user", "stop", service.name]
+    elevated = {
+        "task": record.get("service_task"), "service": service,
+        "runner": Path(record["service_root"]) / "orca-server-runner.py",
+    }
+    if manager == "task-scheduler" and not runner_has_process_job(record):
+        # 예전 러너는 /End 로 자기만 끝나고 서버 트리를 남긴다. 승격한 end 가 멈추기 전에 러너의 자손을
+        # 기록해 두고 그 트리만 끝낸다. 경로로 찾지 않으므로 ai-setup 이 띄우지 않은 서버는 건드리지 않는다.
+        result = change_windows_task(elevated, "end")
     else:
-        raise RuntimeError("Unsupported Orca service manager; preserving its files")
-    result = subprocess.run(
-        command, check=False, capture_output=True,
-        text=True, encoding="oem" if os.name == "nt" else "utf-8", errors="replace", input="", timeout=60,
-    )
-    if result.returncode and manager == "task-scheduler":
-        # 승격해 등록한 작업은 일반 권한으로 멈추지 못할 수 있다. 등록·삭제와 같은 동의 경로로 다시 시도한다.
-        result = change_windows_task({
-            "task": record["service_task"], "service": service,
-            "runner": Path(record["service_root"]) / "orca-server-runner.py",
-        }, "end")
+        if manager == "task-scheduler":
+            command = ["schtasks.exe", "/End", "/TN", record["service_task"]]
+        elif manager == "launchd":
+            command = ["launchctl", "bootout", "gui/{}".format(os.getuid()), str(service)]
+        elif manager == "systemd-user":
+            command = ["systemctl", "--user", "stop", service.name]
+        else:
+            raise RuntimeError("Unsupported Orca service manager; preserving its files")
+        result = subprocess.run(
+            command, check=False, capture_output=True,
+            text=True, encoding="oem" if os.name == "nt" else "utf-8", errors="replace", input="", timeout=60,
+        )
+        if result.returncode and manager == "task-scheduler":
+            # 승격해 등록한 작업은 일반 권한으로 멈추지 못할 수 있다. 등록·삭제와 같은 동의 경로로 다시 시도한다.
+            result = change_windows_task(elevated, "end")
     if result.returncode:
         raise RuntimeError(
             "Could not stop the ai-setup Orca service; preserving it: " + (result.stderr or "").strip()
@@ -401,16 +622,22 @@ def remove_user_service(record):
         # 서비스가 만든 것: launchd 로그, 중단된 페어링 파일 쓰기
         root / "server.log",
         root / "pairing-codes.txt.tmp",
+        root / RUNNER_STATE,
+        root / (RUNNER_STATE + ".tmp"),
         marker,
         service,
     )
-    if any(path.is_symlink() for path in owned_files):
+    copies = root / "app"
+    if copies.is_symlink() or any(path.is_symlink() for path in owned_files):
         raise RuntimeError("An ai-setup Orca service file was replaced with a symbolic link; preserving its files")
     if not service.is_file() or str(runner).casefold() not in service.read_text(encoding="utf-8").casefold():
         raise RuntimeError("Orca service definition changed; preserving it")
     # 소유를 확인한 서비스가 돌고 있으면 먼저 멈춘다. 멈춘 뒤에도 남는 서버는 남의 것이라 보존한다.
-    if runtime_is_active(record["server_profile"]):
+    # 서버가 죽고 러너만 재시작을 기다리는 중일 수도 있다. 러너를 먼저 끝내야 지운 복사본을 다시 만들지 않는다.
+    if runtime_is_active(record["server_profile"]) or running_runner_state(root):
         stop_managed_service(record, service)
+    if copies.is_dir():
+        shutil.rmtree(str(copies))
     manager = record["service_manager"]
     if manager == "task-scheduler":
         query = subprocess.run(
@@ -496,6 +723,11 @@ def runtime_is_active(server_profile):
         pid = int(runtime["pid"])
     except (OSError, ValueError, KeyError, TypeError):
         return port_is_listening()
+    return process_is_alive(pid) or port_is_listening()
+
+
+def process_is_alive(pid):
+    """권한이 없어 열지 못하는 프로세스도 살아 있는 것으로 본다. Windows 의 os.kill 은 종료라 쓰지 않는다."""
     if os.name == "nt":
         import ctypes
         from ctypes import wintypes
@@ -507,12 +739,12 @@ def runtime_is_active(server_profile):
         kernel.CloseHandle.argtypes = [wintypes.HANDLE]
         handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
         if not handle:
-            return ctypes.get_last_error() != 87 or port_is_listening()
+            return ctypes.get_last_error() != 87
         try:
             exit_code = wintypes.DWORD()
             if not kernel.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
                 return True
-            return exit_code.value == 259 or port_is_listening()  # STILL_ACTIVE
+            return exit_code.value == 259  # STILL_ACTIVE
         finally:
             kernel.CloseHandle(handle)
     try:
@@ -521,7 +753,7 @@ def runtime_is_active(server_profile):
     except PermissionError:
         return True
     except OSError:
-        return port_is_listening()
+        return False
 
 
 def port_is_listening(port=6768):
@@ -572,7 +804,7 @@ def save_pairing_codes(plan, pairings):
     return path
 
 
-def wait_for_remote_environment(cli, client_profile, environment_id, timeout=90):
+def wait_for_remote_environment(cli, client_profile, environment_id, timeout=300):
     deadline = time.monotonic() + timeout
     env = os.environ.copy()
     env["ORCA_USER_DATA_PATH"] = str(client_profile)
@@ -596,7 +828,7 @@ def wait_for_remote_environment(cli, client_profile, environment_id, timeout=90)
     raise RuntimeError("The Orca desktop client could not reach its server")
 
 
-def wait_for_mobile_pairing_code(path, timeout=90):
+def wait_for_mobile_pairing_code(path, timeout=300):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -664,6 +896,35 @@ def validate_existing_service_bundle(record, plan):
         raise RuntimeError("Orca client setup receipt is incomplete; preserving the active server")
 
 
+def refresh_service_bundle(plan, source_path):
+    """기존 서비스의 러너·헬퍼·설정을 이 ai-setup 판으로 맞춘다. 예약 작업 정의와 페어링은 그대로 둔다.
+
+    바뀐 것이 있으면 True. 돌고 있는 러너는 다음 시작부터 새 코드를 쓴다.
+    """
+    root = Path(plan["root"])
+    files = [(Path(source_path), Path(plan["runner"]))]
+    if plan["manager"] == "task-scheduler":
+        helper = Path(__file__).with_name("orca_windows.py")
+        files.append((helper, root / helper.name))
+    changed = False
+    for source, target in files:
+        if target.is_symlink():
+            raise RuntimeError("An ai-setup Orca service file was replaced with a symbolic link; preserving it")
+        if not target.is_file() or target.read_bytes() != source.read_bytes():
+            shutil.copyfile(str(source), str(target))
+            changed = True
+    if plan["manager"] == "task-scheduler":
+        config_path = root / "orca-server.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        if config.get("app_copies") != str(root / "app"):
+            config["app_copies"] = str(root / "app")
+            pending = config_path.with_name(config_path.name + ".tmp")
+            pending.write_text(json.dumps(config, indent=2), encoding="utf-8")
+            os.replace(str(pending), str(config_path))
+            changed = True
+    return changed
+
+
 def preserve_client_environments(server_profile, client_profile):
     source = Path(server_profile) / "orca-environments.json"
     target = Path(client_profile) / "orca-environments.json"
@@ -719,6 +980,15 @@ def setup_server_client(
         record["state"] = "configuring"
         if on_record:
             on_record(record)
+        changed = refresh_service_bundle(plan, source_path)
+        legacy = plan["manager"] == "task-scheduler" and not runner_has_process_job(record)
+        if runtime_active and (changed or legacy):
+            # 돌고 있는 러너는 예전 코드다. 서버를 멈추면 터미널 호스트도 끝나므로 터미널이 없을 때만 다시 띄운다.
+            if live_terminal_count(server_query_cli(dict(record, cli=record.get("cli") or str(cli))), profiles["server"]) == 0:
+                stop_managed_service(dict(record, cli=record.get("cli") or str(cli)), Path(plan["service"]))
+                runtime_active = False
+            else:
+                print("The Orca server has live terminals; its updated service files apply when it next starts.", flush=True)
         if not runtime_active:
             install_user_service(plan)
         if not managed_user_service_is_registered(plan):
@@ -860,6 +1130,7 @@ def write_service_bundle(plan, cli, profiles, pairing_address, python, source_pa
         "desktop_environment_id": (pairings or {}).get("desktop_environment_id", "unknown"),
     }
     if plan["manager"] == "task-scheduler":
+        config["app_copies"] = str(root / "app")
         helper = Path(__file__).with_name("orca_windows.py")
         target = root / helper.name
         if target.is_symlink():
