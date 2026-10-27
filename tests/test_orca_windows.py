@@ -82,3 +82,43 @@ def test_runner_process_tree_ends_when_the_runner_is_terminated():
     finally:
         if runner.poll() is None:
             runner.kill()
+
+
+def test_legacy_runner_cleanup_ends_only_that_runner_tree():
+    """covers: AI-52b — 승격 헬퍼의 트리 정리 함수를 승격 없이 실제 프로세스에 대고 실행한다."""
+    import time
+    runner_path = r"C:\ai-setup-test\service\orca-server-runner.py"
+    sleeper = "import time; time.sleep(120)"
+    # 러너(명령줄에 러너 경로) -> 서버 -> 터미널 호스트, 그리고 같은 이름 패턴의 무관한 python
+    runner_code = (
+        "import subprocess, sys, time\n"
+        "server = subprocess.Popen([sys.executable, '-c', 'import subprocess, sys, time; "
+        "h = subprocess.Popen([sys.executable, \\'-c\\', \\'import time; time.sleep(120)\\']); "
+        "print(h.pid, flush=True); time.sleep(120)'], stdout=subprocess.PIPE, text=True)\n"
+        "print(server.pid, server.stdout.readline().strip(), flush=True)\n"
+        "time.sleep(120)\n"
+    )
+    runner = subprocess.Popen([sys.executable, "-c", runner_code, runner_path], stdout=subprocess.PIPE, text=True)
+    bystander = subprocess.Popen([sys.executable, "-c", sleeper])
+    try:
+        server_pid, host_pid = (int(value) for value in runner.stdout.readline().split())
+        assert all(_alive(pid) for pid in (runner.pid, server_pid, host_pid))
+        script = orca_windows.TREE_FUNCTIONS + (
+            "\n$tree = Get-OrcaRunnerTree '{}'\nStop-OrcaRunnerTree $tree\n"
+            "$tree | ForEach-Object {{ $_.ProcessId }}\n"
+        ).format(runner_path)
+        result = subprocess.run(
+            [str(orca_windows.powershell_path()), "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+        )
+        assert result.returncode == 0, result.stderr
+        listed = {int(line) for line in result.stdout.split() if line.strip().isdigit()}
+        assert {runner.pid, server_pid, host_pid} <= listed and bystander.pid not in listed
+        deadline = time.monotonic() + 10
+        while any(_alive(pid) for pid in (runner.pid, server_pid, host_pid)) and time.monotonic() < deadline:
+            time.sleep(0.5)
+        assert not any(_alive(pid) for pid in (runner.pid, server_pid, host_pid))
+        assert _alive(bystander.pid)
+    finally:
+        for process in (runner, bystander):
+            process.kill()

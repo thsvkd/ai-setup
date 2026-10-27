@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -1238,8 +1239,9 @@ def test_windows_service_waits_for_no_live_terminals_before_moving_to_an_updated
         queries.append((Path(server_cli), Path(profile)))
         return counts.pop(0)
 
-    def stop(process):
+    def stop(process, force=False):
         # 멈추기 전에 새 복사본이 이미 완성돼 있어야 한다: 복사하는 동안 서버가 내려가 있지 않는다.
+        assert force, "the switch right after a 0-terminal check must not give the server time for new terminals"
         stops.append([item.name for item in copies.iterdir() if (item / ".complete").is_file()])
         process.stopped = True
 
@@ -1275,7 +1277,7 @@ def _watch(tmp_path, monkeypatch, identities, copy_fails=False, polls=6):
         return keep if copy_fails else copies / "build-new"
 
     monkeypatch.setattr(orca_server, "refresh_app_snapshot", refresh)
-    monkeypatch.setattr(orca_server, "stop_server_process", lambda process: setattr(process, "stopped", True))
+    monkeypatch.setattr(orca_server, "stop_server_process", lambda process, **kwargs: setattr(process, "stopped", True))
     process = _ServeProcess(polls_before_exit=polls)
     result = orca_server.watch_for_installed_update(
         {"server_profile": str(tmp_path / "orca")}, process, install, copies, app, orca_server.app_cli(app))
@@ -1304,7 +1306,7 @@ def test_windows_service_moves_off_the_install_directory_once_a_copy_succeeds(tm
     copies = _service_copies(tmp_path)
     monkeypatch.setattr(orca_server, "REFRESH_POLL_SECONDS", 0)
     monkeypatch.setattr(orca_server, "live_terminal_count", lambda *args: 0)
-    monkeypatch.setattr(orca_server, "stop_server_process", lambda process: setattr(process, "stopped", True))
+    monkeypatch.setattr(orca_server, "stop_server_process", lambda process, **kwargs: setattr(process, "stopped", True))
     code, ready = orca_server.watch_for_installed_update(
         {"server_profile": str(tmp_path / "orca")}, _ServeProcess(polls_before_exit=9), install, copies, None, cli)
     assert code is None and (ready / ".complete").is_file()
@@ -1377,7 +1379,7 @@ def test_windows_service_falls_back_to_the_install_when_no_copy_exists(tmp_path,
 
 @pytest.mark.parametrize("count", [1, None])
 def test_stopping_the_service_refuses_while_the_server_has_live_or_unknown_terminals(tmp_path, monkeypatch, count):
-    """covers: AI-52 — 제거·적용이 서버를 멈추면 터미널 호스트까지 끝난다."""
+    """covers: AI-52a — 제거·적용이 서버를 멈추면 터미널 호스트까지 끝난다."""
     runner, service, record = _systemd_service(tmp_path)
     record["cli"] = "orca"
     monkeypatch.setattr(orca_server, "runtime_is_active", lambda profile: True)
@@ -1410,7 +1412,7 @@ def test_live_terminal_count_reads_the_server_profile_and_treats_failures_as_unk
 
 @pytest.mark.parametrize("state", [None, {"job": False}, {"job": True}])
 def test_windows_stop_ends_a_legacy_runner_tree_through_the_elevated_helper_only(tmp_path, monkeypatch, state):
-    """covers: AI-52 — Job 을 걸지 않은(예전) 러너는 /End 뒤에도 서버를 남긴다. 승격한 end 가 그 러너의 트리만 끝낸다.
+    """covers: AI-52b — Job 을 걸지 않은(예전) 러너는 /End 뒤에도 서버를 남긴다. 승격한 end 가 그 러너의 트리만 끝낸다.
     Job 을 건 러너는 일반 /End 로 충분하며, 그 뒤에도 남는 서버는 남의 것이라 끊지 않는다(AI-48).
     판정은 설정 파일이 아니라 실행 중인 러너가 남긴 상태로 한다: 재실행이 파일만 바꿔 둘 수 있다."""
     root = tmp_path / "service"
@@ -1466,7 +1468,8 @@ def test_stop_asks_the_running_copy_when_the_installed_cli_is_gone(tmp_path, mon
     assert asked == [running / "resources" / "bin" / "orca.exe"]
 
 
-def test_runner_records_itself_and_exits_instead_of_recreating_a_removed_service(tmp_path, monkeypatch):
+@pytest.mark.parametrize("job", ["job", None])
+def test_runner_records_itself_and_exits_instead_of_recreating_a_removed_service(tmp_path, monkeypatch, job):
     """제거가 러너의 재시작 대기 중에 끝나면, 러너는 지운 서비스 디렉터리를 다시 만들지 않고 끝난다."""
     cli = _orca_install(tmp_path / "Programs" / "orca")
     copies = _service_copies(tmp_path)
@@ -1482,14 +1485,15 @@ def test_runner_records_itself_and_exits_instead_of_recreating_a_removed_service
     def removed_while_waiting(seconds):
         shutil.rmtree(str(root))
 
-    monkeypatch.setattr(orca_server, "contain_process_tree", lambda: "job")
+    monkeypatch.setattr(orca_server, "contain_process_tree", lambda: job)
     monkeypatch.setattr(orca_server.subprocess, "Popen", popen)
     monkeypatch.setattr(orca_server.time, "sleep", removed_while_waiting)
     assert orca_server.run_service({
         "cli": str(cli), "server_profile": str(tmp_path / "orca"),
         "pairing_address": "100.64.1.20", "app_copies": str(copies),
     }) == 0
-    assert len(states) == 1 and states[0]["job"] is True and states[0]["pid"] == __import__("os").getpid()
+    # covers: AI-50 — Job 을 만들지 못한 러너는 job:false 를 남겨 승격한 end 로만 멈추게 한다.
+    assert len(states) == 1 and states[0]["job"] is (job is not None) and states[0]["pid"] == __import__("os").getpid()
     assert Path(states[0]["app"]).parent == copies
     assert not root.exists()
 
@@ -1659,3 +1663,75 @@ def test_remove_user_service_stops_a_runner_waiting_to_restart_its_crashed_serve
     monkeypatch.setattr(orca_server.subprocess, "run", lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "", ""))
     orca_server.remove_user_service(record)
     assert stopped == [True] and not runner.exists()
+
+
+def test_stopping_a_service_whose_server_is_down_does_not_ask_about_terminals(tmp_path, monkeypatch):
+    """covers: AI-52a — 크래시 뒤 재시작을 기다리는 러너만 남았으면 끊길 터미널이 없다. 제거가 영구히 막히면 안 된다."""
+    runner, service, record = _systemd_service(tmp_path)
+    record["cli"] = "orca"
+    stopped = []
+    monkeypatch.setattr(orca_server, "runtime_is_active", lambda profile: False)
+    monkeypatch.setattr(orca_server, "live_terminal_count", lambda cli, profile: pytest.fail("asked a server that is down"))
+    monkeypatch.setattr(orca_server.subprocess, "run",
+                        lambda command, **kwargs: stopped.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
+    orca_server.stop_managed_service(record, service)
+    assert stopped == [["systemctl", "--user", "stop", service.name]]
+
+
+def test_a_runner_state_whose_pid_was_reused_is_not_a_running_runner(tmp_path):
+    """covers: AI-52a — 러너가 죽고 같은 PID 를 다른 프로세스가 받으면 그 프로세스를 러너로 보지 않는다."""
+    started = orca_server.process_started(os.getpid())
+    if started is None:
+        pytest.skip("process start time is not readable on this platform")
+    state = tmp_path / orca_server.RUNNER_STATE
+    state.write_text(json.dumps({"pid": os.getpid(), "started": started, "job": True, "app": None}))
+    assert orca_server.running_runner_state(tmp_path)["pid"] == os.getpid()
+    state.write_text(json.dumps({"pid": os.getpid(), "started": started + 1, "job": True, "app": None}))
+    assert orca_server.running_runner_state(tmp_path) is None
+
+
+def test_windows_service_waits_instead_of_running_a_half_written_install(tmp_path, monkeypatch, capsys):
+    """covers: AI-53 — 설치 중(식별 파일 일부 없음)이고 완성 복사본도 없으면 설치 폴더에서 띄우지 않는다."""
+    install = tmp_path / "Programs" / "orca"
+    cli = _orca_install(install)
+    (install / "Uninstall Orca.exe").unlink()  # 설치기는 언인스톨러를 마지막에 쓴다
+    copies = _service_copies(tmp_path)
+    sleeps = []
+
+    def removed_while_waiting(seconds):
+        sleeps.append(seconds)
+        (copies.parent / ".ai-setup-managed").unlink()
+
+    monkeypatch.setattr(orca_server, "contain_process_tree", lambda: None)
+    monkeypatch.setattr(orca_server.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("started a half-written install"))
+    monkeypatch.setattr(orca_server.time, "sleep", removed_while_waiting)
+    assert orca_server.run_service({
+        "cli": str(cli), "server_profile": str(tmp_path / "orca"),
+        "pairing_address": "100.64.1.20", "app_copies": str(copies),
+    }) == 0
+    assert sleeps == [orca_server.RESTART_DELAY_SECONDS]
+    assert "being installed" in capsys.readouterr().out
+
+
+def test_windows_service_rebuilds_a_copy_whose_server_cannot_start(tmp_path, monkeypatch, capsys):
+    """covers: AI-53 — 복사본의 orca.exe 가 없어 띄우지 못하면 같은 복사본을 끝없이 다시 쓰지 않고 새로 만든다."""
+    install = tmp_path / "Programs" / "orca"
+    cli = _orca_install(install)
+    copies = _service_copies(tmp_path)
+    launched = []
+
+    def popen(command, **kwargs):
+        launched.append(Path(command[0]))
+        if len(launched) == 1:
+            raise FileNotFoundError(2, "missing", command[0])
+        return _ServeProcess()
+
+    monkeypatch.setattr(orca_server, "contain_process_tree", lambda: None)
+    monkeypatch.setattr(orca_server.subprocess, "Popen", popen)
+    monkeypatch.setattr(orca_server.time, "sleep", lambda seconds: None)
+    assert orca_server.run_service({
+        "cli": str(cli), "server_profile": str(tmp_path / "orca"),
+        "pairing_address": "100.64.1.20", "app_copies": str(copies),
+    }) == 0
+    assert len(launched) == 2 and copies in launched[1].parents and launched[1].is_file()
+    assert "Could not start the Orca server" in capsys.readouterr().out

@@ -7,7 +7,37 @@ from pathlib import Path
 import subprocess
 
 
-WORKER = r'''
+# Job 이 없던 예전 러너는 작업을 멈춰도 자기만 끝나고 서버 트리를 남긴다. 멈추기 전에 이 러너와
+# 그 자손(부모보다 늦게 생긴 프로세스만: PID 재사용 방지)을 기록해 두고 그 트리만 끝낸다.
+# 승격 없이도 돌 수 있게 따로 둔다. 테스트가 같은 함수를 실제 프로세스 트리에 대고 실행한다.
+TREE_FUNCTIONS = r'''
+function Get-OrcaRunnerTree([string]$runner) {
+    $all = @(Get-CimInstance Win32_Process)
+    $tree = [Collections.Generic.List[object]]::new()
+    $all | Where-Object {
+        $_.Name -like 'python*.exe' -and $_.CommandLine -and $_.CommandLine.IndexOf($runner, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+        $_.ProcessId -ne $PID
+    } | ForEach-Object { $tree.Add($_) }
+    for ($i = 0; $i -lt $tree.Count; $i++) {
+        $parent = $tree[$i]
+        $all | Where-Object {
+            $_.ParentProcessId -eq $parent.ProcessId -and $_.CreationDate -ge $parent.CreationDate
+        } | ForEach-Object { $tree.Add($_) }
+    }
+    return ,$tree
+}
+
+function Stop-OrcaRunnerTree($tree) {
+    foreach ($item in $tree) {
+        $now = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $item.ProcessId) -ErrorAction SilentlyContinue
+        if ($now -and $now.CreationDate -eq $item.CreationDate) {
+            Stop-Process -Id $item.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+'''
+
+WORKER = TREE_FUNCTIONS + r'''
 $ErrorActionPreference = 'Stop'
 $data = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__PAYLOAD__')) | ConvertFrom-Json
 try {
@@ -57,27 +87,9 @@ try {
         } else { $account.Translate([Security.Principal.SecurityIdentifier]).Value }
         if ($sid -ne $data.callerSid) { throw 'The registered Orca task belongs to another user.' }
         if ($data.operation -eq 'end') {
-            # Job 이 없던 예전 러너는 작업을 멈춰도 자기만 끝나고 서버 트리를 남긴다. 멈추기 전에 이 러너와
-            # 그 자손(부모보다 늦게 생긴 프로세스만: PID 재사용 방지)을 기록해 두고 그 트리만 끝낸다.
-            $all = @(Get-CimInstance Win32_Process)
-            $tree = [Collections.Generic.List[object]]::new()
-            $all | Where-Object {
-                $_.Name -like 'python*.exe' -and $_.CommandLine -and $_.CommandLine.IndexOf($data.runner, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
-                $_.ProcessId -ne $PID
-            } | ForEach-Object { $tree.Add($_) }
-            for ($i = 0; $i -lt $tree.Count; $i++) {
-                $parent = $tree[$i]
-                $all | Where-Object {
-                    $_.ParentProcessId -eq $parent.ProcessId -and $_.CreationDate -ge $parent.CreationDate
-                } | ForEach-Object { $tree.Add($_) }
-            }
+            $tree = Get-OrcaRunnerTree $data.runner
             try { $registered.Stop(0) } catch { }
-            foreach ($item in $tree) {
-                $now = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $item.ProcessId) -ErrorAction SilentlyContinue
-                if ($now -and $now.CreationDate -eq $item.CreationDate) {
-                    Stop-Process -Id $item.ProcessId -Force -ErrorAction SilentlyContinue
-                }
-            }
+            Stop-OrcaRunnerTree $tree
         } else { $folder.DeleteTask($data.task, 0) }
     } else {
         throw 'Unsupported Orca task operation.'

@@ -390,11 +390,6 @@ def update_orca_windows():
     plan = orca_release.package_plan("win32", "AMD64")
     root, _ = orca_release.install_paths(plan)
     server = orca_server_record()
-    if server and orca_server.runtime_is_active(server["server_profile"]) and not (
-            orca_server.running_runner_state(server["service_root"]) or {}).get("app"):
-        say("  {:<14}  the ai-setup Orca server runs from the install directory; the installer cannot close it".format("blocked"))
-        say("  {:<14}  run setup --tools orca first (it moves the server once its terminals are closed)".format(""))
-        return "failed"
     try:
         version, meta = orca_release.fetch_manifest(plan)
         installed = orca_release.installed_version(plan)
@@ -404,6 +399,11 @@ def update_orca_windows():
     if installed == version:
         say("  {:<14}  Orca {} is already the latest".format("package", version))
         return "ok"
+    if server and orca_server.runtime_is_active(server["server_profile"]) and not (
+            orca_server.running_runner_state(server["service_root"]) or {}).get("app"):
+        say("  {:<14}  the ai-setup Orca server runs from the install directory; the installer cannot close it".format("blocked"))
+        say("  {:<14}  run setup --tools orca first (it moves the server once its terminals are closed)".format(""))
+        return "failed"
     scratch = tempfile.mkdtemp(prefix="update-ai-orca-")
     try:
         say("  {:<14}  download {}".format("package", meta["name"]))
@@ -412,7 +412,8 @@ def update_orca_windows():
         except (OSError, RuntimeError) as error:
             say("      download failed: {}".format(error if isinstance(error, RuntimeError) else type(error).__name__))
             return "failed"
-        run_step("package", [str(target), "/S", "--updated"])
+        if not run_step("package", [str(target), "/S", "--updated"]):
+            return "failed"
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     try:
@@ -439,8 +440,11 @@ def wait_for_orca_server_switch(server, root):
             return True
         terminals = orca_server.live_terminal_count(orca_server.server_query_cli(server), server["server_profile"])
         if terminals != 0 or time.monotonic() >= deadline:
-            say("  {:<14}  the Orca server keeps the previous version until it has no live terminals; "
-                "it switches by itself".format("server"))
+            reason = ("it has {} live terminals".format(terminals) if terminals
+                      else "its terminals could not be counted" if terminals is None
+                      else "it did not switch within {} seconds".format(ORCA_SERVER_SWITCH_SECONDS))
+            say("  {:<14}  the Orca server keeps the previous version for now ({}); "
+                "it switches by itself once it has no live terminals".format("server", reason))
             return False
         time.sleep(5)
 

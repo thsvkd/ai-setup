@@ -249,23 +249,36 @@ def supervise_app_copies(config, arguments, env):
     try:
         while True:
             write_runner_state(root, job, app)
-            if app is None:
-                print("Orca server runs from the install directory; Orca updates cannot finish while it runs", flush=True)
-            cli = app_cli(app) if app else Path(config["cli"])
-            process = start_server(cli, arguments, env)
-            relay = threading.Thread(target=relay_server_output, args=(config, process), daemon=True)
-            relay.start()
-            code, ready = watch_for_installed_update(config, process, source, copies, app, cli)
-            relay.join(timeout=5)
-            if ready is not None:
-                if app is not None:
-                    shutil.rmtree(str(app), ignore_errors=True)  # 멈춘 서버가 쓰던 복사본
-                app = ready
-                continue
-            if code == 0:
-                return 0
-            # 러너가 끝나면 Job 이 터미널 호스트까지 끝내므로 서버만 같은 복사본으로 다시 띄운다.
-            print("Orca server exited with {}; restarting in {} seconds".format(code, RESTART_DELAY_SECONDS), flush=True)
+            if app is None and app_identity(source) is None:
+                # 설치 중이라 설치 폴더가 반쯤 쓰였고 완성 복사본도 없다. 그 폴더에서 띄우지 않고 기다린다.
+                print("Orca is being installed and no finished copy exists; waiting {} seconds".format(
+                    RESTART_DELAY_SECONDS), flush=True)
+            else:
+                if app is None:
+                    print("Orca server runs from the install directory; Orca updates cannot finish while it runs", flush=True)
+                cli = app_cli(app) if app else Path(config["cli"])
+                try:
+                    process = start_server(cli, arguments, env)
+                except OSError as error:
+                    print("Could not start the Orca server ({}); retrying in {} seconds".format(
+                        error, RESTART_DELAY_SECONDS), flush=True)
+                    if app is not None:
+                        shutil.rmtree(str(app), ignore_errors=True)  # 망가진 복사본: 다음에 다시 만든다
+                        app = None
+                else:
+                    relay = threading.Thread(target=relay_server_output, args=(config, process), daemon=True)
+                    relay.start()
+                    code, ready = watch_for_installed_update(config, process, source, copies, app, cli)
+                    relay.join(timeout=5)
+                    if ready is not None:
+                        if app is not None:
+                            shutil.rmtree(str(app), ignore_errors=True)  # 멈춘 서버가 쓰던 복사본
+                        app = ready
+                        continue
+                    if code == 0:
+                        return 0
+                    # 러너가 끝나면 Job 이 터미널 호스트까지 끝내므로 서버만 같은 복사본으로 다시 띄운다.
+                    print("Orca server exited with {}; restarting in {} seconds".format(code, RESTART_DELAY_SECONDS), flush=True)
             time.sleep(RESTART_DELAY_SECONDS)
             if not (root / ".ai-setup-managed").is_file():
                 return 0  # 그사이 서비스가 제거됐다. 지운 디렉터리를 다시 만들지 않는다.
@@ -286,7 +299,8 @@ RUNNER_STATE = "runner-state.json"
 
 def write_runner_state(root, job, app):
     """지금 도는 러너가 무엇인지 남긴다. 파일이 아니라 실행 중인 러너를 판정하는 근거다."""
-    state = {"pid": os.getpid(), "job": job is not None, "app": str(app) if app else None}
+    state = {"pid": os.getpid(), "started": process_started(os.getpid()), "job": job is not None,
+             "app": str(app) if app else None}
     pending = Path(root) / (RUNNER_STATE + ".tmp")
     pending.write_text(json.dumps(state), encoding="utf-8")
     os.replace(str(pending), str(Path(root) / RUNNER_STATE))
@@ -299,7 +313,13 @@ def running_runner_state(root):
         pid = int(state["pid"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    return state if isinstance(state, dict) and pid > 0 and process_is_alive(pid) else None
+    if not isinstance(state, dict) or pid <= 0 or not process_is_alive(pid):
+        return None
+    # 러너가 죽고 PID 가 재사용됐으면 생성 시각이 다르다. 읽을 수 없으면 살아 있는 쪽으로 본다.
+    started = process_started(pid)
+    if state.get("started") is not None and started is not None and started != state["started"]:
+        return None
+    return state
 
 
 def watch_for_installed_update(config, process, source, copies, app, cli):
@@ -330,7 +350,7 @@ def watch_for_installed_update(config, process, source, copies, app, cli):
                 failed, failed_at, ready = installed, time.monotonic(), None
                 continue
         if live_terminal_count(cli, config["server_profile"]) == 0:
-            stop_server_process(process)
+            stop_server_process(process, force=True)
             return None, ready
 
 
@@ -562,7 +582,9 @@ def stop_managed_service(record, service):
 
     서비스를 멈추면 Orca 터미널 호스트도 함께 끝나므로 터미널이 있거나 확인할 수 없으면 멈추지 않는다.
     """
-    if live_terminal_count(server_query_cli(record), record["server_profile"]) != 0:
+    # 서버가 꺼져 있으면(크래시 뒤 재시작 대기, 러너만 남음) 끊길 터미널이 없고, 물을 서버도 없다.
+    if runtime_is_active(record["server_profile"]) and \
+            live_terminal_count(server_query_cli(record), record["server_profile"]) != 0:
         raise RuntimeError(
             "The Orca server has live terminals, or they could not be checked; "
             "close them (or stop the service yourself) and retry"
@@ -754,6 +776,35 @@ def process_is_alive(pid):
         return True
     except OSError:
         return False
+
+
+def process_started(pid):
+    """프로세스 생성 시각(플랫폼 고유 단위). 읽을 수 없으면 None."""
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        try:
+            times = [wintypes.FILETIME() for _ in range(4)]
+            if not kernel.GetProcessTimes(handle, *[ctypes.byref(item) for item in times]):
+                return None
+            return (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+        finally:
+            kernel.CloseHandle(handle)
+    try:
+        # /proc/<pid>/stat 의 22번째 필드(부팅 뒤 클록 틱). 명령 이름에 공백이 있어 ')' 뒤부터 센다.
+        fields = Path("/proc/{}/stat".format(pid)).read_text().rsplit(")", 1)[1].split()
+        return int(fields[19])
+    except (OSError, IndexError, ValueError):
+        return None
 
 
 def port_is_listening(port=6768):
@@ -1385,12 +1436,17 @@ def issue_pairing_offer(cli, server_profile, address, scope, timeout=45, port=67
         raise
 
 
-def stop_server_process(process):
+def stop_server_process(process, force=False):
+    """서버를 멈춘다. force: 터미널 0개를 확인한 직후의 전환이다. 기다리는 사이 새 터미널이 생기면 안 된다.
+
+    창이 없는 콘솔 서버는 /F 없는 taskkill 로 끝나지 않아 15초 뒤 강제 종료된다. 임시 페어링 서버처럼
+    급하지 않은 정지는 그 15초 동안 스스로 정리할 기회를 준다.
+    """
     if process.poll() is not None:
         return
     if os.name == "nt":
         subprocess.run(
-            ["taskkill", "/PID", str(process.pid), "/T"],
+            ["taskkill", *(["/F"] if force else []), "/PID", str(process.pid), "/T"],
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

@@ -558,7 +558,7 @@ def _orca_windows_release(mod, monkeypatch, tmp_path, payload, server_state):
 
 
 def test_orca_windows_update_runs_only_a_verified_installer_as_an_in_app_update(tmp_path, monkeypatch, capsys):
-    """covers: AI-55 — CLI 만으로 Orca 데스크톱·서버를 올린다. --updated 가 없으면 이전 언인스톨러가 터미널 호스트를 지운다."""
+    """covers: AI-55a, AI-55c — CLI 만으로 Orca 데스크톱·서버를 올린다. --updated 가 없으면 이전 언인스톨러가 터미널 호스트를 지운다."""
     mod = _update_ai_module()
     state = {"state": {"pid": 1, "job": True, "app": str(tmp_path / "service" / "app" / "build-old")},
              "after": {"pid": 1, "job": True, "app": str(tmp_path / "service" / "app" / "build-new")}}
@@ -572,16 +572,61 @@ def test_orca_windows_update_runs_only_a_verified_installer_as_an_in_app_update(
 
 
 def test_orca_windows_update_reports_a_server_that_waits_for_its_terminals(tmp_path, monkeypatch, capsys):
-    """covers: AI-55 — 서버에 터미널이 있으면 패키지만 올리고 서버는 터미널이 닫힌 뒤 스스로 옮긴다."""
+    """covers: AI-55c — 서버에 터미널이 있으면 패키지만 올리고 서버는 터미널이 닫힌 뒤 스스로 옮긴다."""
     mod = _update_ai_module()
     state = {"state": {"pid": 1, "job": True, "app": str(tmp_path / "service" / "app" / "build-old")}, "terminals": 2}
     steps, good = _orca_windows_release(mod, monkeypatch, tmp_path, b"official", state)
     assert mod.update_orca_windows() == "ok" and len(steps) == 1
-    assert "until it has no live terminals" in capsys.readouterr().out
+    assert "2 live terminals" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("counts, reason", [([None], "could not be counted"), ([0, 0], "did not switch within")])
+def test_orca_windows_update_names_why_the_server_switch_was_deferred(tmp_path, monkeypatch, capsys, counts, reason):
+    """covers: AI-55c — 미룬 이유를 터미널 수·셀 수 없음·시간 초과로 구분해 알린다."""
+    mod = _update_ai_module()
+    clock = iter([0, 0, 1, 1, 2, 2, 3])
+    monkeypatch.setattr(mod, "ORCA_SERVER_SWITCH_SECONDS", 1)
+    monkeypatch.setattr(mod.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(mod.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(mod.orca_server, "app_identity", lambda root: "build-new")
+    monkeypatch.setattr(mod.orca_server, "running_runner_state", lambda root: {"app": str(tmp_path / "build-old")})
+    monkeypatch.setattr(mod.orca_server, "server_query_cli", lambda server: "orca.exe")
+    monkeypatch.setattr(mod.orca_server, "live_terminal_count", lambda cli, profile: counts.pop(0))
+    server = {"service_root": str(tmp_path / "service"), "server_profile": str(tmp_path / "orca")}
+    assert mod.wait_for_orca_server_switch(server, tmp_path / "install") is False
+    assert reason in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("payload", [b"tampered", b"official but longer"])
+def test_orca_windows_update_rejects_a_tampered_installer_of_any_size(tmp_path, monkeypatch, payload):
+    """covers: AI-55a — 크기가 같아도(SHA-512), 달라도(크기) 설치기를 띄우지 않는다."""
+    mod = _update_ai_module()
+    state = {"state": {"pid": 1, "job": True, "app": str(tmp_path / "service" / "app" / "build-old")}}
+    steps, _ = _orca_windows_release(mod, monkeypatch, tmp_path, payload, state)
+    assert mod.update_orca_windows() == "failed" and steps == []
+
+
+def test_orca_windows_update_fails_when_the_installer_fails(tmp_path, monkeypatch):
+    """covers: AI-55a — 설치기 종료 코드가 실패면 결과도 실패다."""
+    mod = _update_ai_module()
+    state = {"state": {"pid": 1, "job": True, "app": str(tmp_path / "service" / "app" / "build-old")}}
+    steps, _ = _orca_windows_release(mod, monkeypatch, tmp_path, b"official", state)
+    monkeypatch.setattr(mod, "run_step", lambda label, argv, **kwargs: steps.append(argv) and False)
+    assert mod.update_orca_windows() == "failed" and len(steps) == 1
+
+
+def test_orca_windows_update_is_not_refused_when_the_server_is_down_or_already_latest(tmp_path, monkeypatch):
+    """covers: AI-55b — 거부는 설치 폴더에서 서버가 실제로 돌 때만이다."""
+    mod = _update_ai_module()
+    steps, _ = _orca_windows_release(mod, monkeypatch, tmp_path, b"official", {"state": None})
+    monkeypatch.setattr(mod.orca_server, "runtime_is_active", lambda profile: False)
+    assert mod.update_orca_windows() == "ok" and len(steps) == 1
+    monkeypatch.setattr(mod.orca_server, "runtime_is_active", lambda profile: True)
+    assert mod.update_orca_windows() == "ok" and len(steps) == 1  # 이미 최신이라 설치기도 거부도 없다
 
 
 def test_orca_windows_update_refuses_while_the_server_runs_from_the_install_directory(tmp_path, monkeypatch, capsys):
-    """covers: AI-55 — 예전 구조의 서버는 설치기가 끝내지 못해 'cannot be closed' 로 멈춘다. 설치기를 띄우지 않는다."""
+    """covers: AI-55b — 예전 구조의 서버는 설치기가 끝내지 못해 'cannot be closed' 로 멈춘다. 설치기를 띄우지 않는다."""
     mod = _update_ai_module()
     steps, _ = _orca_windows_release(mod, monkeypatch, tmp_path, b"official", {"state": None})
     assert mod.update_orca_windows() == "failed" and steps == []
@@ -594,14 +639,14 @@ def test_orca_windows_update_refuses_while_the_server_runs_from_the_install_dire
     (r"C:\Users\u\AppData\Local\Orca\daemon-host-profiles\5e28\1.4.242\build-8\Orca.exe --max-semi-space-size=4", False),
 ])
 def test_orca_server_copies_and_terminal_hosts_are_not_sessions_an_update_interrupts(args, expected):
-    """covers: AI-55 — 업데이트가 끝내는 것은 설치 폴더의 데스크톱 앱뿐이다."""
+    """covers: AI-55c — 업데이트가 끝내는 것은 설치 폴더의 데스크톱 앱뿐이다."""
     mod = _update_ai_module()
     entry = [item for item in json.loads(mod.CATALOG.read_text(encoding="utf-8")) if item["id"] == "orca"][0]
     assert mod.runs_target(args, entry) is expected
 
 
 def test_windows_orca_install_is_updated_with_the_official_installer(tmp_path, monkeypatch):
-    """covers: AI-55"""
+    """covers: AI-55a"""
     mod = _update_ai_module()
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
     monkeypatch.setattr(mod, "platform_key", lambda: "windows")
