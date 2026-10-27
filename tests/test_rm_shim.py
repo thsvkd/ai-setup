@@ -90,7 +90,15 @@ def observe(script, use_shim):
     env["D"] = str(d)
     env["PATH"] = path_without_shims()
     if use_shim:
-        env["PATH"] = str(SHIM_DIR) + os.pathsep + env["PATH"]
+        # 실제 trash-put·HOME 을 쓰면 픽스처가 사용자 휴지통에 쌓인다. 대상을 지우기만 하는 가짜로
+        # 바꾼다 — 비교하는 것은 남은 파일 목록뿐이다.
+        fake = BASE / "fake-trash-bin"
+        fake.mkdir(parents=True, exist_ok=True)
+        (fake / "trash-put").write_text('#!/bin/sh\n[ "$1" = -- ] && shift\nexec /bin/rm -rf -- "$@"\n',
+                                        encoding="utf-8")
+        (fake / "trash-put").chmod(0o755)
+        env["HOME"] = str(_guarded_home())
+        env["PATH"] = os.pathsep.join([str(SHIM_DIR), str(fake), env["PATH"]])
     proc = subprocess.run([BASH, "-c", 'export PATH="$RMSHIM_TEST_PATH";\n' + (SHIM_GUARD if use_shim else "") + script], cwd=str(d), env=bash_environment(env),
                           capture_output=True, text=True, encoding="utf-8")
     survivors = sorted(

@@ -25,10 +25,23 @@ BeforeAll {
         'x' | Set-Content -LiteralPath (Join-Path $dir 'sub/deep/x.log')
     }
 
+    # 실제 trash-put 을 쓰면 픽스처가 사용자 휴지통에 쌓인다. 대조 테스트는 남은 파일만 비교하므로
+    # 대상을 지우기만 하는 가짜를 PATH 앞에 둔다(POSIX). Windows 는 send2trash 경로라 해당 없다.
+    $script:FakeTrashBin = Join-Path $Base 'fake-trash-bin'
+    if (-not $IsWindows) {
+        New-Item -ItemType Directory -Path $FakeTrashBin -Force | Out-Null
+        $fakeTrash = Join-Path $FakeTrashBin 'trash-put'
+        Set-Content -LiteralPath $fakeTrash -Value "#!/bin/sh`n[ `"`$1`" = -- ] && shift`nexec /bin/rm -rf -- `"`$@`"`n" -NoNewline
+        & chmod 755 $fakeTrash
+    }
+
     function Get-Observation([string]$script, [bool]$UseShim) {
         $dir = Join-Path $Base $(if ($UseShim) { 'shim' } else { 'real' })
         New-Fixture $dir
         $import = if ($UseShim) { "Import-Module '$ModulePath' -Force -DisableNameChecking -Global" } else { '' }
+        if ($UseShim -and -not $IsWindows) {
+            $import = "`$env:PATH = '$FakeTrashBin' + [IO.Path]::PathSeparator + `$env:PATH`n" + $import
+        }
         $body = @"
 `$ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath '$dir'
