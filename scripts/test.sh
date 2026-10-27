@@ -155,14 +155,26 @@ else
     done
     if [[ -z "$PWSH" ]]; then
         echo "pwsh/powershell not found, skipping. — the Windows hook PowerShell path is only verified by running this suite."
-        record "Pester (Setup.Tests.ps1)" "skip" "pwsh not installed"
+        record "Pester (tests/*.Tests.ps1)" "skip" "pwsh not installed"
     else
         # Invoke-Pester 는 테스트가 실패해도 종료 코드 0 을 낸다 (Pester 5 는 -EnableExit 도 없다).
         # 그대로 두면 아래 판정이 실패를 통과로 기록해, 깨진 Pester 테스트가 영영 드러나지 않는다.
-        # -PassThru 로 결과 객체를 받아 실패 개수를 직접 종료 코드로 만든다.
+        # -PassThru 로 결과 객체를 받아 직접 판정한다. FailedCount 는 BeforeAll·파싱 실패로 깨진
+        # 컨테이너를 세지 않고, 하나도 통과하지 않은 실행도 통과가 아니다.
+        # 스위트는 Pester 5 문법이다. 3/4 만 있으면 건너뜀(종료 코드 3)으로 기록한다.
         # tests/*.Tests.ps1 을 전부 돌린다. 파일을 하나씩 적으면 새 스위트가 조용히 빠진다.
-        "$PWSH" -NoProfile -Command "\$r = Invoke-Pester '$REPO_ROOT/tests' -Output Detailed -PassThru; exit \$r.FailedCount"
-        if [[ $? -eq 0 ]]; then record "Pester (tests/*.Tests.ps1)" "pass" ""; else record "Pester (tests/*.Tests.ps1)" "fail" ""; fi
+        "$PWSH" -NoProfile -Command "
+            \$p = Get-Module -ListAvailable Pester | Where-Object { \$_.Version.Major -ge 5 } | Sort-Object Version -Descending | Select-Object -First 1
+            if (-not \$p) { exit 3 }
+            Import-Module \$p.Path -Force
+            \$r = Invoke-Pester '$REPO_ROOT/tests' -Output Detailed -PassThru
+            if (\$r.Result -eq 'Passed' -and \$r.PassedCount -gt 0) { exit 0 } else { exit 1 }"
+        case $? in
+            0) record "Pester (tests/*.Tests.ps1)" "pass" "" ;;
+            3) echo "Pester 5+ not found, skipping. (Install-Module Pester -MinimumVersion 5 -Scope CurrentUser)"
+               record "Pester (tests/*.Tests.ps1)" "skip" "Pester 5+ not installed" ;;
+            *) record "Pester (tests/*.Tests.ps1)" "fail" "" ;;
+        esac
     fi
 fi
 

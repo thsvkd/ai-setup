@@ -93,6 +93,7 @@ _FLAG_KEYS = (
     "omc_hud",
     "hooks",
     "agentsmd",
+    "agentsmd_written",
     "ss_caps_done",
 )
 
@@ -163,6 +164,9 @@ def _selection(selection) -> dict:
         "uninstall": bool(source.get("uninstall")),
         "newline": source.get("newline") or "shift-enter",
         "permission_mode": source.get("permission_mode") or "auto",
+        # 명시한 값만 기록된 값을 바꾼다. 기본값으로 재실행해 사용자가 고른 값을 되돌리지 않는다.
+        "newline_given": bool(source.get("newline")),
+        "permission_mode_given": bool(source.get("permission_mode")),
         "overwrite_agentsmd": bool(source.get("overwrite_agentsmd")),
         # 키가 없으면 예전 --stages all 과 같이 세 특별 설정을 모두 계획한다.
         # 온보딩이 No 를 넘긴 경우에만 False 다.
@@ -180,6 +184,8 @@ def _world(world) -> dict:
     node = source.get("node_major")
     snap["node_major"] = None if node is None else int(node)
     snap["statusline"] = source.get("statusline") or ""
+    snap["newline_chord"] = source.get("newline_chord") or ""
+    snap["permission_mode"] = source.get("permission_mode") or ""
     snap["platform"] = source.get("platform") or "linux"
     return snap
 
@@ -194,6 +200,10 @@ def _apply(world, effect: str) -> None:
         return
     if kind == "node":
         world["node_major"] = int(rest)
+        return
+    if kind == "set":
+        key, _, value = rest.partition(":")
+        world[key] = value
         return
     bucket, _, item = rest.partition(":")
     if kind == "add":
@@ -411,16 +421,16 @@ def _mcp(selection, world) -> list[Action]:
 
 
 def _newline(selection, world) -> list[Action]:
-    if world["newline_done"]:
-        return []
     chord = selection["newline"]
+    if world["newline_done"] and not (selection["newline_given"] and world["newline_chord"] != chord):
+        return []
     return [
         Action(
             "newline",
             f"configure newline chord {chord}",
             True,
             ("newline", chord),
-            ("flag:newline_done",),
+            ("flag:newline_done", f"set:newline_chord:{chord}"),
         )
     ]
 
@@ -588,16 +598,16 @@ def _tools(selection, world) -> list[Action]:
 
 
 def _hooks(selection, world) -> list[Action]:
-    if world["hooks"]:
-        return []
     mode = selection["permission_mode"]
+    if world["hooks"] and not (selection["permission_mode_given"] and world["permission_mode"] != mode):
+        return []
     return [
         Action(
             "hooks",
             f"install guard hooks with permission mode {mode}",
             True,
             ("hooks", mode),
-            ("flag:hooks",),
+            ("flag:hooks", f"set:permission_mode:{mode}"),
         )
     ]
 
@@ -605,7 +615,7 @@ def _hooks(selection, world) -> list[Action]:
 def _agentsmd(selection, world) -> list[Action]:
     labels = [HARNESS_LABELS.get(harness, harness) for harness in selection["harnesses"]]
     listed = ", ".join(labels)
-    if world["agentsmd"]:
+    if world["agentsmd_written"]:    # 같은 계획이 이미 썼다. 덮어쓰기를 골랐어도 한 번이다.
         return []
     if world["agentsmd_exists"] and not selection["overwrite_agentsmd"]:
         return [Action("agentsmd", f"AGENTS.md exists; leave it for {listed}", False, ())]
@@ -615,7 +625,7 @@ def _agentsmd(selection, world) -> list[Action]:
             f"write AGENTS.md for {listed} in the current directory",
             True,
             ("agentsmd", *selection["harnesses"]),
-            ("flag:agentsmd", "flag:agentsmd_exists"),
+            ("flag:agentsmd", "flag:agentsmd_exists", "flag:agentsmd_written"),
         )
     ]
 
@@ -948,6 +958,9 @@ def probe_world(project_dir: str | None = None) -> dict:
     if isinstance(status, dict) and isinstance(status.get("command"), str):
         command = status["command"]
     tool_installs = receipt.get("tool_installs") if isinstance(receipt.get("tool_installs"), dict) else {}
+    keybinds = receipt.get("keybinds") if isinstance(receipt.get("keybinds"), dict) else {}
+    permissions = settings.get("permissions") if isinstance(settings.get("permissions"), dict) else {}
+    mode = permissions.get("defaultMode")
     harness_installs = receipt.get("harness_installs") if isinstance(receipt.get("harness_installs"), dict) else {}
     plugins = receipt.get("plugins") if isinstance(receipt.get("plugins"), dict) else {}
     skills = receipt.get("skills") if isinstance(receipt.get("skills"), dict) else {}
@@ -983,10 +996,13 @@ def probe_world(project_dir: str | None = None) -> dict:
         "jarvis_unit_owned": bool(receipt.get("jarvis_unit")),
         "agentsmd_exists": (project / "AGENTS.md").is_file(),
         "newline_done": bool(receipt.get("keybinds")),
+        "newline_chord": keybinds.get("newline_chord") if isinstance(keybinds.get("newline_chord"), str) else "",
+        "permission_mode": mode if isinstance(mode, str) else "",
         "output_style": bool(receipt.get("output_style")),
         "mods": bool(receipt.get("mods")),
         "omc_hud": bool(receipt.get("omc_hud")),
-        "hooks": bool(receipt.get("hooks")),
+        # 예전 훅 설치(merge_and_diff)의 영수증에는 hooks 키가 없고 hook_files 가 있다.
+        "hooks": bool(receipt.get("hooks") or receipt.get("hook_files")),
         "agentsmd": bool(receipt.get("agentsmd")),
     }
 
@@ -1057,7 +1073,14 @@ def _run(argv, cwd=None, stdin=None, env=None) -> int:
             print(f"refusing forbidden command: {banned}", file=sys.stderr)
             return 1
     try:
-        return subprocess.run(argv, cwd=cwd, stdin=stdin, env=env).returncode or 0
+        try:
+            return subprocess.run(argv, cwd=cwd, stdin=stdin, env=env).returncode or 0
+        except FileNotFoundError:
+            # Windows 의 CreateProcess 는 .exe 만 찾는다. npm.cmd 같은 셔임은 PATH 로 찾은 경로로 다시 실행한다.
+            found = shutil.which(argv[0])
+            if not found or found == argv[0]:
+                raise
+            return subprocess.run([found, *argv[1:]], cwd=cwd, stdin=stdin, env=env).returncode or 0
     except OSError as exc:
         print(f"could not run {' '.join(argv)}: {exc}", file=sys.stderr)
         return 1
@@ -1450,6 +1473,11 @@ def main(argv) -> int:
     }
     if opts["harnesses"] is not None:
         selection["harnesses"] = [part for part in opts["harnesses"].split(",") if part]
+    unknown = [name for name in stages if name not in STAGE_ORDER]
+    unknown += [name for name in selection.get("harnesses", []) if name != "all" and name not in HARNESS_LABELS]
+    if unknown:
+        print(f"unknown stage or harness: {', '.join(unknown)}", file=sys.stderr)
+        return 1
     if opts["newline"]:
         selection["newline"] = opts["newline"]
     if opts["permission_mode"]:

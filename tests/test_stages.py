@@ -239,6 +239,53 @@ def test_second_plan_against_post_state_does_not_write():
     assert not any(action.writes for action in second)
 
 
+def test_agentsmd_is_planned_for_a_new_project_after_another_was_set_up():
+    """영수증의 agentsmd 기록은 머신 전체다. 그 기록이 있어도 이 프로젝트에는 AGENTS.md 가 아직 없다."""
+    actions = stages.plan_actions(_full(stages=["agentsmd"]), _empty(agentsmd=True))
+    assert [action.writes for action in actions] == [True]
+
+
+def test_overwriting_agentsmd_is_planned_once():
+    """covers: AI-43 (덮어쓰기를 고른 경우)"""
+    selection = _full(stages=["agentsmd"], overwrite_agentsmd=True)
+    first = stages.plan_actions(selection, _empty(agentsmd_exists=True))
+    assert [action.writes for action in first] == [True]
+    second = stages.plan_actions(selection, stages.world_after(_empty(agentsmd_exists=True), first))
+    assert not any(action.writes for action in second)
+
+
+def test_explicit_newline_or_mode_change_is_planned_but_defaults_keep_the_recorded_value():
+    world = _empty(newline_done=True, newline_chord="ctrl-enter", hooks=True, permission_mode="bypassPermissions")
+    picked = ["newline", "hooks"]
+    defaults = stages.plan_actions(_full(stages=picked, newline=None, permission_mode=None), world)
+    assert not any(action.writes for action in defaults)
+    same = stages.plan_actions(_full(stages=picked, newline="ctrl-enter", permission_mode="bypassPermissions"), world)
+    assert not any(action.writes for action in same)
+    changed = stages.plan_actions(_full(stages=picked, newline="shift-enter", permission_mode="auto"), world)
+    assert sorted(action.stage for action in changed if action.writes) == ["hooks", "newline"]
+    again = stages.plan_actions(_full(stages=picked, newline="shift-enter", permission_mode="auto"),
+                                stages.world_after(world, changed))
+    assert not any(action.writes for action in again)
+
+
+def test_probe_reads_hooks_from_the_old_manifest_and_the_recorded_choices(monkeypatch, tmp_path):
+    """예전 설치의 훅 영수증에는 hooks 키가 없고 hook_files 가 있다. 이것을 못 보면 --uninstall 이 훅을 남긴다."""
+    home = _home(monkeypatch, tmp_path)
+    (home / ".claude").mkdir()
+    (home / ".claude" / ".claude-code-setup.json").write_text(json.dumps({
+        "version": 1, "hooks_dir": "~/.claude/hooks", "hook_files": ["danger_guard.py"],
+        "keybinds": {"newline_chord": "ctrl-enter"},
+    }), encoding="utf-8")
+    (home / ".claude" / "settings.json").write_text(
+        json.dumps({"permissions": {"defaultMode": "bypassPermissions"}}), encoding="utf-8")
+    world = stages.probe_world(str(tmp_path))
+    assert world["hooks"] is True
+    assert world["newline_chord"] == "ctrl-enter"
+    assert world["permission_mode"] == "bypassPermissions"
+    removal = stages.plan_actions(_full(stages=["hooks"], uninstall=True), world)
+    assert [action.argv for action in removal] == [("hooks", "--uninstall")]
+
+
 def test_jarvis_herdr_and_setcap_follow_explicit_choice():
     plain = stages.render(stages.plan_actions(_full(), _empty())).lower()
     assert "jarvis" not in plain
@@ -438,9 +485,9 @@ def test_full_apply_invokes_harness_plugins_and_codegraph_mcp(monkeypatch, tmp_p
     empty_bin.mkdir()
     monkeypatch.setenv("PATH", str(empty_bin))
     harnesses = "claude,codex,grok,opencode,gemini,agy,copilot"
-    status = stages.main(
+    status = _run_as_platform("linux", lambda: stages.main(
         ["--plan", "--stages", "all", "--harness", harnesses, "--project-dir", str(tmp_path)]
-    )
+    ))
     assert status == 0
     blob = "\n".join(" ".join(argv) for argv in calls)
     assert "https://claude.ai/install.sh" in blob
@@ -463,7 +510,7 @@ def test_full_apply_invokes_harness_plugins_and_codegraph_mcp(monkeypatch, tmp_p
     assert install_at < plugin_at < package_at < mcp_at
     config = json.loads((tmp_path / ".config" / "opencode" / "opencode.json").read_text(encoding="utf-8"))
     assert config["mcp"]["codegraph"]["command"] == ["codegraph", "serve", "--mcp"]
-    agents = [argv for argv in calls if "setup_agentsmd.sh" in " ".join(argv)]
+    agents = [argv for argv in calls if "setup_agentsmd." in " ".join(argv)]    # Windows 는 .ps1
     assert agents
     forwarded = " ".join(agents[-1])
     assert "agy" in forwarded and "gemini" in forwarded and "copilot" in forwarded
@@ -500,6 +547,32 @@ def _record_runs(monkeypatch, passthrough=None):
 
     monkeypatch.setattr(stages.subprocess, "run", runner)
     return recorded
+
+
+@pytest.mark.parametrize("argv,name", [
+    (["--stages", "hook"], "hook"),
+    (["--stages", "mcp", "--harness", "claude-code"], "claude-code"),
+])
+def test_unknown_stage_or_harness_exits_1_before_planning(argv, name, capsys, monkeypatch):
+    monkeypatch.setattr(stages, "probe_world", lambda *a, **k: pytest.fail("planned with an unknown name"))
+    assert stages.main([*argv, "--dry-run"]) == 1
+    assert name in capsys.readouterr().err
+
+
+def test_run_retries_a_shim_through_its_resolved_path(monkeypatch):
+    """Windows 의 CreateProcess 는 .exe 만 찾아 npm.cmd 를 이름으로 실행하지 못한다(실측)."""
+    calls = []
+
+    def runner(argv, *args, **kwargs):
+        calls.append(argv[0])
+        if argv[0] == "npm":
+            raise FileNotFoundError(2, "not found")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(stages.subprocess, "run", runner)
+    monkeypatch.setattr(stages.shutil, "which", lambda name: r"C:\nodejs\npm.CMD" if name == "npm" else None)
+    assert stages._run(["npm", "install", "-g", "x"]) == 0
+    assert calls == ["npm", r"C:\nodejs\npm.CMD"]
 
 
 def _home(monkeypatch, tmp_path) -> Path:
@@ -710,10 +783,15 @@ def test_user_bin_goes_on_path_so_fresh_harness_installs_are_found(monkeypatch, 
     """Claude Code 설치기는 ~/.local/bin 에 깔지만 PATH 는 다음 셸부터다. 같은 실행의 다음 명령이 찾아야 한다."""
     home = _home(monkeypatch, tmp_path)
     monkeypatch.delenv("GROK_BIN_DIR", raising=False)
+    monkeypatch.delenv("CODEX_INSTALL_DIR", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(home / "AppData" / "Local"))
     monkeypatch.setenv("PATH", "/usr/bin")
     stages._ensure_user_bin_on_path()
     stages._ensure_user_bin_on_path()
     expected = [home / ".local" / "bin", home / ".grok" / "bin", home / ".opencode" / "bin"]
+    if os.name == "nt":
+        local = home / "AppData" / "Local"
+        expected += [local / "Programs" / "OpenAI" / "Codex" / "bin", local / "agy" / "bin"]
     assert os.environ["PATH"] == os.pathsep.join([*map(str, expected), "/usr/bin"])
 
 
@@ -747,6 +825,7 @@ def _run_as_platform(platform: str, fn):
         stages._platform_name = original
 
 
+@pytest.mark.skipif(os.name == "nt", reason="shell-script stubs cannot be started by CreateProcess")
 def test_node_install_runs_through_execute(monkeypatch, tmp_path):
     """stages.main 이 고른 Node 명령을 PATH 스텁이 실제로 받는다."""
     _home(monkeypatch, tmp_path)
@@ -840,6 +919,7 @@ def test_jarvis_execute_clones_into_home_and_enables_the_unit(monkeypatch, tmp_p
     assert "thsvkd/jarvis.git" not in capsys.readouterr().out
 
 
+@pytest.mark.skipif(os.name == "nt", reason="shell-script stubs cannot be started by CreateProcess")
 def test_setcap_execute_uses_the_ss_copy_capabilities(monkeypatch, tmp_path):
     """install -g 는 id -gn 이 출력한 그룹을 받는다."""
     _home(monkeypatch, tmp_path)
@@ -1171,7 +1251,8 @@ def _run_setup(command, home: Path, project: Path):
     env["USERPROFILE"] = str(home)
     env["POWERSHELL_TELEMETRY_OPTOUT"] = "1"
     env["PYTHONUTF8"] = "1"
-    return subprocess.run(command, cwd=project, env=env, capture_output=True, text=True, timeout=60)
+    return subprocess.run(command, cwd=project, env=env, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=60)
 
 
 def test_setup_sh_forwards_declined_claude_specials(tmp_path):
@@ -1184,14 +1265,16 @@ def test_setup_sh_forwards_declined_claude_specials(tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
     declined = _stage_answer_script(tmp_path / "no", _special_answers("0"))
-    no = _run_setup(["bash", str(declined / "scripts" / "setup.sh")], home, project)
+    # 이름 "bash" 는 CreateProcess 가 PATH 보다 System32(WSL bash)를 먼저 찾는다. PATH 의 bash 를 쓴다.
+    bash = shutil.which("bash") or "bash"
+    no = _run_setup([bash, (declined / "scripts" / "setup.sh").as_posix()], home, project)
     assert no.returncode == 0, no.stderr
     assert "DRY RUN complete — nothing was changed." in no.stdout
     assert "fluent-korean" not in no.stdout
     assert "bash-diff-filter" not in no.stdout
     assert "cache TTL wrapper to the OMC HUD" not in no.stdout
     accepted = _stage_answer_script(tmp_path / "yes", _special_answers("1"))
-    yes = _run_setup(["bash", str(accepted / "scripts" / "setup.sh")], home, project)
+    yes = _run_setup([bash, (accepted / "scripts" / "setup.sh").as_posix()], home, project)
     assert yes.returncode == 0, yes.stderr
     assert "set output style fluent-korean" in yes.stdout
     assert "bash-diff-filter" in yes.stdout
@@ -1458,7 +1541,8 @@ def test_stage_uninstall_runs_each_worker_in_uninstall_mode(monkeypatch, tmp_pat
     scripts = [argv for argv in recorded if any(str(part).endswith((".sh", ".ps1")) for part in argv)]
     names = sorted(Path(str(next(p for p in argv if str(p).endswith((".sh", ".ps1"))))).stem for argv in scripts)
     assert names == ["setup_hooks", "setup_keybinds", "setup_mods", "setup_omc", "setup_output_style", "setup_skills"]
-    assert all("--uninstall" in argv for argv in scripts), scripts
+    flag = "-Uninstall" if os.name == "nt" else "--uninstall"    # _worker 가 PowerShell 이름으로 바꾼다
+    assert all(flag in argv for argv in scripts), scripts
     # AGENTS.md 는 사용자가 고쳐 쓰는 프로젝트 파일이다. 제거 계약이 없으므로 파일은 두고 기록만 지운다.
     receipt = json.loads((home / ".claude" / ".claude-code-setup.json").read_text(encoding="utf-8"))
     assert "agentsmd" not in receipt

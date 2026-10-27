@@ -256,11 +256,18 @@ def check_skills(home, warn):
         return
     locked = set((lock or {}).get("skills") or {})
     for entry in sorted(skills.iterdir(), key=lambda p: p.name):
-        if entry.name.startswith(".") or not entry.is_dir() or entry.name in locked:
+        if entry.name.startswith(".") or entry.name in locked:
             continue
-        # 홈 경로 자체가 링크를 지나는 경우(macOS /var -> /private/var)를 오판하지 않게 부모의 실체와 비교한다.
-        # junction 은 Python 3.8 의 is_symlink 로 보이지 않아 realpath 로 잡는다.
-        link = " (link)" if os.path.realpath(entry) != os.path.join(os.path.realpath(skills), entry.name) else ""
+        try:
+            if not entry.is_dir():
+                continue
+            # 홈 경로 자체가 링크를 지나는 경우(macOS /var -> /private/var)를 오판하지 않게 부모의 실체와 비교한다.
+            # junction 은 Python 3.8 의 is_symlink 로 보이지 않아 realpath 로 잡는다.
+            link = " (link)" if os.path.realpath(entry) != os.path.join(os.path.realpath(skills), entry.name) else ""
+        except OSError:
+            # Windows 는 신뢰하지 않는 탑재 지점을 가리키는 junction 을 따라가지 못한다(WinError 448).
+            warn("cannot inspect skill {} (left in place)".format(entry.name))
+            continue
         warn("skill {}{} is not in .skill-lock.json (left in place)".format(entry.name, link))
 
 

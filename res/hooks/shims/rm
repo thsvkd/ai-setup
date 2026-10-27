@@ -36,10 +36,6 @@ if [ -z "$TRASH" ] && [ -f "$SEND_TO_TRASH" ]; then
         if command -v "$_py" >/dev/null 2>&1; then TRASH_PY=$_py; break; fi
     done
 fi
-if [ -z "$TRASH" ] && [ -z "$TRASH_PY" ]; then
-    echo "rm(shim): no trash tool found; deleting for real without the trash. (pip install trash-cli)" >&2
-    exec "$REAL_RM" "$@"
-fi
 
 # 보호할 홈은 둘이다. 사용자 DB 의 홈(`~이름` 은 getpwnam 조회)과 $HOME. 다만 $HOME 이 tmp 아래면
 # 테스트·스크립트가 HOME 을 임시 디렉터리로 바꿔 둔 것이므로 보호하지 않는다 — bats 의 샌드박스
@@ -58,7 +54,10 @@ case "$ENV_HOME/" in
 esac
 
 # --- 1차 통과: "$@" 를 보존한 채 훑는다. 원본 rm 에게 넘길 판정을 여기서 모두 끝낸다.
+# 넘길지는 기록만 하고 실제로 넘기는 것은 루프 뒤다. 도중에 넘기면 뒤쪽 대상의 루트/홈
+# 검사를 건너뛴다 (실측: `rm -rf x/. ~` 에서 rm 이 x/. 만 거부하고 홈을 지웠다).
 force=0
+passthrough=0
 targets=0
 tmp_targets=0
 end_opts=0
@@ -67,9 +66,9 @@ for a in "$@"; do
         case "$a" in
             --) end_opts=1; continue ;;
             --force)  force=1; continue ;;
-            -i|-I|--interactive|--interactive=*) exec "$REAL_RM" "$@" ;;
+            -i|-I|--interactive|--interactive=*) passthrough=1; continue ;;
             --*) continue ;;
-            -?*) case "$a" in *[iI]*) exec "$REAL_RM" "$@" ;; esac
+            -?*) case "$a" in *[iI]*) passthrough=1 ;; esac
                  case "$a" in *f*) force=1 ;; esac
                  continue ;;
         esac
@@ -92,7 +91,7 @@ for a in "$@"; do
     # `./`, `../`, `.//`, `sub/./` 같은 변형이 새지 않는다 (실측: 원본 rm 은 거부하는데
     # 셰임이 통과시켜 상위 디렉터리를 통째로 휴지통에 넣었다).
     case "$abs" in
-        */.|*/..) exec "$REAL_RM" "$@" ;;
+        */.|*/..) passthrough=1 ;;
     esac
 
     # 루트/홈 전체 삭제는 어느 경로로 와도 거부한다.
@@ -107,11 +106,16 @@ for a in "$@"; do
     esac
 done
 
+[ "$passthrough" -eq 0 ] || exec "$REAL_RM" "$@"
 # 대상이 없다 → rm 이 내는 usage/오류를 그대로 보여준다.
 [ "$targets" -gt 0 ] || exec "$REAL_RM" "$@"
 # 대상이 '전부' tmpfs 아래일 때만 실제 삭제로 넘긴다. 하나라도 아니면 휴지통으로 간다 —
 # 섞였다고 실삭제로 넘기면 되돌릴 수 없는 파일까지 함께 사라진다.
 [ "$tmp_targets" -ne "$targets" ] || exec "$REAL_RM" "$@"
+if [ -z "$TRASH" ] && [ -z "$TRASH_PY" ]; then
+    echo "rm(shim): no trash tool found; deleting for real without the trash. (pip install trash-cli)" >&2
+    exec "$REAL_RM" "$@"
+fi
 
 # --- 2차 통과: 옵션을 버리고 대상만 남긴다. 앞에서 꺼내 뒤에 붙이므로
 # 정확히 원본 개수만큼 꺼내면 남는 것은 대상뿐이다.

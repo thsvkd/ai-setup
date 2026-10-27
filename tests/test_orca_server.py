@@ -538,6 +538,41 @@ def test_remove_user_service_deletes_only_its_files_and_keeps_extra_contents(tmp
     assert not service.exists()
 
 
+def test_remove_user_service_also_removes_what_the_service_left_so_reinstall_is_not_refused(tmp_path, monkeypatch):
+    """launchd 로그, 중단된 페어링 파일 쓰기, 헬퍼 import 의 바이트코드가 남으면
+    디렉터리가 지워지지 않고 다음 설치가 '소유하지 않은 디렉터리'로 거부한다."""
+    monkeypatch.setattr(orca_server, "change_windows_task", lambda *args: type("Result", (), {"returncode": 0})())
+    monkeypatch.setattr(orca_server, "windows_task_matches", lambda *args: True)
+    monkeypatch.setattr(orca_server, "runtime_is_active", lambda profile: False)
+    root = tmp_path / "service"
+    root.mkdir()
+    runner = root / "orca-server-runner.py"
+    service = root / "orca-server-task.xml"
+    runner.write_text("runner")
+    service.write_text(str(runner))
+    (root / ".ai-setup-managed").write_text("ai-setup orca server v1\n")
+    (root / "server.log").write_text("log")
+    (root / "pairing-codes.txt.tmp").write_text("partial")
+    (root / "__pycache__").mkdir()
+    (root / "__pycache__" / "orca_windows.cpython-313.pyc").write_bytes(b"\0")
+    monkeypatch.setattr(
+        orca_server.subprocess, "run",
+        lambda *args, **kwargs: type("Result", (), {"returncode": 0, "stdout": str(runner)})(),
+    )
+    orca_server.remove_user_service({
+        "service_root": str(root), "service_path": str(service),
+        "service_manager": "task-scheduler", "service_task": "ai-setup Orca Server",
+        "server_profile": str(tmp_path / "orca"),
+    })
+    assert not root.exists()
+
+
+def test_service_runs_python_without_writing_bytecode(tmp_path):
+    plan = orca_server.service_plan("linux", tmp_path / "home")
+    document = orca_server.service_document(plan, "/usr/bin/python3", plan["runner"], plan["root"] / "orca-server.json")
+    assert '"-B"' in document
+
+
 def test_remove_user_service_rejects_symlink_root(tmp_path, monkeypatch):
     target = tmp_path / "target"
     target.mkdir()

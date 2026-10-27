@@ -211,22 +211,30 @@ def test_test_ps1_parses():
 def test_pester_failure_is_reflected_in_runner_exit_code():
     """Invoke-Pester 는 테스트가 실패해도 종료 코드 0 을 낸다 (Pester 5 엔 -EnableExit 도 없다).
 
-    그래서 러너가 결과 객체의 FailedCount 를 직접 종료 코드로 만들지 않으면, 깨진 Pester
-    테스트가 영원히 '통과' 로 보고된다 — 이 파일이 막으려는 바로 그 거짓 통과다. 실제로
-    test.sh 가 이 버그를 갖고 있었다(실패 1건인데 '✅ Pester 통과' 출력).
+    그래서 러너가 결과 객체로 직접 판정하지 않으면, 깨진 Pester 테스트가 영원히 '통과' 로
+    보고된다 — 이 파일이 막으려는 바로 그 거짓 통과다. 실제로 test.sh 가 이 버그를 갖고
+    있었다(실패 1건인데 '✅ Pester 통과' 출력). FailedCount 만 보면 BeforeAll·파싱 실패로
+    깨진 컨테이너와 하나도 돌지 않은 실행을 놓치므로 Result 와 PassedCount 를 본다.
 
-    pwsh 없이도 회귀를 잡아야 하므로 소스를 정적으로 검사한다.
+    pwsh 없이도 회귀를 잡아야 하므로 소스를 정적으로 검사한다. 주석은 빼고 본다.
     """
     for runner in (REPO_ROOT / TEST_SH_REL, TEST_PS1):
-        source = runner.read_text(encoding="utf-8")
+        source = "\n".join(line for line in runner.read_text(encoding="utf-8-sig").splitlines()
+                           if not line.lstrip().startswith("#"))
         if "Invoke-Pester" not in source:
             continue
-        assert "FailedCount" in source, (
-            f"{runner.name} does not judge the Invoke-Pester result by FailedCount - "
-            "Pester failures get reported as passes"
+        assert re.search(r"Result -eq ['\"]Passed['\"]", source), (
+            f"{runner.name} does not judge the Invoke-Pester result by Result - "
+            "broken containers get reported as passes"
+        )
+        assert "PassedCount -gt 0" in source, (
+            f"{runner.name} reports a run where nothing passed as a pass"
         )
         assert "-PassThru" in source, (
-            f"{runner.name} must receive the result object with -PassThru to see FailedCount"
+            f"{runner.name} must receive the result object with -PassThru to judge it"
+        )
+        assert "Major -ge 5" in source, (
+            f"{runner.name} must skip when only Pester 3/4 is installed; the suite is Pester 5 syntax"
         )
 
 

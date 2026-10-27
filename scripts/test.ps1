@@ -144,15 +144,21 @@ if ($PythonOnly) {
 } else {
     # --- Pester: PowerShell 셋업 스크립트. Windows 훅의 PS 경로를 실제로 실행하는 유일한 스위트 ---
     Write-Section "Pester"
-    if (-not (Get-Module -ListAvailable -Name Pester)) {
-        Write-Host "Pester module not found, skipping. (Install-Module Pester -Scope CurrentUser)"
-        Add-Result "Pester (Setup.Tests.ps1)" "skip" "Pester not installed"
+    # 스위트는 Pester 5 문법이다. Windows PowerShell 에 기본으로 깔린 Pester 3.4 는 -Output 을 몰라 실패한다.
+    $pester = Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version.Major -ge 5 } |
+        Sort-Object Version -Descending | Select-Object -First 1
+    if (-not $pester) {
+        Write-Host "Pester 5+ not found, skipping. (Install-Module Pester -MinimumVersion 5 -Scope CurrentUser, or run with pwsh)"
+        Add-Result "Pester (tests\*.Tests.ps1)" "skip" "Pester 5+ not installed"
     } else {
-        $result = Invoke-Pester (Join-Path $repoRoot "tests\Setup.Tests.ps1") -Output Detailed -PassThru
-        if ($result.FailedCount -eq 0) {
-            Add-Result "Pester (Setup.Tests.ps1)" "pass" ""
+        Import-Module $pester.Path -Force
+        # tests\*.Tests.ps1 을 전부 돌린다. 파일을 하나씩 적으면 새 스위트가 조용히 빠진다(RmShim.Tests.ps1 이 빠져 있었다).
+        $result = Invoke-Pester (Join-Path $repoRoot "tests") -Output Detailed -PassThru
+        # FailedCount 는 BeforeAll·파싱 실패로 깨진 컨테이너를 세지 않는다. 하나도 통과하지 않은 실행(전부 건너뜀 포함)도 통과가 아니다.
+        if ($result.Result -eq "Passed" -and $result.PassedCount -gt 0) {
+            Add-Result "Pester (tests\*.Tests.ps1)" "pass" ""
         } else {
-            Add-Result "Pester (Setup.Tests.ps1)" "fail" ""
+            Add-Result "Pester (tests\*.Tests.ps1)" "fail" ""
         }
     }
 

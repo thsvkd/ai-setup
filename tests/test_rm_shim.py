@@ -11,6 +11,7 @@
 import os
 from functools import lru_cache
 import shutil
+import sys
 import shlex
 import site
 import subprocess
@@ -141,7 +142,8 @@ def test_matches_real_rm(name, script):
     assert real == shim, "result differs from the real rm: %s" % name
 
 
-REFUSED = ["rm -rf ~", 'rm -rf "$HOME"', "rm -rf /"]
+# 뒤의 세 개는 rm 에게 그대로 넘기는 형태(`.` 대상, -i)가 앞에 와도 홈 검사가 먼저임을 본다.
+REFUSED = ["rm -rf ~", 'rm -rf "$HOME"', "rm -rf /", "rm -rf x/. ~", "rm -rf ./ ~/", "rm -i -rf x ~"]
 
 # 셰임을 거쳐야 안전한 명령은 같은 셸 안에서 rm 이 셰임으로 잡히는지 먼저 확인한다. Windows 의
 # PATH 에서 `bash` 가 WSL 로 잡히면 PATH·HOME 이 넘어가지 않아, 여기 있는 명령이 WSL 의 진짜
@@ -209,6 +211,85 @@ def test_root_and_home_are_refused(script, tmp_path):
     assert proc.returncode != 0
     assert "refusing" in proc.stderr
     assert (home / "keep").is_file()
+
+
+def test_home_is_refused_even_without_a_trash_tool(tmp_path):
+    """휴지통 도구가 없으면 실제 rm 으로 넘기지만, 홈 검사는 그보다 먼저다.
+    셰임만 복사해 옆의 send_to_trash.py 를 떼어 낸다."""
+    if os.name == "nt":
+        pytest.skip("Git Bash needs its own /usr/bin on PATH, which may hold a trash tool")
+    shims = tmp_path / "shims"
+    shims.mkdir()
+    shutil.copy(SHIM_DIR / "rm", shims / "rm")
+    (shims / "rm").chmod(0o755)
+    # 셰임이 쓰는 도구만 둔다. /usr/bin 을 통째로 넣으면 거기 있는 trash-put 이 이 분기를 가린다.
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for name in ("dirname", "id", "uname"):
+        (tools / name).symlink_to(shutil.which(name))
+    home = _guarded_home()
+    env = dict(os.environ, HOME=str(home))
+    env.pop("CLAUDE_NO_TRASH", None)
+    env["PATH"] = os.pathsep.join([str(shims), str(tools)])
+    proc = run_via_shim("rm -rf ~", cwd=str(BASE), env=env)
+    assert proc.returncode != 0
+    assert "refusing" in proc.stderr
+    assert (home / "keep").is_file()
+
+
+def test_send_to_trash_succeeds_on_a_console_that_cannot_print_its_message(tmp_path):
+    """한국어 Windows 콘솔(cp949)은 🗑 를 인코딩하지 못한다. 옮긴 뒤의 출력 오류를 실패로 세면
+    rm 이 휴지통으로 옮겨 놓고 exit 1 을 낸다(win-host 실측)."""
+    fake = tmp_path / "mods"
+    fake.mkdir()
+    (fake / "send2trash.py").write_text("import os\ndef send2trash(p):\n    os.remove(p)\n", encoding="utf-8")
+    target = tmp_path / "a.txt"
+    target.write_text("x", encoding="utf-8")
+    env = dict(os.environ, PYTHONPATH=str(fake), PYTHONIOENCODING="cp949")
+    proc = subprocess.run([sys.executable, str(SHIM_DIR.parent / "send_to_trash.py"), "--", str(target)],
+                          env=env, capture_output=True)
+    assert proc.returncode == 0, proc.stderr
+    assert not target.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Win32 path normalization; POSIX keeps the path as given")
+def test_send_to_trash_hands_send2trash_a_normalized_absolute_path(tmp_path):
+    """Git Bash 는 /c/x 를 C:/x 로 넘긴다. Windows send2trash 는 슬래시 경로를 E_INVALIDARG 로 거부한다(실측)."""
+    fake = tmp_path / "mods"
+    fake.mkdir()
+    seen = tmp_path / "seen"
+    (fake / "send2trash.py").write_text(
+        "import os\ndef send2trash(p):\n    open(%r, 'w', encoding='utf-8').write(p)\n    os.remove(p)\n" % str(seen),
+        encoding="utf-8")
+    target = tmp_path / "a.txt"
+    target.write_text("x", encoding="utf-8")
+    given = str(tmp_path) + "/./a.txt"
+    env = dict(os.environ, PYTHONPATH=str(fake))
+    proc = subprocess.run([sys.executable, str(SHIM_DIR.parent / "send_to_trash.py"), "--", given],
+                          env=env, capture_output=True)
+    assert proc.returncode == 0, proc.stderr
+    passed = seen.read_text(encoding="utf-8")
+    assert passed == str(target)
+    assert "/" not in passed
+
+
+def test_send_to_trash_succeeds_when_its_output_pipe_is_closed(tmp_path):
+    """`rm x | head -0` 처럼 읽는 쪽이 먼저 닫혀도, 옮긴 결과는 성공이다."""
+    fake = tmp_path / "mods"
+    fake.mkdir()
+    (fake / "send2trash.py").write_text("import os\ndef send2trash(p):\n    os.remove(p)\n", encoding="utf-8")
+    targets = [tmp_path / "a.txt", tmp_path / "b.txt"]
+    for target in targets:
+        target.write_text("x", encoding="utf-8")
+    read_end, write_end = os.pipe()
+    os.close(read_end)
+    try:
+        proc = subprocess.run([sys.executable, str(SHIM_DIR.parent / "send_to_trash.py"), "--", *map(str, targets)],
+                              env=dict(os.environ, PYTHONPATH=str(fake)), stdout=write_end, stderr=subprocess.PIPE)
+    finally:
+        os.close(write_end)
+    assert proc.returncode == 0, proc.stderr
+    assert not any(target.exists() for target in targets)
 
 
 def test_tmp_targets_are_really_deleted(tmp_path):

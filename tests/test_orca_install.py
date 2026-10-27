@@ -275,9 +275,9 @@ def test_powershell_bootstrap_forwards_tools(tmp_path):
         z.writestr('repo/scripts/setup.ps1', 'param([string]$Tools,[switch]$DryRun)\nif($Tools -ne "orca" -or -not $DryRun){exit 41}\nWrite-Output "TOOLS_FORWARDED"\nexit 0\n')
     mock="function Invoke-WebRequest { param($Uri,$OutFile,$UseBasicParsing) Copy-Item '"+str(archive).replace("'","''")+"' $OutFile }\n"
     text=(ROOT/'install.ps1').read_text(encoding='utf-8').replace('Set-StrictMode -Version Latest','Set-StrictMode -Version Latest\n'+mock)
-    script=tmp_path/'install.ps1';script.write_text(text)
+    script=tmp_path/'install.ps1';script.write_text(text,encoding='utf-8-sig')
     env=dict(os.environ,HOME=str(tmp_path),USERPROFILE=str(tmp_path),TEMP=str(tmp_path))
-    p=subprocess.run([pwsh,'-NoProfile','-File',str(script),'-Tools','orca','-DryRun'],capture_output=True,text=True,env=env,timeout=25)
+    p=subprocess.run([pwsh,'-NoProfile','-File',str(script),'-Tools','orca','-DryRun'],capture_output=True,text=True,encoding='utf-8',errors='replace',env=env,timeout=25)
     assert p.returncode==0,p.stdout+p.stderr
     assert 'TOOLS_FORWARDED' in p.stdout
 

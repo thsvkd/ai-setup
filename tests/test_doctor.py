@@ -175,6 +175,29 @@ def test_skill_outside_lock_is_reported_and_kept(tmp_path):
     assert (skills / "stray" / "SKILL.md").exists()
 
 
+def test_a_skill_link_that_cannot_be_followed_is_reported_without_stopping(tmp_path, monkeypatch):
+    """Windows 는 신뢰하지 않는 탑재 지점을 가리키는 junction 에 WinError 448 을 낸다(실측). 보고 전체가 멈추면 안 된다."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("doctor_under_test", DOCTOR)
+    doctor = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(doctor)
+    skills = tmp_path / ".agents" / "skills"
+    (skills / "blocked").mkdir(parents=True)
+    (skills / "stray").mkdir()
+    real = doctor.os.path.realpath
+
+    def realpath(path, *args, **kwargs):
+        if Path(path).name == "blocked":
+            raise OSError(448, "untrusted mount point")
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(doctor.os.path, "realpath", realpath)
+    warnings = []
+    doctor.check_skills(tmp_path, warnings.append)
+    assert any("blocked" in w and "cannot inspect" in w for w in warnings), warnings
+    assert any("stray" in w and "not in" in w for w in warnings), warnings
+
+
 def test_keys_that_only_mention_a_secret_word_are_not_reported(tmp_path):
     """covers: AI-5"""
     home = tmp_path / "home"

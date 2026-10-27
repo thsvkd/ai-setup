@@ -8,6 +8,7 @@ questionary 는 stdin 이 파이프일 때(= curl | sh) 에러도 없이 첫 항
 pty 를 쓰는 테스트는 실제 터미널 상호작용을 재현한다 — 느리지만, 이 기능에서 유일하게
 의미 있는 검증이다. Windows 에서는 pty/POSIX 셸이 없어 건너뛴다.
 """
+import importlib.util
 import json
 import os
 import shutil
@@ -586,6 +587,77 @@ def test_receipt_opens_hub_without_the_walk(tmp_path):
     assert "Set up this machine?" not in text, text
     assert "Choose a category to change" in text, text
     assert read_answers(out) == {"SKIP": "1"}
+
+
+@posix_only
+@pytest.mark.parametrize("mode", ["bypassPermissions", "acceptEdits"])
+def test_untouched_hub_apply_does_not_change_the_recorded_mode_or_newline_key(tmp_path, monkeypatch, mode):
+    """기록된 값을 메뉴가 보여 줄 수 없어도(acceptEdits), 손대지 않은 Apply 는 그 값을 바꾸지 않는다.
+    답이 다른 값을 담으면 setup 이 명시한 값으로 넘기고, stages 가 훅을 다시 깔아 사용자의 값을 되돌린다.
+    답을 실제 stages 계획에 넣어 본다."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / ".claude-code-setup.json").write_text(
+        json.dumps({"hooks": True, "keybinds": {"newline_chord": "ctrl-enter"}}), encoding="utf-8")
+    (home / ".claude" / "settings.json").write_text(
+        json.dumps({"permissions": {"defaultMode": mode}}), encoding="utf-8")
+    out = tmp_path / "answers"
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        keys=[UP, UP, UP, ENTER],
+        env=clean_env(HOME=str(home)),
+    )
+    assert code == EXIT_OK, screen.decode(errors="replace")
+    answers = read_answers(out)
+    assert answers["SKIP"] == "0" and "hooks" in answers["STAGES"] and "newline" in answers["STAGES"]
+    spec = importlib.util.spec_from_file_location("stages_under_test", ROOT / "res" / "stages.py")
+    stages = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, stages)    # dataclass 가 자기 모듈을 찾는다
+    spec.loader.exec_module(stages)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    selection = {"stages": ["hooks", "newline"]}
+    if "DEFAULT_MODE" in answers:
+        selection["permission_mode"] = answers["DEFAULT_MODE"]
+    if "NEWLINE_CHORD" in answers:
+        selection["newline"] = answers["NEWLINE_CHORD"]
+    actions = stages.plan_actions(selection, stages.probe_world(str(tmp_path)))
+    assert not any(action.writes for action in actions), [action.detail for action in actions]
+
+
+@posix_only
+def test_untouched_hub_apply_forwards_a_recorded_mode_when_hooks_are_not_installed_yet(tmp_path):
+    """영수증은 있지만 훅은 아직 깔지 않은 머신. 메뉴가 보여 준 bypassPermissions 를 넘기지 않으면
+    stages 가 기본값 auto 로 훅을 깔아 사용자의 값을 바꾼다."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / ".claude-code-setup.json").write_text(json.dumps({"keybinds": {}}), encoding="utf-8")
+    (home / ".claude" / "settings.json").write_text(
+        json.dumps({"permissions": {"defaultMode": "bypassPermissions"}}), encoding="utf-8")
+    out = tmp_path / "answers"
+    code, screen = run_in_pty(
+        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
+         "--project-dir", str(tmp_path)],
+        keys=[UP, UP, UP, ENTER],
+        env=clean_env(HOME=str(home)),
+    )
+    assert code == EXIT_OK, screen.decode(errors="replace")
+    assert read_answers(out)["DEFAULT_MODE"] == "bypassPermissions"
+
+
+def test_recorded_choices_read_a_settings_file_with_a_bom(tmp_path, monkeypatch):
+    """Windows 의 메모장·PS 5.1 Set-Content 는 BOM 을 붙인다. stages 는 utf-8-sig 로 읽으므로 같아야 한다."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / "settings.json").write_text(
+        json.dumps({"permissions": {"defaultMode": "bypassPermissions"}}), encoding="utf-8-sig")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    spec = importlib.util.spec_from_file_location("onboard_under_test", ONBOARD)
+    onboard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(onboard)
+    assert onboard.recorded_choices() == {"mode": "bypassPermissions"}
 
 
 def test_hub_rows_show_each_category_selection():

@@ -104,7 +104,8 @@ def service_command(plan, pairing_address, port=6768, pairing_scope="runtime"):
 
 def service_document(plan, python, runner, config):
     manager = plan["manager"]
-    args = ["-X", "utf8", str(runner), "--run", str(config)]
+    # -B: 헬퍼 import 가 서비스 디렉터리에 __pycache__ 를 남기면 제거 뒤 디렉터리가 지워지지 않는다.
+    args = ["-B", "-X", "utf8", str(runner), "--run", str(config)]
     if manager == "task-scheduler":
         ns = "http://schemas.microsoft.com/windows/2004/02/mit/task"
         tag = lambda name: "{" + ns + "}" + name
@@ -397,6 +398,9 @@ def remove_user_service(record):
         root / "orca-server.json",
         root / "pairing-codes.txt",
         root / "orca_windows.py",
+        # 서비스가 만든 것: launchd 로그, 중단된 페어링 파일 쓰기
+        root / "server.log",
+        root / "pairing-codes.txt.tmp",
         marker,
         service,
     )
@@ -457,6 +461,15 @@ def remove_user_service(record):
     for path in owned_files:
         if path.exists():
             path.unlink()
+    # -B 이전 설치는 헬퍼의 바이트코드를 남겼다. 그 파일만 지운다.
+    cache = root / "__pycache__"
+    if cache.is_dir() and not cache.is_symlink():
+        for compiled in cache.glob("orca_windows.*.pyc"):
+            compiled.unlink()
+        try:
+            cache.rmdir()
+        except OSError:
+            pass
     try:
         root.rmdir()
     except OSError:

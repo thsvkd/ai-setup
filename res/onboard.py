@@ -12,8 +12,10 @@ scripts/setup.sh (와 setup.ps1) 가 **인자 없이** 호출됐을 때만 실�
   STAGES=base,harness,...      켠 단계, stages.STAGE_ORDER 순서. 비어 있으면 SKIP=1 로 쓴다
   HARNESSES=claude,codex,...   선택한 하네스
   DEFAULT_MODE=auto|bypassPermissions
+                               hooks 단계가 켜졌을 때만 기록. 재실행에서 메뉴가 보여 줄 수 없는
+                               기록값(acceptEdits·plan·없음)을 바꾸지 않았으면 기록하지 않는다
   NEWLINE_CHORD=shift-enter|ctrl-enter
-                               줄바꿈 키 (newline 단계가 켜졌을 때만 기록)
+                               줄바꿈 키 (newline 단계가 켜졌을 때만 기록, 위와 같은 재실행 규칙)
   JARVIS_ROLE=none|gateway|core
   HERDR=0|1
   OMC=0|1                      이미 OMC HUD 인 statusLine 의 캐시 래퍼
@@ -46,6 +48,7 @@ scripts/setup.sh (와 setup.ps1) 가 **인자 없이** 호출됐을 때만 실�
 직접 열어 fd 0/1 에 얹는다. 터미널을 못 열면 대화형을 아예 포기하고 2 로 빠진다.
 """
 
+import json
 import os
 import sys
 
@@ -395,7 +398,6 @@ def _answers(state, plan):
         "SKIP": "0",
         "STAGES": ",".join(stage for stage in STAGE_ORDER if stage in state["stages"]),
         "HARNESSES": ",".join(state["harnesses"]),
-        "DEFAULT_MODE": state["mode"] if "hooks" in state["stages"] else "auto",
         "JARVIS_ROLE": state["jarvis_role"] if "tools" in state["stages"] else "none",
         "HERDR": "1" if state["herdr"] and "tools" in state["stages"] else "0",
         "DRY_RUN": "1" if plan == "dry" else "0",
@@ -404,7 +406,13 @@ def _answers(state, plan):
     for key in ("omc", "output_style", "mods"):
         answers[key.upper()] = "1" if special and state[key] else "0"
     answers["OVERWRITE_AGENTSMD"] = "1" if state["overwrite"] and "agentsmd" in state["stages"] else "0"
-    if "newline" in state["stages"]:
+    # 메뉴가 보여 줄 수 없는 기록값(acceptEdits·plan·없음) 자리에서는 시작값이 기본값이다. 그 기본값을 그대로 넘기면
+    # setup 이 명시한 값으로 전달해 기록값을 되돌리므로, 바꾸지 않았으면 넘기지 않는다. 메뉴가 보여 준 기록값은 넘긴다.
+    # 훅이 이미 깔렸으면 같은 값이라 계획이 없고, 아직 안 깔렸으면 그 값으로 깔아야 한다.
+    unchanged = state.get("unchanged", {})
+    if "hooks" in state["stages"] and unchanged.get("mode") != state["mode"]:
+        answers["DEFAULT_MODE"] = state["mode"]
+    if "newline" in state["stages"] and unchanged.get("chord") != state["chord"]:
         answers["NEWLINE_CHORD"] = state["chord"]
     return answers
 
@@ -426,14 +434,41 @@ def _hub(tui, state, project_dir, cursor):
         cursor = [o[0] for o in options].index(choice)
 
 
+def _claude_dir():
+    home = os.environ.get("USERPROFILE") if os.name == "nt" else os.environ.get("HOME")
+    return os.path.join(home or os.path.expanduser("~"), ".claude")
+
+
+def _read_json(path):
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def recorded_choices():
+    """이전 설치가 남긴 권한 모드·줄바꿈 키. 메뉴가 이 값에서 시작해야 그대로 둔 Apply 가 사용자의 값을 되돌리지 않는다."""
+    keybinds = _read_json(os.path.join(_claude_dir(), ".claude-code-setup.json")).get("keybinds")
+    permissions = _read_json(os.path.join(_claude_dir(), "settings.json")).get("permissions")
+    chord = keybinds.get("newline_chord") if isinstance(keybinds, dict) else None
+    mode = permissions.get("defaultMode") if isinstance(permissions, dict) else None
+    choices = {}
+    if chord in ("shift-enter", "ctrl-enter"):
+        choices["chord"] = chord
+    if mode in ("auto", "bypassPermissions"):    # _edit_hooks 가 고를 수 있는 값만
+        choices["mode"] = mode
+    return choices
+
+
 def has_receipt():
     """이 setup 이 이미 한 번 설치한 머신인가. 그렇다면 산책 없이 허브부터 연다.
 
     경로 규칙은 stages._receipt_path 와 같다. stages 를 import 하지 않는 것은 onboard.py 가
     tui.py 만 옆에 둔 채로도 돌아야 하기 때문이다.
     """
-    home = os.environ.get("USERPROFILE") if os.name == "nt" else os.environ.get("HOME")
-    return os.path.isfile(os.path.join(home or os.path.expanduser("~"), ".claude", ".claude-code-setup.json"))
+    return os.path.isfile(os.path.join(_claude_dir(), ".claude-code-setup.json"))
 
 
 def ask_all(tui, project_dir, first_run=True):
@@ -445,7 +480,10 @@ def ask_all(tui, project_dir, first_run=True):
     """
     tui.intro("ai-setup — Claude Code safety setup")
     state = default_state()
+    recorded = recorded_choices()
+    state.update(recorded)
     if not first_run:
+        state["unchanged"] = {key: state[key] for key in ("mode", "chord") if key not in recorded}
         return _hub(tui, state, project_dir, 0)
 
     start = tui.select(
