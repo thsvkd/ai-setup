@@ -25,18 +25,19 @@ import os, shutil, sys
 args = sys.argv[1:]
 with open(os.environ["NPM_LOG"], "a") as log:
     log.write(" ".join(args) + "\n")
+broken = bool(os.environ.get("NPM_BROKEN"))
 def cli(package_dir, bin_dir, version):
     os.makedirs(package_dir, exist_ok=True)
     os.makedirs(bin_dir, exist_ok=True)
     if os.name == "nt":
         script = os.path.join(package_dir, "cli.cmd")
         open(script, "w").write('@echo off\r\nif "%~1"=="--sleep" (ping -n 30 127.0.0.1 >nul & exit /b 0)\r\n'
-                                'echo gemini ' + version + '\r\n')
+                                + ('exit /b 1\r\n' if broken else '') + 'echo gemini ' + version + '\r\n')
         open(os.path.join(bin_dir, "gemini.cmd"), "w").write('@"' + script + '" %*\r\n')
     else:
         script = os.path.join(package_dir, "cli")
         open(script, "w").write('#!/bin/sh\nif [ "$1" = "--sleep" ]; then /bin/sleep 30; exit 0; fi\n'
-                                'echo "gemini ' + version + '"\n')
+                                + ('exit 1\n' if broken else '') + 'echo "gemini ' + version + '"\n')
         os.chmod(script, 0o755)
         os.symlink(os.path.relpath(script, bin_dir), os.path.join(bin_dir, "gemini"))
 if args[:2] == ["view", "@google/gemini-cli"]:
@@ -134,6 +135,13 @@ def test_update_switches_current_only_after_the_new_version_is_complete_and_neve
     assert not (root / "3.0.0").exists()
     assert run_shim("--version").stdout.strip() == "gemini 2.0.0"
 
+    # 설치는 됐지만 실행되지 않는 버전(postinstall 이 바이너리를 못 놓은 경우)도 current 가 되지 않는다.
+    monkeypatch.delenv("NPM_FAIL")
+    monkeypatch.setenv("NPM_BROKEN", "1")
+    assert npm_release.install(ENTRY, update_ai.process_table) == "failed"
+    assert npm_release.read_pointer(root, "current") == "2.0.0"
+    assert not (root / "3.0.0").exists()
+
 
 def test_prune_keeps_current_previous_and_versions_a_running_session_uses(world, monkeypatch):
     """covers: AI-58"""
@@ -206,6 +214,20 @@ def test_a_file_ai_setup_did_not_write_at_the_shim_path_is_never_overwritten(wor
     assert shim.read_text(encoding="utf-8") == "#!/bin/sh\necho mine\n"
     assert not any(c.startswith("install") for c in npm_calls(world))
     assert not npm_release.store(ENTRY).exists()
+
+
+def test_a_command_of_the_same_name_from_another_install_is_left_alone(world, monkeypatch):
+    """covers: AI-60 — 다른 방식(brew·winget·다른 npm 패키지)으로 깔린 같은 이름의 명령 옆에 사본을 만들지 않는다."""
+    other = world / "other-bin"
+    other.mkdir()
+    name = "gemini.cmd" if WINDOWS else "gemini"
+    (other / name).write_text("@echo off\r\n" if WINDOWS else "#!/bin/sh\n", encoding="utf-8")
+    if not WINDOWS:
+        (other / name).chmod(0o755)
+    monkeypatch.setenv("PATH", os.environ["PATH"] + os.pathsep + str(other))
+    assert npm_release.install(ENTRY, update_ai.process_table) == "failed"
+    assert not any(c.startswith("install") for c in npm_calls(world))
+    assert not os.path.lexists(npm_release.shim_path(ENTRY))
 
 
 def test_uninstall_removes_the_shim_and_keeps_only_a_version_still_in_use(world, monkeypatch):

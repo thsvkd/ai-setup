@@ -252,6 +252,15 @@ def install_version(entry, root, version):
         say("      -> npm install failed; current version left as is")
         shutil.rmtree(target, ignore_errors=True)
         return False
+    # postinstall 이 실제 바이너리를 못 놓으면(opencode-ai 의 자리표시자 exe) 링크만 있고 실행은 안 된다.
+    # current 로 바꾸기 전에 그 버전을 직접 실행해 본다.
+    probe = run_quiet((["cmd", "/c"] if WINDOWS else []) + [str(entry_bin), "--version"], timeout=60)
+    if not probe or probe.returncode != 0:
+        for line in ((probe.stdout + probe.stderr) if probe else "it did not start").splitlines()[-3:]:
+            say("      " + line)
+        say("      -> the new version does not run ({} --version failed); current version left as is".format(name))
+        shutil.rmtree(target, ignore_errors=True)
+        return False
     (target / ".complete").write_text(version + "\n", encoding="utf-8")
     return True
 
@@ -317,6 +326,25 @@ def remove_legacy(entry, pids):
     return []
 
 
+def foreign_command(entry):
+    """PATH 에서 같은 이름의 명령이 ai-setup 셔임도, 같은 패키지의 npm 사본도 아니면 그 경로를 알리는 문장.
+
+    다른 방식(brew, winget, 다른 npm 패키지)으로 깔린 같은 이름의 도구 옆에 두 번째 사본을 만들지 않는다.
+    """
+    found = shutil.which(entry["detect"]["bin"])
+    if not found or owns(found):
+        return None
+    tool = npm()
+    out = run_quiet([tool, "root", "-g"]) if tool else None
+    package = entry["packages"]["npm"]
+    if out and out.returncode == 0 and (Path(out.stdout.strip()) / Path(*package.split("/"))).is_dir():
+        return None  # 같은 패키지의 npm -g 사본: 옮겨 갈 대상이다
+    if not WINDOWS and "/node_modules/{}/".format(package) in os.path.realpath(found):
+        return None
+    return "{} already provides {} from another install; remove it first, or keep it and skip this".format(
+        found, entry["detect"]["bin"])
+
+
 def remove_winget(entry):
     """npm-release 이전 Windows 카탈로그가 winget 으로 깐 사본(copilot)을 지운다. 실패하면 False.
 
@@ -344,7 +372,7 @@ def install(entry, processes):
     if not npm():
         say("  {:<14}  npm not found; install Node first".format("package"))
         return "failed"
-    problem = ensure_shim(entry, check_only=True)
+    problem = ensure_shim(entry, check_only=True) or foreign_command(entry)
     if problem:
         say("  {:<14}  {}".format("shim", problem))
         return "failed"
