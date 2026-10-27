@@ -30,10 +30,12 @@ def cli(package_dir, bin_dir, version):
     os.makedirs(package_dir, exist_ok=True)
     os.makedirs(bin_dir, exist_ok=True)
     if os.name == "nt":
-        script = os.path.join(package_dir, "cli.cmd")
-        open(script, "w").write('@echo off\r\nif "%~1"=="--sleep" (ping -n 30 127.0.0.1 >nul & exit /b 0)\r\n'
-                                + ('exit /b 1\r\n' if broken else '') + 'echo gemini ' + version + '\r\n')
-        open(os.path.join(bin_dir, "gemini.cmd"), "w").write('@"' + script + '" %*\r\n')
+        # 실제 npm 셔임처럼 .bin\\gemini.cmd 가 인터프리터로 버전 디렉터리 안의 스크립트를 띄운다.
+        # 세션은 그 인터프리터이고, 명령줄에 버전 경로가 남는다(배치만으로 기다리면 남지 않는다).
+        script = os.path.join(package_dir, "cli.py")
+        open(script, "w").write('import sys, time\nif sys.argv[1:2] == ["--sleep"]: time.sleep(30); sys.exit(0)\n'
+                                + ('sys.exit(1)\n' if broken else '') + 'print("gemini ' + version + '")\n')
+        open(os.path.join(bin_dir, "gemini.cmd"), "w").write('@"' + sys.executable + '" "' + script + '" %*\r\n')
     else:
         script = os.path.join(package_dir, "cli")
         open(script, "w").write('#!/bin/sh\nif [ "$1" = "--sleep" ]; then /bin/sleep 30; exit 0; fi\n'
@@ -106,6 +108,9 @@ def start_session():
 
 
 def stop(session):
+    if WINDOWS:
+        # cmd /c 셔임만 끝내면 손자인 세션 인터프리터가 남는다.
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(session.pid)], capture_output=True, timeout=30)
     session.kill()
     session.wait()
     time.sleep(0.5)

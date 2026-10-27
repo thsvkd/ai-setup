@@ -159,7 +159,8 @@ def test_running_session_of_an_in_place_npm_install_defers_the_update(tmp_path):
         # 진짜로 그 세션을 찾았는지 PID 로 확인하고, 실시간 갱신되는 카탈로그 설치 방법을 알려 준다.
         deferred = [line for line in result.stdout.splitlines() if "deferred" in line and "gemini" in line]
         assert deferred and str(session.pid) in deferred[0], result.stdout
-        assert "npm_release.py install gemini" in result.stdout, result.stdout
+        hint = [line for line in result.stdout.splitlines() if "npm_release.py" in line]
+        assert hint and hint[0].rstrip().endswith("install gemini"), result.stdout
         result = run_update(tmp_path / "home", [prefix_bin], log, "--only", "gemini", "--allow-interrupt")
         assert "prefix-npm install -g @google/gemini-cli@latest" in updates(log), result.stdout
     finally:

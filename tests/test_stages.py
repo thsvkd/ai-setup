@@ -481,6 +481,8 @@ def test_full_apply_invokes_harness_plugins_and_codegraph_mcp(monkeypatch, tmp_p
     monkeypatch.setattr(stages.subprocess, "run", fake_run)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    # Windows 의 하네스 bin(Codex·agy·ai-setup 셔임)은 LOCALAPPDATA 아래다. 실제 사용자 설치가 보이면 안 된다.
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "AppData" / "Local"))
     empty_bin = tmp_path / "empty-bin"
     empty_bin.mkdir()
     monkeypatch.setenv("PATH", str(empty_bin))
@@ -791,7 +793,7 @@ def test_user_bin_goes_on_path_so_fresh_harness_installs_are_found(monkeypatch, 
     expected = [home / ".local" / "bin", home / ".grok" / "bin", home / ".opencode" / "bin"]
     if os.name == "nt":
         local = home / "AppData" / "Local"
-        expected += [local / "Programs" / "OpenAI" / "Codex" / "bin", local / "agy" / "bin"]
+        expected += [local / "Programs" / "OpenAI" / "Codex" / "bin", local / "agy" / "bin", local / "ai-setup" / "bin"]
     assert os.environ["PATH"] == os.pathsep.join([*map(str, expected), "/usr/bin"])
 
 
