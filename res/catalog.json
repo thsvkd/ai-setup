@@ -434,13 +434,13 @@
       "linux": [
         {
           "method": "native",
-          "cmd": "rm -f \"$HOME/.local/bin/copilot\"; if command -v npm >/dev/null 2>&1 && npm ls -g @github/copilot >/dev/null 2>&1; then npm uninstall -g @github/copilot; fi"
+          "cmd": "python3 res/tools/npm_release.py uninstall copilot && rm -f \"$HOME/.local/bin/copilot\""
         }
       ],
       "macos": [
         {
           "method": "native",
-          "cmd": "rm -f \"$HOME/.local/bin/copilot\"; if command -v npm >/dev/null 2>&1 && npm ls -g @github/copilot >/dev/null 2>&1; then npm uninstall -g @github/copilot; fi"
+          "cmd": "python3 res/tools/npm_release.py uninstall copilot && rm -f \"$HOME/.local/bin/copilot\""
         }
       ],
       "windows": [

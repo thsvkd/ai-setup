@@ -18,6 +18,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -640,6 +641,20 @@ def main(argv=None):
             shutil.rmtree(lock, ignore_errors=True)
 
 
+def runnable(cmd):
+    """카탈로그 명령을 어디서든 붙여 넣어 돌릴 수 있게 한다.
+
+    npm-release 명령(python3 res/tools/...)은 저장소 기준 상대 경로이고, Windows 의 python 은 Store 별칭일 수 있다.
+    """
+    head, _, rest = cmd.partition(" ")
+    if head not in ("python3", "python"):
+        return cmd
+    script, _, tail = rest.partition(" ")
+    if os.name == "nt":
+        return '& "{}" "{}" {}'.format(sys.executable, ROOT / script, tail)
+    return "{} {} {}".format(shlex.quote(sys.executable), shlex.quote(str(ROOT / script)), tail)
+
+
 def run_all(catalog, only, args):
     cache = {}
 
@@ -684,9 +699,8 @@ def run_all(catalog, only, args):
             say("  {:<14}  close it and run again, or pass --allow-interrupt".format(""))
             official = ((entry.get("install") or {}).get(platform_key()) or [{}])[0]
             if method != "deb" and official.get("method") not in (None, method):
-                # 카탈로그 명령은 저장소 기준 상대 경로(res/tools/...)라, 어디서든 되게 절대 경로로 보인다.
                 say("  {:<14}  installed the catalog way ({}), it updates live: {}".format(
-                    "", official["method"], official["cmd"].replace(" res/", " " + str(ROOT / "res") + os.sep, 1)))
+                    "", official["method"], runnable(official["cmd"])))
             results.append((entry["id"], "failed: deferred (in use)", before, before))
             failed += 1
             continue

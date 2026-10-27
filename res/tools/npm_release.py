@@ -87,6 +87,8 @@ def shim_text(entry):
     ])
 
 
+# ponytail: 셔임은 다시 쓰지 않으므로 shim_text 를 바꿔도 이미 깔린 셔임에는 닿지 않는다.
+# 형식을 바꿀 일이 생기면 MARK 에 판 번호를 붙이고 예전 판만 원자적으로 교체한다.
 def owns(path):
     """path 가 이 모듈이 쓴 셔임이면 True."""
     try:
@@ -315,6 +317,25 @@ def remove_legacy(entry, pids):
     return []
 
 
+def remove_winget(entry):
+    """npm-release 이전 Windows 카탈로그가 winget 으로 깐 사본(copilot)을 지운다. 실패하면 False.
+
+    winget portable 은 실행 중이면 지우지 못하고 실패한다. 영수증이 남아 다음 실행이 다시 시도한다.
+    """
+    package = (entry.get("packages") or {}).get("winget")
+    winget = shutil.which("winget") if package else None
+    flags = ["--id", package, "--exact", "--accept-source-agreements", "--disable-interactivity"] if winget else []
+    listed = run_quiet([winget, "list"] + flags) if winget else None
+    if not listed or listed.returncode != 0:
+        return True
+    say("  {:<14}  winget uninstall --id {} (old winget copy)".format("legacy", package))
+    out = run_quiet([winget, "uninstall"] + flags, timeout=300)
+    if not out or out.returncode != 0:
+        say("      -> could not remove the old winget copy (still running?); run the uninstall again after it ends")
+        return False
+    return True
+
+
 def install(entry, processes):
     """최신 버전으로 설치하거나 올린다. 결과: ok·failed·partial(새 버전은 됐고 이전 사본을 사용 중이라 남김).
 
@@ -374,6 +395,8 @@ def uninstall(entry, processes):
         shim_dir().rmdir()
     root = store(entry)
     if not root.is_dir():
+        if WINDOWS and not remove_winget(entry):
+            return "failed"
         legacy = remove_legacy(entry, legacy_users(entry, processes()))
         if legacy:
             say("  {:<14}  old global npm copy kept: in use (PID {}); run the uninstall again after it ends".format(
