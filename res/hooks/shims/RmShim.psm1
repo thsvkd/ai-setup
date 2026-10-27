@@ -11,6 +11,23 @@ Set-StrictMode -Off
 $script:RealRemoveItem = Microsoft.PowerShell.Core\Get-Command `
     -Name Microsoft.PowerShell.Management\Remove-Item -CommandType Cmdlet
 
+function Resolve-ClaudeRealPath {
+    # 경로를 뿌리부터 한 단계씩 따라가며 심볼릭 링크·정션을 풀어 실제 경로를 돌려준다.
+    # LinkType/Target 은 Windows PowerShell 5.1 에도 있다. Depth 는 순환 링크 방어.
+    param([string]$Path, [int]$Depth = 0)
+    $full = [System.IO.Path]::GetFullPath($Path)
+    $acc = [System.IO.Path]::GetPathRoot($full)
+    foreach ($part in $full.Substring($acc.Length).Split([char[]]'\/', [StringSplitOptions]::RemoveEmptyEntries)) {
+        $acc = [System.IO.Path]::Combine($acc, $part)
+        $i = Get-Item -LiteralPath $acc -Force -ErrorAction Ignore
+        if ($Depth -lt 40 -and $i -and $i.LinkType -in 'SymbolicLink', 'Junction') {
+            $target = [System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($acc), @($i.Target)[0])
+            $acc = Resolve-ClaudeRealPath $target ($Depth + 1)
+        }
+    }
+    return $acc.TrimEnd('\', '/')
+}
+
 function Test-ClaudeRootPath {
     param([string]$FullPath)
     $p = $FullPath.TrimEnd('\', '/')
@@ -21,6 +38,17 @@ function Test-ClaudeRootPath {
     # C:\ , D:\ 같은 드라이브 루트와 POSIX 루트.
     if ($p -match '^[A-Za-z]:$') { return $true }
     if ($p -eq '') { return $true }
+    # 링크를 거쳐 같은 홈에 닿는 경로(예: C:\Documents and Settings\me). 대상 자신은 풀지 않는다 —
+    # 링크를 지우면 링크만 사라지므로, 조상 경로만 실제 경로로 바꿔 홈의 실제 경로와 비교한다.
+    # 해석은 항목마다 Get-Item 을 여러 번 부르므로, 홈의 실제 경로는 Remove-Item 호출(end{})마다 한 번만
+    # 풀고, 이름이 그 끝 이름과 다른 항목은 실제 경로가 홈일 수 없으니 조상을 풀지 않는다.
+    $parent = [System.IO.Path]::GetDirectoryName($p)
+    if ($home_ -and $parent) {
+        if (-not $script:RealHome) { $script:RealHome = Resolve-ClaudeRealPath $home_ }
+        $leaf = [System.IO.Path]::GetFileName($p)
+        if ($leaf -eq [System.IO.Path]::GetFileName($script:RealHome) -and
+            [System.IO.Path]::Combine((Resolve-ClaudeRealPath $parent), $leaf) -eq $script:RealHome) { return $true }
+    }
     return $false
 }
 
@@ -92,43 +120,45 @@ function Remove-Item {
 
     end {
         $literal = $PSCmdlet.ParameterSetName -eq 'LiteralPath'
+        $script:RealHome = $null
+        # end{} 의 $PSBoundParameters 에는 마지막 파이프라인 항목만 남는다. 원본 cmdlet 으로
+        # 넘길 때 모은 경로 전부가 가도록 바꿔 둔다.
+        $PSBoundParameters[$(if ($literal) { 'LiteralPath' } else { 'Path' })] = $collected.ToArray()
+
+        $items = @()
+        foreach ($p in $collected) {
+            $got = if ($literal) {
+                Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+            }
+            else {
+                Get-Item -Path $p -Force -ErrorAction SilentlyContinue
+            }
+            if ($got) { $items += $got }
+        }
+
+        # 루트/홈 거부는 위임 여부를 정하기 전에 한다 — 위임 경로도 원본 cmdlet 이 실제로 지운다.
+        foreach ($i in $items) {
+            if ($i.PSProvider.Name -eq 'FileSystem' -and (Test-ClaudeRootPath $i.FullName)) {
+                Write-Error "Remove-Item(shim): refusing to delete the entire root/home directory ($($i.FullName))."
+                return
+            }
+        }
 
         # 원본 cmdlet 에게 그대로 넘겨야 하는 경우들. 셰임이 흉내 내면 의미가 달라진다.
         #  - -WhatIf/-Confirm: 확인 흐름은 cmdlet 이 내는 그대로여야 한다.
         #  - -Stream/-Credential/-Filter/-Include/-Exclude: 휴지통으로는 표현할 수 없다.
-        $delegate = $WhatIfPreference -or $PSBoundParameters.ContainsKey('Confirm') -or
-                    $Stream -or $Credential -or $Filter -or $Include -or $Exclude
-        if (-not $delegate) {
-            $items = @()
-            foreach ($p in $collected) {
-                $got = if ($literal) {
-                    Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
-                }
-                else {
-                    Get-Item -Path $p -Force -ErrorAction SilentlyContinue
-                }
-                if ($got) { $items += $got }
-            }
-            # 아무것도 못 찾았다(오탈자·없는 파일) → 오류 문구까지 cmdlet 것을 그대로 쓴다.
-            # 파일시스템이 아닌 공급자(Env:, HKLM:, Variable:)도 휴지통 대상이 아니다.
-            if (-not $items -or ($items | Where-Object { $_.PSProvider.Name -ne 'FileSystem' })) {
-                $delegate = $true
-            }
-        }
-
-        if ($delegate) {
+        #  - 아무것도 못 찾았다(오탈자·없는 파일) → 오류 문구까지 cmdlet 것을 그대로 쓴다.
+        #  - 파일시스템이 아닌 공급자(Env:, HKLM:, Variable:)도 휴지통 대상이 아니다.
+        if ($WhatIfPreference -or $PSBoundParameters.ContainsKey('Confirm') -or
+            $Stream -or $Credential -or $Filter -or $Include -or $Exclude -or
+            -not $items -or ($items | Where-Object { $_.PSProvider.Name -ne 'FileSystem' })) {
             & $script:RealRemoveItem @PSBoundParameters
             return
         }
 
         $targets = @()
         foreach ($i in $items) {
-            $full = $i.FullName
-            if (Test-ClaudeRootPath $full) {
-                Write-Error "Remove-Item(shim): refusing to delete the entire root/home directory ($full)."
-                return
-            }
-            if ($targets -notcontains $full) { $targets += $full }
+            if ($targets -notcontains $i.FullName) { $targets += $i.FullName }
         }
 
         try {

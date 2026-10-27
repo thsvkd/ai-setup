@@ -130,6 +130,127 @@ def test_checkout_path_backs_up_worktree(repo):
     assert (repo / "tracked.txt").read_text(encoding="utf-8") == "되돌려질 편집\n"
 
 
+def test_checkout_pathspec_without_dashdash_backs_up(repo):
+    """`git checkout <path>` 는 `--` 없이도 미커밋 편집을 덮어쓴다."""
+    (repo / "tracked.txt").write_text("되돌려질 편집\n", encoding="utf-8")
+    run_hook("git checkout tracked.txt", repo)
+    ref = latest_backup(repo)
+    assert ref
+
+    git(repo, "checkout", "tracked.txt")
+    assert (repo / "tracked.txt").read_text(encoding="utf-8") == "committed\n"
+    restore_from_backup(repo, ref)
+    assert (repo / "tracked.txt").read_text(encoding="utf-8") == "되돌려질 편집\n"
+
+
+@pytest.mark.parametrize("cmd", ["git rm -f tracked.txt", "git rm --force tracked.txt",
+                                 "git rm -fr tracked.txt"])
+def test_rm_force_backs_up_tracked_modification(repo, cmd):
+    (repo / "tracked.txt").write_text("지워질 편집\n", encoding="utf-8")
+    run_hook(cmd, repo)
+    ref = latest_backup(repo)
+    assert ref
+
+    git(repo, *cmd.split()[1:])
+    assert not (repo / "tracked.txt").exists()
+    restore_from_backup(repo, ref)
+    assert (repo / "tracked.txt").read_text(encoding="utf-8") == "지워질 편집\n"
+
+
+def test_checkout_combined_force_flag_backs_up(repo):
+    """`-fq` 처럼 f 뒤에 다른 짧은 옵션이 붙어도 강제 checkout 이다."""
+    (repo / "tracked.txt").write_text("버려질 편집\n", encoding="utf-8")
+    run_hook("git checkout -fq HEAD", repo)
+    ref = latest_backup(repo)
+    assert ref
+
+    git(repo, "checkout", "-fq", "HEAD")
+    assert (repo / "tracked.txt").read_text(encoding="utf-8") == "committed\n"
+    restore_from_backup(repo, ref)
+    assert (repo / "tracked.txt").read_text(encoding="utf-8") == "버려질 편집\n"
+
+
+def test_switch_discard_changes_backs_up(repo):
+    git(repo, "branch", "side")
+    (repo / "tracked.txt").write_text("버려질 편집\n", encoding="utf-8")
+    run_hook("git switch --discard-changes side", repo)
+    ref = latest_backup(repo)
+    assert ref
+
+    git(repo, "switch", "--discard-changes", "side")
+    assert (repo / "tracked.txt").read_text(encoding="utf-8") == "committed\n"
+    restore_from_backup(repo, ref)
+    assert (repo / "tracked.txt").read_text(encoding="utf-8") == "버려질 편집\n"
+
+
+def test_clean_long_force_backs_up_untracked_files(repo):
+    (repo / "untracked.txt").write_text("새 파일\n", encoding="utf-8")
+    run_hook("git clean --force -d", repo)
+    ref = latest_backup(repo)
+    assert ref
+
+    git(repo, "clean", "--force", "-dq")
+    assert not (repo / "untracked.txt").exists()
+    restore_from_backup(repo, ref)
+    assert (repo / "untracked.txt").read_text(encoding="utf-8") == "새 파일\n"
+
+
+@pytest.mark.parametrize("cmd", ["git checkout side", "git checkout -b fresh", "git switch side"])
+def test_branch_checkout_with_dirty_tree_makes_no_backup(repo, cmd):
+    """브랜치 전환은 미커밋 변경을 옮기거나 거부할 뿐 버리지 않는다 — 스냅샷할 이유가 없다."""
+    git(repo, "branch", "side")
+    (repo / "tracked.txt").write_text("x\n", encoding="utf-8")
+    run_hook(cmd, repo)
+    assert backup_count(repo) == 0
+
+
+@pytest.mark.parametrize("cmd", ["git switch side && ls -lf", "git checkout side; ls -lf",
+                                 "git clean -n && ls -lf", "git rm --cached x || ls -lf",
+                                 "git reset HEAD x && echo --hard"])
+def test_wipe_flag_of_a_later_command_makes_no_backup(repo, cmd):
+    """`-f`·`--hard` 가 뒤따르는 다른 명령의 것이면 git 명령은 손실이 없다."""
+    git(repo, "branch", "side")
+    (repo / "tracked.txt").write_text("x\n", encoding="utf-8")
+    run_hook(cmd, repo)
+    assert backup_count(repo) == 0
+
+
+@pytest.mark.parametrize("form", ["absolute", "relative"])
+def test_git_dash_c_targets_that_repo(repo, tmp_path, form):
+    """`git -C <dir>` 는 cwd 가 아니라 <dir> 에서 실행된다 — 백업도 거기서 해야 한다."""
+    (repo / "tracked.txt").write_text("다른 디렉터리 편집\n", encoding="utf-8")
+    session = _other_repo_with_changes(tmp_path)
+    target = str(repo) if form == "absolute" else os.path.join("..", repo.name)
+    run_hook("git -C %s reset --hard" % target, session)
+    assert backup_count(repo) == 1
+    assert backup_count(session) == 0
+
+
+def test_git_dash_c_quoted_path_with_space(tmp_path):
+    (tmp_path / "my repo").mkdir()
+    spaced = _other_repo_with_changes(tmp_path / "my repo")
+    session = tmp_path / "session"
+    session.mkdir()
+    run_hook('git -C "%s" reset --hard' % spaced, session)
+    assert backup_count(spaced) == 1
+
+
+def test_git_dash_c_is_cumulative(repo, tmp_path):
+    """git 처럼 `-C a -C b` 는 a 기준의 b 다."""
+    (repo / "tracked.txt").write_text("누적 -C\n", encoding="utf-8")
+    session = _other_repo_with_changes(tmp_path)
+    run_hook("git -C %s -C %s reset --hard" % (tmp_path, repo.name), session)
+    assert backup_count(repo) == 1
+    assert backup_count(session) == 0
+
+
+def test_unresolvable_dash_c_falls_back_to_cwd(repo):
+    """-C 대상을 풀 수 없으면 아무것도 안 하느니 cwd 를 백업한다(오탐 비용은 ref 하나)."""
+    (repo / "tracked.txt").write_text("x\n", encoding="utf-8")
+    run_hook("git -C missing-dir reset --hard", repo)
+    assert backup_count(repo) == 1
+
+
 def test_worktree_remove_backs_up_the_target_worktree(repo, tmp_path):
     """`git worktree remove` 의 대상은 cwd 가 아니라 인자다 — 거기서 백업해야 한다."""
     wt = tmp_path / "wt"

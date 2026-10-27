@@ -118,6 +118,24 @@ def test_server_setup_failure_keeps_recoverable_ownership_receipt(tmp_path, monk
     assert receipt['tool_installs']['orca_server']['state'] == 'configuring'
 
 
+def test_missing_tailscale_skips_only_the_server_and_succeeds(tmp_path, monkeypatch, capsys):
+    """Tailscale 주소가 없으면 서버만 건너뛰고 경고한다. exit 0 이라 단계형 설치의 뒤 단계(가드 훅)가 계속된다."""
+    sys.path.insert(0, str(WORKER.parent))
+    import orca_server
+    monkeypatch.setattr(orcasetup, 'home_dir', lambda: tmp_path)
+    monkeypatch.setattr(orcasetup, 'package_plan', lambda *a: {'method': 'app'})
+    monkeypatch.setattr(orcasetup, 'existing_install', lambda p: True)
+    monkeypatch.setattr(orcasetup, 'install_paths', lambda p: (tmp_path / 'Orca.app', tmp_path / 'orca.exe'))
+    def no_tailscale():
+        raise RuntimeError('No Tailscale IPv4 address found.')
+    monkeypatch.setattr(orca_server, 'discover_pairing_address', no_tailscale)
+    monkeypatch.setattr(orca_server, 'setup_server_client', lambda *a, **k: pytest.fail('server configured without an address'))
+    assert orcasetup.main([]) == 0
+    assert 'Orca server not configured' in capsys.readouterr().err
+    path = tmp_path / '.claude/.claude-code-setup.json'
+    assert not path.exists() or 'orca_server' not in json.loads(path.read_text()).get('tool_installs', {})
+
+
 def test_bad_hash_never_reaches_package_installer(tmp_path, monkeypatch):
     monkeypatch.setattr(orcasetup, 'open_release', lambda url: io.BytesIO(b'corrupt'))
     meta = {'name':'p.deb','size':7,'sha512':base64.b64encode(hashlib.sha512(b'correct').digest()).decode()}
@@ -280,6 +298,28 @@ def test_powershell_bootstrap_forwards_tools(tmp_path):
     p=subprocess.run([pwsh,'-NoProfile','-File',str(script),'-Tools','orca','-DryRun'],capture_output=True,text=True,encoding='utf-8',errors='replace',env=env,timeout=25)
     assert p.returncode==0,p.stdout+p.stderr
     assert 'TOOLS_FORWARDED' in p.stdout
+
+
+@pytest.mark.parametrize('args,check', [
+    (['-Doctor'], 'if(-not $Doctor){exit 41}'),
+    (['--doctor'], 'if(-not $Doctor){exit 41}'),
+    (['-Tools', 'orca', '--orca-desktop'], 'if($Tools -ne "orca" -or $Rest -notcontains "--orca-desktop"){exit 41}'),
+])
+def test_powershell_bootstrap_forwards_readme_options(tmp_path, args, check):
+    """README 의 PowerShell 열이 안내하는 -Doctor·--orca-desktop 을 irm 원라이너도 넘긴다."""
+    import os,shutil,zipfile
+    pwsh=shutil.which('pwsh')
+    if not pwsh:pytest.skip('PowerShell is unavailable')
+    archive=tmp_path/'repo.zip'
+    with zipfile.ZipFile(archive,'w') as z:
+        z.writestr('repo/scripts/setup.ps1', 'param([string]$Tools,[switch]$Doctor,[Parameter(ValueFromRemainingArguments=$true)][string[]]$Rest=@())\n'+check+'\nWrite-Output "FORWARDED"\nexit 0\n')
+    mock="function Invoke-WebRequest { param($Uri,$OutFile,$UseBasicParsing) Copy-Item '"+str(archive).replace("'","''")+"' $OutFile }\n"
+    text=(ROOT/'install.ps1').read_text(encoding='utf-8').replace('Set-StrictMode -Version Latest','Set-StrictMode -Version Latest\n'+mock)
+    script=tmp_path/'install.ps1';script.write_text(text,encoding='utf-8-sig')
+    env=dict(os.environ,HOME=str(tmp_path),USERPROFILE=str(tmp_path),TEMP=str(tmp_path))
+    p=subprocess.run([pwsh,'-NoProfile','-File',str(script),*args],capture_output=True,text=True,encoding='utf-8',errors='replace',env=env,timeout=25)
+    assert p.returncode==0,p.stdout+p.stderr
+    assert 'FORWARDED' in p.stdout
 
 
 def test_existing_skills_links_and_lock_entries_are_preserved(tmp_path, monkeypatch):

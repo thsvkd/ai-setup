@@ -307,12 +307,18 @@ DEFAULT_CURSOR_JSONC = """\
 """ % (FOREIGN_VSCODE_KEY, FOREIGN_VSCODE_COMMAND, FOREIGN_CURSOR_COMMAND,
        EDITOR_SHIFT_ENTER_COMMAND, NOTEBOOK_SHIFT_ENTER_COMMAND)
 
+# Claude Code 가 읽는 형식: https://code.claude.com/docs/en/keybindings
+# (스키마 https://www.schemastore.org/claude-code-keybindings.json). 최상위 "bindings" 배열이 없으면
+# Claude Code 는 파일 전체를 무시한다.
 DEFAULT_CLAUDE_KEYBINDINGS = {
-    "User": {"f9": "app:toggleHelp"},
-    "Chat": {
-        CLAUDE_PRESERVE_KEY: CLAUDE_PRESERVE_COMMAND,
-        "escape": "chat:cancel",
-    },
+    "$schema": "https://www.schemastore.org/claude-code-keybindings.json",
+    "bindings": [
+        {"context": "Global", "bindings": {"f9": "app:toggleHelp"}},
+        {"context": "Chat", "bindings": {
+            CLAUDE_PRESERVE_KEY: CLAUDE_PRESERVE_COMMAND,
+            "escape": "chat:cancel",
+        }},
+    ],
 }
 
 DEFAULT_CODEX_TOML = """\
@@ -656,11 +662,20 @@ def load_toml(path: Path):
     return tomllib.loads(text), text
 
 
-def claude_chat_map(data) -> dict:
+def claude_context_map(data, context: str) -> dict:
+    """Claude Code 형식 {"bindings": [{"context": ..., "bindings": {...}}]} 에서 한 context 의 맵."""
     assert isinstance(data, dict), f"Claude keybindings.json must be an object: {data!r}"
-    chat = data.get("Chat")
-    assert isinstance(chat, dict), f"Chat context is missing: {data!r}"
-    return chat
+    assert "Chat" not in data, f"stray top-level Chat key (not read by Claude Code): {data!r}"
+    blocks = data.get("bindings")
+    assert isinstance(blocks, list), f'Claude keybindings.json must have a "bindings" array: {data!r}'
+    found = [b for b in blocks if isinstance(b, dict) and b.get("context") == context]
+    assert len(found) == 1, f"expected exactly one {context} block: {data!r}"
+    assert isinstance(found[0].get("bindings"), dict), f"{context} block has no bindings map: {data!r}"
+    return found[0]["bindings"]
+
+
+def claude_chat_map(data) -> dict:
+    return claude_context_map(data, "Chat")
 
 
 def wt_send_bindings(settings: dict):
@@ -806,7 +821,7 @@ def assert_newline_install_result(
             "existing Claude Chat binding disappeared"
         )
         assert chat.get("escape") == "chat:cancel"
-        assert data.get("User", {}).get("f9") == "app:toggleHelp", (
+        assert claude_context_map(data, "Global").get("f9") == "app:toggleHelp", (
             "another Claude context disappeared"
         )
         assert chat.get(vscode_other_key(chord)) != "chat:newline", (
@@ -1303,7 +1318,8 @@ def test_existing_claude_keybindings_merge_into_chat_only(kb_sandbox):
     assert chat.get("ctrl+enter") != "chat:newline"
     assert chat[CLAUDE_PRESERVE_KEY] == CLAUDE_PRESERVE_COMMAND
     assert chat["escape"] == "chat:cancel"
-    assert data["User"]["f9"] == "app:toggleHelp"
+    assert claude_context_map(data, "Global")["f9"] == "app:toggleHelp"
+    assert data["$schema"] == DEFAULT_CLAUDE_KEYBINDINGS["$schema"]
 
 
 def test_codex_preserves_other_keys_and_tables_and_unions_insert_newline(kb_sandbox):
@@ -1611,8 +1627,9 @@ def test_install_does_not_remove_users_own_unchosen_key(kb_sandbox):
     건 Ctrl+Enter 줄바꿈이 첫 설치에서 조용히 사라진다.
     """
     claude_kb = kb_sandbox.home / ".claude" / "keybindings.json"
-    claude_kb.write_text(json.dumps({"Chat": {"ctrl+enter": "chat:newline"}}, indent=2),
-                         encoding="utf-8")
+    claude_kb.write_text(json.dumps({"bindings": [
+        {"context": "Chat", "bindings": {"ctrl+enter": "chat:newline"}},
+    ]}, indent=2), encoding="utf-8")
     codex = kb_sandbox.home / ".codex" / "config.toml"
     codex.write_text('[tui.keymap.editor]\ninsert_newline = ["ctrl-enter", "ctrl-j"]\n',
                      encoding="utf-8")
@@ -1745,10 +1762,10 @@ def test_uninstall_restores_claude_value_overwritten_by_install(kb_sandbox):
     남기지 않으면 uninstall 이 원상 복구가 아니라 삭제가 된다.
     """
     claude_kb = kb_sandbox.home / ".claude" / "keybindings.json"
-    claude_kb.write_text(json.dumps({"Chat": {
+    claude_kb.write_text(json.dumps({"bindings": [{"context": "Chat", "bindings": {
         "shift+enter": "chat:submit",
         "ctrl+enter": "chat:newline",
-    }}, indent=2), encoding="utf-8")
+    }}]}, indent=2), encoding="utf-8")
 
     assert_ok(run_setup(["--keybinds", "--newline", "shift-enter"], kb_sandbox))
     assert_ok(run_setup(["--keybinds", "--uninstall"], kb_sandbox))
@@ -1964,15 +1981,16 @@ def test_keybind_uninstall_keeps_files_that_existed_or_gained_user_content(monke
     home, run = _isolated_apply(monkeypatch, tmp_path)
     tmux, codex, claude_kb = home / ".tmux.conf", home / ".codex" / "config.toml", home / ".claude" / "keybindings.json"
     tmux.write_text("", encoding="utf-8")
-    claude_kb.write_text(json.dumps({"Global": {"ctrl+k": "app:toggleTodos"}}), encoding="utf-8")
+    user_kb = {"bindings": [{"context": "Global", "bindings": {"ctrl+k": "app:toggleTodos"}}]}
+    claude_kb.write_text(json.dumps(user_kb), encoding="utf-8")
     assert run() == 0
     with codex.open("a", encoding="utf-8") as handle:
         handle.write('model = "o3"\n')
     assert run("--uninstall") == 0
     assert tmux.read_text(encoding="utf-8") == ""
     assert 'model = "o3"' in codex.read_text(encoding="utf-8")
-    # 설치가 만든 빈 Chat 객체를 남기지 않는다.
-    assert json.loads(claude_kb.read_text(encoding="utf-8")) == {"Global": {"ctrl+k": "app:toggleTodos"}}
+    # 설치가 만든 빈 Chat 블록을 남기지 않는다.
+    assert json.loads(claude_kb.read_text(encoding="utf-8")) == user_kb
 
 
 @tmux_only
@@ -1980,7 +1998,206 @@ def test_keybind_uninstall_restores_a_replaced_chat_binding(monkeypatch, tmp_pat
     """빈 Chat 을 빼는 정리가 설치가 덮어쓴 사용자 값을 되돌리기 전에 돌면 그 값을 잃는다."""
     home, run = _isolated_apply(monkeypatch, tmp_path)
     claude_kb = home / ".claude" / "keybindings.json"
-    claude_kb.write_text(json.dumps({"Chat": {"shift+enter": "chat:submit"}}), encoding="utf-8")
+    user_kb = {"bindings": [{"context": "Chat", "bindings": {"shift+enter": "chat:submit"}}]}
+    claude_kb.write_text(json.dumps(user_kb), encoding="utf-8")
     assert run() == 0
     assert run("--uninstall") == 0
-    assert json.loads(claude_kb.read_text(encoding="utf-8")) == {"Chat": {"shift+enter": "chat:submit"}}
+    assert json.loads(claude_kb.read_text(encoding="utf-8")) == user_kb
+
+
+# ── Claude Code keybindings.json 형식 · VS Code 주석 보존 ─────────────────────
+#
+# 예전 설치는 {"Chat": {...}} 를 썼다. Claude Code 는 'keybindings.json must have a "bindings"
+# array' 로 그 파일을 통째로 무시하므로 줄바꿈 키가 한 번도 적용되지 않았다.
+
+
+def _claude_apply(tmp_path, content=None):
+    apply = load_apply_module()
+    path = tmp_path / "keybindings.json"
+    if content is not None:
+        path.write_text(json.dumps(content, indent=2), encoding="utf-8")
+    return apply, path
+
+
+def _read_json(path: Path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_new_claude_keybindings_file_uses_claude_code_format(tmp_path):
+    apply, path = _claude_apply(tmp_path)
+    added, overwrote = apply.apply_claude_keybindings(path, "shift-enter", False, False)
+    assert (added, overwrote) == (["shift+enter"], {})
+    assert _read_json(path) == {
+        "$schema": "https://www.schemastore.org/claude-code-keybindings.json",
+        "$docs": "https://code.claude.com/docs/en/keybindings",
+        "bindings": [{"context": "Chat", "bindings": {"shift+enter": "chat:newline"}}],
+    }
+
+
+def test_valid_claude_keybindings_get_no_stray_top_level_key(tmp_path):
+    user = {"$schema": "https://www.schemastore.org/claude-code-keybindings.json",
+            "x-user-note": "keep",
+            "bindings": [{"context": "Global", "bindings": {"ctrl+k": "app:toggleTodos"}}]}
+    apply, path = _claude_apply(tmp_path, user)
+    apply.apply_claude_keybindings(path, "ctrl-enter", False, False)
+    data = _read_json(path)
+    assert set(data) == set(user), f"top-level keys changed: {data!r}"
+    assert data["x-user-note"] == "keep"
+    assert data["bindings"][0] == user["bindings"][0], "another context block changed"
+    assert claude_chat_map(data) == {"ctrl+enter": "chat:newline"}
+
+
+@pytest.mark.parametrize("has_bindings", [False, True])
+def test_legacy_top_level_chat_is_migrated_into_bindings(tmp_path, has_bindings):
+    """예전 설치가 남긴 최상위 Chat 은 재실행 때 bindings 배열로 옮긴다. 있는 키는 덮어쓰지 않는다."""
+    legacy = {"Chat": {"shift+enter": "chat:newline", "ctrl+g": "chat:compact",
+                       "escape": "chat:legacy"},
+              "Global": {"f9": "app:toggleHelp"}}
+    if has_bindings:
+        legacy["bindings"] = [{"context": "Chat", "bindings": {"escape": "chat:cancel"}}]
+    apply, path = _claude_apply(tmp_path, legacy)
+    added, _ = apply.apply_claude_keybindings(path, "shift-enter", False, False,
+                                              prev_keys=["shift+enter"])
+    assert added == ["shift+enter"], "lost the receipt for the key the old install added"
+    data = _read_json(path)
+    assert claude_chat_map(data) == {
+        "shift+enter": "chat:newline",
+        "ctrl+g": "chat:compact",
+        "escape": "chat:cancel" if has_bindings else "chat:legacy",
+    }
+    assert data["Global"] == {"f9": "app:toggleHelp"}, "another top-level key changed"
+    assert "$docs" not in data, "added $docs to an existing file"
+
+
+@pytest.mark.parametrize("before, after", [
+    # 예전 형식: 옮긴 뒤 우리 키만 뺀다.
+    ({"Chat": {"shift+enter": "chat:newline", "ctrl+g": "chat:compact"}},
+     {"bindings": [{"context": "Chat", "bindings": {"ctrl+g": "chat:compact"}}]}),
+    # 예전 형식에 우리 키만 있었다: 빈 Chat 블록은 빼고, 옮기며 생긴 bindings 배열은 남는다.
+    ({"Chat": {"shift+enter": "chat:newline"}, "Global": {"f9": "app:toggleHelp"}},
+     {"Global": {"f9": "app:toggleHelp"}, "bindings": []}),
+    # 새 형식.
+    ({"bindings": [{"context": "Global", "bindings": {"f9": "app:toggleHelp"}},
+                   {"context": "Chat", "bindings": {"shift+enter": "chat:newline",
+                                                    "ctrl+g": "chat:compact"}}]},
+     {"bindings": [{"context": "Global", "bindings": {"f9": "app:toggleHelp"}},
+                   {"context": "Chat", "bindings": {"ctrl+g": "chat:compact"}}]}),
+    ({"bindings": [{"context": "Global", "bindings": {"f9": "app:toggleHelp"}},
+                   {"context": "Chat", "bindings": {"shift+enter": "chat:newline"}}]},
+     {"bindings": [{"context": "Global", "bindings": {"f9": "app:toggleHelp"}}]}),
+])
+def test_claude_uninstall_handles_legacy_and_current_shapes(tmp_path, before, after):
+    apply, path = _claude_apply(tmp_path, before)
+    apply.apply_claude_keybindings(path, "shift-enter", True, False, prev_keys=["shift+enter"])
+    assert _read_json(path) == after
+    assert apply.SKIPPED_TARGETS == []
+
+
+def test_claude_uninstall_restores_overwritten_value_in_legacy_file(tmp_path):
+    apply, path = _claude_apply(tmp_path, {"Chat": {"shift+enter": "chat:newline"}})
+    apply.apply_claude_keybindings(path, "shift-enter", True, False, prev_keys=["shift+enter"],
+                                   prev_overwrote={"shift+enter": "chat:submit"})
+    assert _read_json(path) == {
+        "bindings": [{"context": "Chat", "bindings": {"shift+enter": "chat:submit"}}]}
+
+
+@pytest.mark.parametrize("uninstall", [False, True])
+def test_claude_bindings_that_is_not_an_array_is_skipped(tmp_path, uninstall):
+    content = {"bindings": {"Chat": {"shift+enter": "chat:submit"}}}
+    apply, path = _claude_apply(tmp_path, content)
+    before = path.read_text(encoding="utf-8")
+    result = apply.apply_claude_keybindings(path, "shift-enter", uninstall, False,
+                                            prev_keys=["shift+enter"])
+    assert result == ([], {})
+    assert path.read_text(encoding="utf-8") == before, "rewrote a file it could not understand"
+    assert [p for p, _ in apply.SKIPPED_TARGETS] == [str(path)]
+
+
+VSCODE_WITH_COMMENTS = """\
+// Place your key bindings in this file to override the defaults
+[
+    // user: clear terminal
+    {
+        "key": "ctrl+alt+f9",
+        "command": "workbench.action.terminal.clear", // trailing note
+        "when": "terminalFocus"
+    },
+    /* block comment with "quotes" and ] [ */
+    {
+        "key": "ctrl+alt+k",
+        "command": "workbench.action.terminal.sendSequence",
+        "args": {"text": "keep-me // not a comment"},
+        "when": "terminalFocus"
+    }
+]
+"""
+
+
+def test_ide_keybindings_keep_user_comments_through_install_switch_and_uninstall(tmp_path):
+    apply = load_apply_module()
+    path = tmp_path / "keybindings.json"
+    path.write_text(VSCODE_WITH_COMMENTS, encoding="utf-8")
+    comments = ("// Place your key bindings", "// user: clear terminal", "// trailing note",
+                '/* block comment with "quotes" and ] [ */')
+
+    for chord in ("shift-enter", "ctrl-enter"):
+        assert apply.apply_ide_keybindings(path, chord, False, False) is True
+        text = path.read_text(encoding="utf-8")
+        for comment in comments:
+            assert comment in text, f"user comment {comment!r} disappeared:\n{text}"
+        assert_ide_install(path, chord)
+        entries = load_keybindings(path)
+        assert entries[:2] == parse_jsonc(VSCODE_WITH_COMMENTS), "user entries changed"
+        assert len(entries) == 3
+
+    assert apply.apply_ide_keybindings(path, "shift-enter", True, False) is True
+    assert path.read_text(encoding="utf-8") == VSCODE_WITH_COMMENTS, (
+        "install + uninstall did not restore the original text"
+    )
+
+
+def test_installed_vscode_keybindings_keep_the_leading_comment(kb_sandbox):
+    assert_ok(run_setup(["--keybinds"], kb_sandbox))
+    text = kb_sandbox.vscode.read_text(encoding="utf-8")
+    assert text.startswith("// Place your key bindings in this file"), text
+    assert_ide_install(kb_sandbox.vscode, "shift-enter")
+    assert_foreign_preserved(kb_sandbox.vscode)
+
+
+# ── 공유 영수증을 읽지 못하면 아무것도 쓰지 않는다 ─────────────────────────────
+#
+# ~/.claude/.claude-code-setup.json 은 훅·하네스 설치와 같이 쓰는 영수증이다. 읽지 못한 것을
+# 없는 것처럼 다루면 마지막에 keybinds 만 담아 덮어써 harness_installs 등 다른 기록을 잃는다.
+
+
+@tmux_only
+@pytest.mark.parametrize("receipt", ['{"harness_installs": [', ''])
+@pytest.mark.parametrize("flags", [(), ("--uninstall",)])
+def test_unreadable_shared_receipt_aborts_without_writing(monkeypatch, tmp_path, capsys,
+                                                          receipt, flags):
+    home, run = _isolated_apply(monkeypatch, tmp_path)
+    manifest = home / ".claude" / ".claude-code-setup.json"
+    manifest.write_text(receipt, encoding="utf-8")
+    before = snapshot_tree(home)
+    assert run(*flags) != 0
+    assert snapshot_tree(home) == before, "wrote files although the receipt was unreadable"
+    assert str(manifest) in capsys.readouterr().err
+
+
+def test_claude_uninstall_keeps_users_own_empty_bindings_array(tmp_path):
+    user = {"$schema": "https://www.schemastore.org/claude-code-keybindings.json", "bindings": []}
+    apply, path = _claude_apply(tmp_path, user)
+    added, _ = apply.apply_claude_keybindings(path, "shift-enter", False, False)
+    apply.apply_claude_keybindings(path, "shift-enter", True, False, prev_keys=added)
+    assert _read_json(path) == user
+
+
+@tmux_only
+@pytest.mark.parametrize("receipt", ['["not", "an", "object"]', 'null'])
+def test_shared_receipt_that_is_not_an_object_is_treated_as_missing(monkeypatch, tmp_path, receipt):
+    """merge_and_diff.py 와 같다: 객체가 아닌 JSON 은 기록을 담을 수 없으므로 빈 영수증으로 보고 계속한다."""
+    home, run = _isolated_apply(monkeypatch, tmp_path)
+    manifest = home / ".claude" / ".claude-code-setup.json"
+    manifest.write_text(receipt, encoding="utf-8")
+    assert run() == 0
+    assert isinstance(json.loads(manifest.read_text(encoding="utf-8")), dict)

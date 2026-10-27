@@ -34,7 +34,7 @@ TEST_PS1 = REPO_ROOT / "scripts" / "test.ps1"
 
 # bash 에 넘기는 스크립트 경로는 '리포 루트 기준 상대 POSIX 경로' 로 고정한다. Windows 절대
 # 경로를 그대로 넘기면 Git Bash 가 백슬래시를 이스케이프로 먹어 경로가 뭉개진다 — 실제로
-# C:\Users\...\test.sh 가 `C:Usersuser...test.sh` 가 되어 exit 127 로 전부 실패했다.
+# C:\Users\...\test.sh 가 `C:Usersme...test.sh` 가 되어 exit 127 로 전부 실패했다.
 TEST_SH_REL = "scripts/test.sh"
 
 CHILD_ENV_FLAG = "CLAUDE_TEST_RUNNER_CHILD"

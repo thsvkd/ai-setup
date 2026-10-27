@@ -151,6 +151,49 @@ teardown() {
     [ ! -f "$HOME/.claude/hooks/danger_guard.py" ]
 }
 
+# 영수증은 하네스·도구 설치 기록도 함께 담는다. 읽지 못한다고 지우면 그 기록이 사라진다.
+@test "setup_hooks.sh --uninstall leaves an unparseable receipt untouched and fails" {
+    bash "$REPO_ROOT/scripts/setup.sh" --hooks
+    printf '{"harness_installs": {"codex": true}, broken' > "$HOME/.claude/.claude-code-setup.json"
+    cp "$HOME/.claude/.claude-code-setup.json" "$SANDBOX/receipt.before"
+    run bash "$REPO_ROOT/scripts/setup_hooks.sh" --uninstall
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"receipt"* ]]
+    cmp "$SANDBOX/receipt.before" "$HOME/.claude/.claude-code-setup.json"
+    [ -f "$HOME/.claude/hooks/danger_guard.py" ]
+}
+
+@test "setup.sh --hooks leaves an unparseable receipt and settings untouched and fails" {
+    mkdir -p "$HOME/.claude"
+    printf '{"harness_installs": {"codex": true}, broken' > "$HOME/.claude/.claude-code-setup.json"
+    cp "$HOME/.claude/.claude-code-setup.json" "$SANDBOX/receipt.before"
+    run bash "$REPO_ROOT/scripts/setup.sh" --hooks
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"receipt"* ]]
+    cmp "$SANDBOX/receipt.before" "$HOME/.claude/.claude-code-setup.json"
+    [ ! -e "$HOME/.claude/settings.json" ]
+}
+
+@test "setup_hooks.sh --uninstall reads a receipt that starts with a BOM" {
+    bash "$REPO_ROOT/scripts/setup.sh" --hooks
+    python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["harness_installs"]={"codex": True}; open(p,"w",encoding="utf-8-sig").write(json.dumps(d))' "$HOME/.claude/.claude-code-setup.json"
+    run bash "$REPO_ROOT/scripts/setup_hooks.sh" --uninstall
+    [ "$status" -eq 0 ]
+    [ ! -f "$HOME/.claude/hooks/danger_guard.py" ]
+    run python3 -c 'import json,sys; print(sorted(json.load(open(sys.argv[1],encoding="utf-8-sig"))))' "$HOME/.claude/.claude-code-setup.json"
+    [ "$output" = "['harness_installs']" ]
+}
+
+@test "setup_hooks.sh --uninstall keeps other sections of the receipt" {
+    bash "$REPO_ROOT/scripts/setup.sh" --hooks
+    python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["harness_installs"]={"codex": True}; json.dump(d,open(p,"w"))' "$HOME/.claude/.claude-code-setup.json"
+    run bash "$REPO_ROOT/scripts/setup_hooks.sh" --uninstall
+    [ "$status" -eq 0 ]
+    run python3 -c 'import json,sys; print(sorted(json.load(open(sys.argv[1]))))' "$HOME/.claude/.claude-code-setup.json"
+    [ "$output" = "['harness_installs']" ]
+    [ -z "$(find "$HOME/.claude" -maxdepth 1 -name '.claude-code-setup.json?*')" ]
+}
+
 @test "setup.sh --hooks is idempotent across repeated real installs" {
     bash "$REPO_ROOT/scripts/setup.sh" --hooks
     run bash "$REPO_ROOT/scripts/setup.sh" --hooks

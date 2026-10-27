@@ -427,3 +427,31 @@ def test_check_reports_the_daemon_rows(tmp_path):
     assert result.returncode == 0, result.stdout
     assert not any("update" in c for c in done), done
     assert "codex-daemon" in result.stdout and "codex-server" in result.stdout
+
+
+@pytest.mark.parametrize("payload", [b"tampered", b"x" * 9])
+def test_orca_deb_update_installs_only_a_verified_package(tmp_path, monkeypatch, payload):
+    """Orca .deb 갱신도 첫 설치처럼 공식 매니페스트의 크기·SHA-512 를 통과한 파일만 apt 에 넘긴다(SPEC Orca 설치)."""
+    import base64
+    import hashlib
+    import importlib.util
+    import io
+
+    spec = importlib.util.spec_from_file_location("update_ai_under_test", UPDATE_AI)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    good = b"official"
+    meta = {"name": "orca-ide_9.9.9_arm64.deb", "size": len(good),
+            "sha512": base64.b64encode(hashlib.sha512(good).digest()).decode("ascii")}
+    monkeypatch.setattr(mod.orca_release, "fetch_manifest", lambda plan: ("9.9.9", meta))
+    monkeypatch.setattr(mod.orca_release, "open_release", lambda url: io.BytesIO(payload))
+    monkeypatch.setattr(mod, "version_of", lambda path: "1.0.0")
+    monkeypatch.setattr(mod, "run_quiet", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "arm64\n", ""))
+    steps = []
+    monkeypatch.setattr(mod, "run_sudo_step", lambda label, argv: steps.append(argv) or "ok")
+    assert mod.update_orca_deb("/opt/Orca/orca-ide") == "failed"
+    assert steps == []
+
+    monkeypatch.setattr(mod.orca_release, "open_release", lambda url: io.BytesIO(good))
+    assert mod.update_orca_deb("/opt/Orca/orca-ide") == "ok"
+    assert steps and steps[0][:3] == ["apt-get", "install", "-y"] and steps[0][3].endswith(meta["name"])

@@ -61,6 +61,18 @@ ROOT_DELETE = [
     "sudo rm -rf /",
     "timeout 5 rm -rf ~",
     "echo start && rm -rf ~",
+    # Git Bash 에서 Windows 홈·드라이브 루트를 가리키는 꼴
+    'rm -rf "$USERPROFILE"',
+    "rm -rf $USERPROFILE/",
+    "rm -rf ${USERPROFILE}",
+    "rm -rf %USERPROFILE%",
+    "rm -rf C:/Users/me",
+    "rm -rf 'C:\\Users\\me\\'",
+    "rm -rf c:/users/me/",
+    "rm -rf C:/",
+    # 닫는 따옴표 뒤에 `/`·`/*` 만 붙은 것은 여전히 홈 전체다
+    'rm -rf "$HOME"/',
+    'rm -rf "$HOME"/*',
 ]
 
 
@@ -75,6 +87,11 @@ PS_ROOT_DELETE = [
     "Remove-Item -LiteralPath $env:USERPROFILE -Recurse",
     "del $HOME",
     "rd /s /q C:\\",
+    "if (Test-Path C:\\) { Remove-Item -Recurse -Force C:\\ }",
+    "$null = Remove-Item -Recurse -Force C:\\",
+    'Remove-Item "$HOME" -Recurse',
+    'Remove-Item "$HOME", "x" -Recurse',
+    'Remove-Item "$env:USERPROFILE","x" -Recurse',
 ]
 
 
@@ -152,6 +169,19 @@ NOT_BLOCKED = [
     "rm -rf $HOME/.cache/pip",
     "rm -rf /tmp/scratch",
     "rm -rf ./build",
+    'rm -rf "$USERPROFILE/tmp/x"',
+    "rm -rf ${USERPROFILE}/AppData/Local/Temp/x",
+    "rm -rf C:/Users/me/tmp",
+    "rm -rf C:/temp/build",
+    "rm -rf /c/Users/me/AppData/Local/Temp/x",
+    # 따옴표 속 산문의 괄호·중괄호는 명령 구분자가 아니다
+    'git commit -m "fix (del ~)"',
+    'echo "{rd C:\\}"',
+    # 닫는 따옴표 뒤에 경로가 이어지면 홈 '아래'다
+    'rm -rf "$HOME"/.cache/pip',
+    'rm -f "$HOME"/.bashrc.bak',
+    'rm -rf "$USERPROFILE"/tmp',
+    "rm -rf '~'/x",
 ]
 
 
@@ -164,6 +194,8 @@ PS_NOT_BLOCKED = [
     "Remove-Item C:\\temp\\build -Recurse",
     "Remove-Item $env:USERPROFILE\\Downloads\\x.zip",
     "Get-ChildItem *.log | Remove-Item",
+    'Remove-Item "$HOME"\\foo',
+    "Remove-Item 'C:'\\temp -Recurse",
     "Format-Table -AutoSize",
     "Get-Content x | Format-List",
 ]
@@ -172,6 +204,35 @@ PS_NOT_BLOCKED = [
 @pytest.mark.parametrize("cmd", PS_NOT_BLOCKED)
 def test_ps_not_blocked(cmd):
     assert decision_of(ps(cmd)) in (None, "allow"), cmd
+
+
+def _guard_module():
+    sys.path.insert(0, str(HOOK_PATH.parent))
+    import danger_guard
+    return danger_guard
+
+
+@pytest.mark.parametrize("cmd", ["rm -rf /c", "rm -rf /c/", "rm -rf '/d/'", "rm -rf /c/*",
+                                 "rm -rf /c/Users/me", "rm -rf /d/users/bob/"])
+def test_git_bash_drive_root_denied_on_windows(monkeypatch, cmd):
+    """Git Bash 의 `/c` 는 C: 드라이브 루트, `/c/Users/<이름>` 은 Windows 홈이다."""
+    guard = _guard_module()
+    monkeypatch.setattr(guard, "IS_WINDOWS", True)
+    assert guard.root_delete_reason(cmd), cmd
+
+
+@pytest.mark.parametrize("cmd", ["rm -rf /c", "rm -rf /c/", "rm -rf /c/*", "rm -rf /d/users/bob"])
+def test_one_letter_top_level_dir_is_not_root_on_posix(monkeypatch, cmd):
+    """Linux·macOS 의 `/c`·`/d/users/bob` 은 평범한 디렉터리일 뿐이다."""
+    guard = _guard_module()
+    monkeypatch.setattr(guard, "IS_WINDOWS", False)
+    assert guard.root_delete_reason(cmd) is None, cmd
+
+
+def test_git_bash_drive_subdir_is_not_root_on_windows(monkeypatch):
+    guard = _guard_module()
+    monkeypatch.setattr(guard, "IS_WINDOWS", True)
+    assert guard.root_delete_reason("rm -rf /c/tmp/x") is None
 
 
 def test_prose_mentioning_disk_command_is_not_blocked():
@@ -251,8 +312,27 @@ def test_powershell_delete_gets_module_import_prefix():
     assert "Import-Module" in new and "RmShim" in new
 
 
-def test_powershell_without_delete_is_untouched():
-    assert payload_of(ps("Get-ChildItem -Recurse")) is None
+@pytest.mark.parametrize("original", [
+    "Get-ChildItem x | Remove-Item",
+    "cd x; Remove-Item y",
+    "if (Test-Path y) { Remove-Item y -Recurse }",
+    "Get-ChildItem *.tmp | ForEach-Object { del $_ }",
+    "$null = $(Remove-Item x)",
+    "$null = Remove-Item x",
+])
+def test_powershell_delete_anywhere_in_command_gets_module_import_prefix(original):
+    """삭제 동사가 명령 맨 앞이 아니어도(파이프·구분자·블록 안) 셰임이 붙어야 한다.
+    붙지 않으면 그 삭제는 휴지통을 거치지 않고 영구 삭제된다."""
+    p = payload_of(ps(original))
+    assert "permissionDecision" not in p["hookSpecificOutput"]
+    new = p["hookSpecificOutput"]["updatedInput"]["command"]
+    assert new.endswith(original)
+    assert "Import-Module" in new and "RmShim" in new
+
+
+@pytest.mark.parametrize("cmd", ["Get-ChildItem -Recurse", "git rm --cached x"])
+def test_powershell_without_delete_is_untouched(cmd):
+    assert payload_of(ps(cmd)) is None
 
 
 # --- 그 외 계약 -------------------------------------------------------------------

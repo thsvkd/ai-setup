@@ -281,13 +281,19 @@ def binary_on_path(name: str) -> bool:
 
 
 def load_manifest(home: Path) -> dict:
+    """없으면 빈 영수증. 읽지 못하면 ValueError.
+
+    훅·하네스 설치와 같이 쓰는 파일이다. 없는 것처럼 다루면 나중에 keybinds 만 담아
+    덮어써 다른 설치의 기록을 잃는다. 객체가 아닌 JSON 은 기록을 담을 수 없으므로
+    merge_and_diff.py 처럼 빈 영수증으로 본다.
+    """
     path = home / ".claude" / MANIFEST_NAME
     if not path.is_file():
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"cannot read the setup receipt {path}: {exc}") from exc
     return data if isinstance(data, dict) else {}
 
 
@@ -327,7 +333,13 @@ def remove_created_if_empty(own_files: dict, created) -> None:
             text = path.read_text(encoding="utf-8").strip()
         except (OSError, UnicodeDecodeError):
             continue
-        if text in ("", "{}"):
+        try:
+            data = json.loads(text) if text.startswith("{") else None
+        except ValueError:
+            data = None
+        # 설치가 새로 만든 Claude keybindings.json 은 제거 뒤 $schema/$docs 와 빈 bindings 만 남는다.
+        if text == "" or (isinstance(data, dict) and not data.get("bindings")
+                          and set(data) <= {"$schema", "$docs", "bindings"}):
             path.unlink()
             print(f"  {path} — removed the empty file the installer created")
 
@@ -412,6 +424,87 @@ def load_ide_entries(path: Path):
     return None
 
 
+def jsonc_array_layout(text: str):
+    """최상위 배열 각 원소의 (시작, 끝) 과 닫는 ] 위치. 문자열·주석 안은 건너뛴다."""
+    spans = []
+    depth = 0
+    start = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '"':
+            i += 1
+            while i < n and text[i] != '"':
+                i += 2 if text[i] == "\\" else 1
+        elif text.startswith("//", i):
+            i = text.find("\n", i)
+            if i < 0:
+                break
+        elif text.startswith("/*", i):
+            i = text.find("*/", i + 2)
+            if i < 0:
+                break
+            i += 1
+        elif ch in "[{":
+            if depth == 1:
+                start = i
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+            if depth == 1:
+                spans.append((start, i + 1))
+            elif depth == 0:
+                return spans, i
+        i += 1
+    return spans, None
+
+
+def edit_ide_text(text: str, entries: list, keep: list, add) -> str | None:
+    """entries 중 keep 이 거짓인 원소를 지우고 add 를 끝에 붙인 텍스트. 사용자 주석·서식은 그대로.
+
+    keybindings.json 을 통째로 다시 직렬화하면 // 주석이 전부 사라진다 (기본 파일도 주석으로
+    시작한다). 배열 모양을 확신할 수 없으면 None — 호출자가 재직렬화로 폴백한다.
+    """
+    spans, close = jsonc_array_layout(text)
+    if close is None or len(spans) != len(entries):
+        return None
+    ws = " \t\r\n"
+    for (s, e), kept in reversed(list(zip(spans, keep))):
+        if kept:
+            continue
+        while s > 0 and text[s - 1] in ws:
+            s -= 1
+        j = e
+        while j < len(text) and text[j] in ws:
+            j += 1
+        if j < len(text) and text[j] == ",":
+            e = j + 1
+        elif s > 0 and text[s - 1] == ",":
+            s -= 1
+        text = text[:s] + text[e:]
+    if add is not None:
+        block = "\n".join("    " + line for line in json.dumps(add, ensure_ascii=True, indent=4).splitlines())
+        spans, close = jsonc_array_layout(text)
+        if spans:
+            at = spans[-1][1]
+            text = text[:at] + ",\n" + block + text[at:]
+        else:
+            lead = "" if text[:close].endswith("\n") else "\n"
+            text = text[:close] + lead + block + "\n" + text[close:]
+    return text
+
+
+def write_ide_entries(path: Path, entries: list, keep: list, add=None) -> None:
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    edited = edit_ide_text(text, entries, keep, add)
+    if edited is None:
+        new_entries = [e for e, k in zip(entries, keep) if k] + ([add] if add is not None else [])
+        write_json(path, new_entries)
+    else:
+        write_text_atomic(path, edited)
+
+
 def apply_ide_keybindings(path: Path, chord: str, uninstall: bool, dry_run: bool) -> bool:
     """관리 sendSequence 하나를 넣거나 뺀다. 외래 항목은 보존. 변경했으면 True."""
     existed = path.is_file()
@@ -421,35 +514,63 @@ def apply_ide_keybindings(path: Path, chord: str, uninstall: bool, dry_run: bool
         return False
 
     desired = desired_ide_binding(chord)
+    keep = [not is_managed_sendsequence(e) for e in entries]
     if uninstall:
-        new_entries = [e for e in entries if not is_managed_sendsequence(e)]
-        changed = new_entries != entries
+        changed = not all(keep)
         if dry_run:
             print(f"  {path} (keybindings.json) — remove managed sendSequence")
             return False
         if changed:
-            write_json(path, new_entries)
+            write_ide_entries(path, entries, keep)
         return changed
 
-    managed = [e for e in entries if is_managed_sendsequence(e)]
-    foreign = [e for e in entries if not is_managed_sendsequence(e)]
+    managed = [e for e, k in zip(entries, keep) if not k]
     if len(managed) == 1 and bindings_equivalent(managed[0], desired):
         if dry_run:
             print(f"  {path} (keybindings.json) — already {desired['key']}")
         return False
-    new_entries = foreign + [desired]
     if dry_run:
         print(f"  {path} (keybindings.json) — {desired['key']} sendSequence")
         return False
     if not existed:
         path.parent.mkdir(parents=True, exist_ok=True)
-    write_json(path, new_entries)
+    write_ide_entries(path, entries, keep, desired)
     return True
+
+
+CLAUDE_KB_SCHEMA = "https://www.schemastore.org/claude-code-keybindings.json"
+CLAUDE_KB_DOCS = "https://code.claude.com/docs/en/keybindings"
+
+
+def claude_chat_entry(data: dict):
+    """bindings 배열의 Chat 블록을 찾거나 붙인다. 반환: (블록, 형식을 고쳤는지) 또는 (None, False).
+
+    Claude Code 는 {"bindings": [{"context": "Chat", "bindings": {...}}]} 만 읽는다 —
+    예전 설치가 쓰던 최상위 "Chat" 객체는 'must have a "bindings" array' 로 파일째 무시된다.
+    그 최상위 "Chat" 은 여기로 옮긴다. 이미 Chat 블록에 있는 키는 덮어쓰지 않는다.
+    """
+    blocks = data.setdefault("bindings", [])
+    if not isinstance(blocks, list):
+        return None, False
+    entry = next((b for b in blocks if isinstance(b, dict) and b.get("context") == "Chat"), None)
+    if entry is None:
+        entry = {"context": "Chat", "bindings": {}}
+        blocks.append(entry)
+    chat = entry.setdefault("bindings", {})
+    if not isinstance(chat, dict):
+        return None, False
+    legacy = data.get("Chat")
+    if not isinstance(legacy, dict):
+        return entry, False
+    for key, value in legacy.items():
+        chat.setdefault(key, value)
+    del data["Chat"]
+    return entry, True
 
 
 def apply_claude_keybindings(path: Path, chord: str, uninstall: bool, dry_run: bool,
                              prev_keys=None, prev_overwrote=None):
-    """Chat 에 고른 키 → chat:newline. 다른 context/bindings 보존."""
+    """Chat 블록에 고른 키 → chat:newline. 다른 context/bindings/최상위 키 보존."""
     added = []
     if path.is_file():
         try:
@@ -461,15 +582,16 @@ def apply_claude_keybindings(path: Path, chord: str, uninstall: bool, dry_run: b
             note_skipped(path, "Claude keybindings.json top level is not an object, skipping")
             return [], {}
     else:
-        data = {}
+        data = {"$schema": CLAUDE_KB_SCHEMA, "$docs": CLAUDE_KB_DOCS, "bindings": []}
 
-    chat = data.get("Chat")
-    if not isinstance(chat, dict):
-        chat = {}
-        data["Chat"] = chat
+    entry, migrated = claude_chat_entry(data)
+    if entry is None:
+        note_skipped(path, "Claude keybindings.json \"bindings\" is not an array of context blocks, skipping")
+        return [], {}
+    chat = entry["bindings"]
 
     if uninstall:
-        changed = False
+        changed = migrated
         # 영수증에 있는 키만 지운다. `chat:newline` 은 사용자도 똑같이 쓸 수 있는 값이라,
         # 값이 같다는 이유로 지우면 남의 바인딩을 지운다 (Test-12 "사용자 원래 항목은 남긴다").
         for key in sorted(set(prev_keys or [])):
@@ -481,9 +603,10 @@ def apply_claude_keybindings(path: Path, chord: str, uninstall: bool, dry_run: b
             if key not in chat:
                 chat[key] = value
                 changed = True
-        # 우리 키만 들어 있던 Chat 이 비면 객체도 뺀다. 남기면 설치 전과 다른 파일이 된다.
+        # 우리 키만 들어 있던 Chat 블록이 비면 블록도 뺀다. 남기면 설치 전과 다른 파일이 된다.
+        # 빈 "bindings" 배열은 사용자가 원래 둔 것일 수 있으므로 남긴다.
         if changed and not chat:
-            del data["Chat"]
+            data["bindings"].remove(entry)
         if dry_run:
             print(f"  {path} (Claude keybindings.json) — remove keys added by the installer + restore overwritten values")
             return [], {}
@@ -1076,7 +1199,11 @@ def run(args) -> int:
     own_files = {"claude": claude_kb, "codex": codex_toml, "tmux": tmux_conf}
     existed = {name for name, path in own_files.items() if path.exists()}
 
-    manifest = load_manifest(home)
+    try:
+        manifest = load_manifest(home)
+    except ValueError as exc:
+        print(f"{exc}. Fix or remove it and run again; nothing was changed.", file=sys.stderr)
+        return 1
     prev_kb = manifest.get("keybinds") if isinstance(manifest.get("keybinds"), dict) else {}
 
     if args.uninstall:

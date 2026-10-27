@@ -39,6 +39,7 @@ param(
     [switch]$Uninstall,
     [switch]$DryRun,
     [switch]$NoOnboard,
+    [switch]$Doctor,
     [Alias("h")]
     [switch]$Help,
     [Parameter(ValueFromRemainingArguments = $true)] [string[]]$Rest = @()
@@ -81,6 +82,7 @@ function Invoke-Install {
         [switch]$Uninstall,
         [switch]$DryRun,
         [switch]$NoOnboard,
+        [switch]$Doctor,
         [Alias("h")]
         [switch]$Help,
         [Parameter(ValueFromRemainingArguments = $true)] [string[]]$Rest = @()
@@ -100,6 +102,7 @@ function Invoke-Install {
     $jarvisRole = ""
     $herdrFlag = $false
     $ssCaps = $false
+    $orcaDesktop = $false
     for ($i = 0; $i -lt $restTokens.Count; $i++) {
         switch -Regex ([string]$restTokens[$i]) {
             '^(--help|-help|/[?h])$' { $Help = $true }
@@ -118,6 +121,7 @@ function Invoke-Install {
             '^--uninstall$'          { $Uninstall = $true }
             '^--dry-run$'            { $DryRun = $true }
             '^--no-onboard$'         { $NoOnboard = $true }
+            '^--doctor$'             { $Doctor = $true }
             '^--newline=(.*)$'       { $Newline = $Matches[1]; $newlineGiven = $true }
             '^--harness=(.*)$'       { $Harness = @($Matches[1]); $harnessGiven = $true }
             '^--harness$' {
@@ -139,6 +143,7 @@ function Invoke-Install {
             }
             '^--herdr$' { $herdrFlag = $true }
             '^--ss-caps$' { $ssCaps = $true }
+            '^--orca-desktop$' { $orcaDesktop = $true }
             default { $unknownArgs += $restTokens[$i] }
         }
     }
@@ -160,12 +165,13 @@ Usage:
   & ([scriptblock]::Create((irm .../install.ps1))) -AgentsMd -Harness codex  # choose the harness
   & ([scriptblock]::Create((irm .../install.ps1))) -Skills               # bundled skills only
   & ([scriptblock]::Create((irm .../install.ps1))) -DryRun               # preview
+  & ([scriptblock]::Create((irm .../install.ps1))) -Doctor               # read-only health report
   & ([scriptblock]::Create((irm .../install.ps1))) -NoOnboard            # old default install without onboarding
   & ([scriptblock]::Create((irm .../install.ps1))) --stages all --dry-run
 
 The same long options as install.sh (--hooks / --agentsmd / --harness L / --skills / --keybinds / --omc / --output-style / --mods / --newline VAL /
---stages L / --jarvis-role gateway|core / --herdr / --ss-caps /
---uninstall / --dry-run / --no-onboard / --help) are accepted too.
+--stages L / --jarvis-role gateway|core / --herdr / --ss-caps / --orca-desktop /
+--uninstall / --dry-run / --no-onboard / --doctor / --help) are accepted too.
 
 Run without flags on a TTY to walk the stages. Skip, or no console, installs nothing.
 Without a console (CI, etc.) nothing is installed. -NoOnboard keeps the old default install.
@@ -215,7 +221,7 @@ Environment variables:
         # $PSBoundParameters 에 남지 않는다.
         $fwd = @{}
         if ($toolsGiven) { $fwd['Tools'] = $Tools }
-        foreach ($k in 'Hooks', 'AgentsMd', 'Uninstall', 'DryRun', 'NoOnboard', 'Keybinds', 'Skills', 'Omc', 'OutputStyle', 'Mods') {
+        foreach ($k in 'Hooks', 'AgentsMd', 'Uninstall', 'DryRun', 'NoOnboard', 'Keybinds', 'Skills', 'Omc', 'OutputStyle', 'Mods', 'Doctor') {
             if (Get-Variable -Name $k -ValueOnly) { $fwd[$k] = $true }
         }
         if ($newlineGiven) {
@@ -229,6 +235,7 @@ Environment variables:
         if ($jarvisRole) { $extra += @('--jarvis-role', $jarvisRole) }
         if ($herdrFlag) { $extra += '--herdr' }
         if ($ssCaps) { $extra += '--ss-caps' }
+        if ($orcaDesktop) { $extra += '--orca-desktop' }
         & $setup @fwd @extra
         $code = $LASTEXITCODE
     } finally {

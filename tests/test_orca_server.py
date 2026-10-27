@@ -268,6 +268,15 @@ def test_discover_pairing_address_uses_tailscale_even_when_not_on_path(tmp_path,
     assert orca_server.discover_pairing_address() == "100.101.102.103"
 
 
+def test_discover_pairing_address_refuses_without_tailscale(tmp_path, monkeypatch):
+    """서버는 모든 인터페이스에서 수신하므로, Tailscale 이 없으면 기본 경로 IP 를 광고하지 않고 멈춘다."""
+    monkeypatch.setattr(orca_server.shutil, "which", lambda name: None)
+    monkeypatch.setattr(orca_server.Path, "is_file", lambda self: False)
+    monkeypatch.setattr(orca_server.socket, "socket", lambda *a, **k: pytest.fail("LAN fallback selected"))
+    with pytest.raises(RuntimeError, match="Tailscale"):
+        orca_server.discover_pairing_address()
+
+
 def test_setup_server_client_orders_pairing_service_and_client_start(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))

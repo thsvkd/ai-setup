@@ -1,7 +1,7 @@
 # 핸드오프: `claude-code-setup` → 크로스 플랫폼·멀티 하네스 `harness-setup`
 
 - 작성일: 2026-09-01 (Asia/Seoul)
-- 로컬 저장소: `C:\Users\user\Workspace\claude-code-setup`
+- 로컬 저장소: `C:\Users\<user>\Workspace\claude-code-setup`
 - 기준 브랜치/커밋: `main` / `1e36f17` (`origin/main`과 동일, ahead/behind `0/0`)
 - 다음 작업 환경: 현재 Windows 장치의 로컬 Codex
 - 이번 작업 범위: 조사와 인계 문서 작성만. 저장소 이름 변경, 설치 동작 변경, 훅 정책 변경은 아직 하지 않았다.

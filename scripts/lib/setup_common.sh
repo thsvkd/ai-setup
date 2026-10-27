@@ -115,10 +115,17 @@ uninstall_hooks() {
     local py_exe="$1" merge_script="$2" claude_dir="$3" hooks_dir="$4" settings_path="$5" dry_run="$6"
     local manifest="$claude_dir/$MANIFEST_NAME"
 
+    # 영수증은 하네스·도구·Orca 설치 기록도 함께 담는다. 읽지 못하면 아무것도 건드리지 않고 멈춘다.
+    if [[ -f "$manifest" ]] && ! "$py_exe" -c "import json,sys; json.load(open(sys.argv[1],encoding='utf-8-sig'))" "$manifest" 2>/dev/null; then
+        echo "❌ Cannot parse the install receipt: $manifest" >&2
+        echo "   Nothing was changed. Fix or move the file, then run the uninstall again." >&2
+        return 1
+    fi
+
     # tr -d '\r': Windows python 의 print 는 \n 을 \r\n 으로 변환하므로 CR 을 제거한다.
     local files=""
     if [[ -f "$manifest" ]]; then
-        files="$("$py_exe" -c "import json,sys; print('\n'.join(json.load(open(sys.argv[1],encoding='utf-8')).get('hook_files',[])))" "$manifest" 2>/dev/null | tr -d '\r' || true)"
+        files="$("$py_exe" -c "import json,sys; print('\n'.join(json.load(open(sys.argv[1],encoding='utf-8-sig')).get('hook_files',[])))" "$manifest" 2>/dev/null | tr -d '\r' || true)"
     fi
     if [[ -z "${files:-}" ]]; then
         files=$'danger_guard.py\nsecrets_guard.py\nsend_to_trash.py\nshims/rm\nshims/RmShim.psm1'
@@ -168,7 +175,18 @@ uninstall_hooks() {
         if [[ "$dry_run" -eq 1 ]]; then
             echo "  🧪 (dry-run) would remove: $manifest"
         else
-            "$py_exe" -c "import json,os,sys; p=sys.argv[1]; d=json.load(open(p,encoding='utf-8')); kept={k:d[k] for k in ('keybinds','omc_hud','output_style','mods','tool_installs','tool_attempts','harness_installs','plugins','mcp','jarvis_unit','agentsmd','skills','marketplaces') if isinstance(d,dict) and d.get(k)}; json.dump(kept,open(p,'w',encoding='utf-8'),ensure_ascii=False,indent=2) if kept else os.remove(p)" "$manifest" 2>/dev/null || rm -f "$manifest"
+            # 같은 디렉터리의 임시 파일에 쓴 뒤 교체한다 — 쓰다 죽어도 영수증이 반쯤 잘리지 않는다.
+            "$py_exe" -c "import json,os,sys
+p = sys.argv[1]
+d = json.load(open(p, encoding='utf-8-sig'))
+d = d if isinstance(d, dict) else {}
+kept = {k: d[k] for k in ('keybinds','omc_hud','output_style','mods','tool_installs','tool_attempts','harness_installs','plugins','mcp','jarvis_unit','agentsmd','skills','marketplaces') if d.get(k)}
+if kept:
+    with open(p + '.tmp', 'w', encoding='utf-8') as f:
+        json.dump(kept, f, ensure_ascii=False, indent=2)
+    os.replace(p + '.tmp', p)
+else:
+    os.remove(p)" "$manifest" || return 1
             if [[ -f "$manifest" ]]; then
                 echo "  🧾 Kept: $manifest (only other workers' manifests remain)"
             else

@@ -129,6 +129,8 @@ CASES = [
     ("inside sh -c", 'sh -c "rm -f a.txt"'),
     ("timeout wrapper", "timeout 5 rm -f a.txt"),
     ("no arguments", "rm"),
+    ("missing parent with .. and -f", "rm -f nodir/../a.txt"),
+    ("missing parent with .. (no flags)", "rm nodir/../a.txt"),
     ("dot target", "rm -rf ."),
     ("parent dot target", "rm -rf sub/.."),
     ("CLAUDE_NO_TRASH escape hatch", "CLAUDE_NO_TRASH=1 rm -rf sub"),
@@ -142,8 +144,113 @@ def test_matches_real_rm(name, script):
     assert real == shim, "result differs from the real rm: %s" % name
 
 
-# 뒤의 세 개는 rm 에게 그대로 넘기는 형태(`.` 대상, -i)가 앞에 와도 홈 검사가 먼저임을 본다.
-REFUSED = ["rm -rf ~", 'rm -rf "$HOME"', "rm -rf /", "rm -rf x/. ~", "rm -rf ./ ~/", "rm -i -rf x ~"]
+GNU_RM = subprocess.run(["rm", "--version"], capture_output=True).returncode == 0
+
+
+def observe_with_logging_trash(script, tmp_path):
+    """셰임을 기록하는 가짜 휴지통과 함께 돌린다. (종료 코드, 남은 파일 목록, 휴지통에 간 대상).
+    가짜 휴지통은 대상을 옮기기만 하므로 남은 파일 목록을 원본 rm 결과와 그대로 비교할 수 있다.
+    stdin 은 /dev/null 이다 — 원본 rm 이 묻는다면 '아니오'로 끝난다."""
+    d = BASE / "logged"
+    make_fixture(d)
+    fake = tmp_path / "fakebin"
+    fake.mkdir(exist_ok=True)
+    (fake / "trash-put").write_text(
+        '#!/bin/sh\n[ "$1" = -- ] && shift\n'
+        'for a; do echo "$a" >> "$LOG"; mv -- "$a" "$BIN_DIR/"; done\n', encoding="utf-8")
+    (fake / "trash-put").chmod(0o755)
+    bin_dir = tmp_path / "trashbin"
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp_path / "log"
+    log.write_text("", encoding="utf-8")
+    env = dict(os.environ, HOME=str(_guarded_home()), D=str(d), LOG=str(log), BIN_DIR=str(bin_dir))
+    env.pop("CLAUDE_NO_TRASH", None)
+    env["PATH"] = os.pathsep.join([str(SHIM_DIR), str(fake), "/usr/bin", "/bin"])
+    proc = run_via_shim(script, cwd=str(d), env=env, stdin=subprocess.DEVNULL)
+    survivors = sorted(str(p.relative_to(d)) for p in d.rglob("*"))
+    return proc.returncode, survivors, log.read_text(encoding="utf-8").split()
+
+
+# 원본 rm 이 실제로는 묻지 않는 조합이다. 그대로 넘기면 휴지통 없이 영구 삭제된다.
+# 뒤 넷은 rm 이 거부하는 디렉터리 삭제다 — 셰임이 rm 보다 더 지우면 안 된다.
+TRASHED = [
+    ("-I with one operand", "rm -I a.txt", ["a.txt"], False),
+    ("-I with three operands", "rm -I a.txt b.txt c.log", ["a.txt", "b.txt", "c.log"], False),
+    ("-if (f last)", "rm -if a.txt", ["a.txt"], False),
+    ("-i then -f", "rm -i -f a.txt", ["a.txt"], False),
+    ("-I then --force", "rm -I --force a.txt", ["a.txt"], True),
+    ("--interactive=never", "rm --interactive=never a.txt", ["a.txt"], True),
+    ("--interactive=no", "rm --interactive=no a.txt", ["a.txt"], True),
+    ("abbreviated --inter=ne", "rm --inter=ne a.txt", ["a.txt"], True),
+    ("--interactive=once with one operand", "rm --interactive=once a.txt", ["a.txt"], True),
+    # BSD/macOS rm 과 POSIXLY_CORRECT 의 GNU rm 은 첫 대상에서 옵션 읽기를 멈춘다. 뒤의 -i 는 파일 이름이다.
+    ("prompt flag after an operand under POSIXLY_CORRECT", "POSIXLY_CORRECT=1 rm a.txt -i", ["a.txt"], True),
+    ("directory without -r", "rm sub a.txt", ["a.txt"], False),
+    ("directory without -r, with -f", "rm -f sub a.txt", ["a.txt"], False),
+    ("non-empty directory with -d", "rm -d sub a.txt", ["a.txt"], False),
+    ("empty directory with -d", "rm -d emptydir", ["emptydir"], False),
+]
+
+# 원본 rm 이 실제로 묻는 조합이다. 묻는 동작을 지키려면 그대로 넘겨야 한다.
+PROMPTED = [
+    ("-i", "rm -i a.txt", False),
+    ("-fi (i last)", "rm -fi a.txt", False),
+    ("-I with four operands", "rm -I a.txt b.txt c.log -- -weird", False),
+    ("-rI", "rm -rI sub", False),
+    ("-I -R", "rm -I -R sub", False),
+    ("--interactive", "rm --interactive a.txt", True),
+    ("--interactive=always", "rm --interactive=always a.txt", True),
+    ("--interactive=once recursive", "rm --interactive=once --recursive sub", True),
+]
+
+
+@pytest.mark.parametrize("name,script,trashed,gnu_only", TRASHED, ids=[c[0] for c in TRASHED])
+def test_non_prompting_calls_go_to_the_trash(name, script, trashed, gnu_only, tmp_path):
+    if gnu_only and not GNU_RM:
+        pytest.skip("long options need GNU rm")
+    rc, survivors, log = observe_with_logging_trash(script, tmp_path)
+    assert sorted(log) == trashed, "trash calls differ: %s" % name
+    assert (rc, survivors) == observe(script, use_shim=False), "result differs from the real rm: %s" % name
+
+
+def test_bash_as_sh_keeps_gnu_option_order(tmp_path):
+    """/bin/sh 가 bash 인 배포판(Fedora·Arch)에서 bash 는 POSIXLY_CORRECT 를 셸 안에만 정의하고 내보내지
+    않는다. 그 값으로 BSD 순서를 고르면 원본 GNU rm 과 달리 `rm a.txt -f` 의 -f 를 파일로 본다."""
+    if os.name == "nt" or not GNU_RM:
+        pytest.skip("needs bash and GNU rm")
+    sh = tmp_path / "sh"
+    sh.symlink_to(BASH)
+    d = BASE / "bash-as-sh"
+    make_fixture(d)
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    (fake / "trash-put").write_text('#!/bin/sh\n[ "$1" = -- ] && shift\nfor a; do echo "$a" >> "$LOG"; done\n',
+                                    encoding="utf-8")
+    (fake / "trash-put").chmod(0o755)
+    log = tmp_path / "log"
+    env = dict(os.environ, HOME=str(_guarded_home()), LOG=str(log),
+               PATH=os.pathsep.join([str(fake), "/usr/bin", "/bin"]))
+    env.pop("POSIXLY_CORRECT", None)
+    env.pop("CLAUDE_NO_TRASH", None)
+    proc = subprocess.run([str(sh), str(SHIM_DIR / "rm"), "a.txt", "-f", "missing"], cwd=str(d), env=env,
+                          capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL)
+    assert proc.returncode == 0, proc.stderr
+    assert log.read_text(encoding="utf-8").split() == ["a.txt"]
+
+
+@pytest.mark.parametrize("name,script,gnu_only", PROMPTED, ids=[c[0] for c in PROMPTED])
+def test_prompting_calls_reach_the_real_rm(name, script, gnu_only, tmp_path):
+    if gnu_only and not GNU_RM:
+        pytest.skip("long options need GNU rm")
+    rc, survivors, log = observe_with_logging_trash(script + " < /dev/null", tmp_path)
+    assert log == [], "a prompting call went to the trash: %s" % name
+    assert (rc, survivors) == observe(script + " < /dev/null", use_shim=False)
+
+
+# 가운데 세 개는 rm 에게 그대로 넘기는 형태(`.` 대상, -i)가 앞에 와도 홈 검사가 먼저임을 본다.
+# 마지막 둘은 `..` 로 /tmp 를 거쳐 홈에 닿는 경로다. 텍스트만 보면 /tmp 대상으로 분류돼 원본 rm 으로 갔다.
+REFUSED = ["rm -rf ~", 'rm -rf "$HOME"', "rm -rf /", "rm -rf x/. ~", "rm -rf ./ ~/", "rm -i -rf x ~",
+           'rm -rf "/tmp/..$HOME"', 'cd /tmp && rm -rf "..$HOME"']
 
 # 셰임을 거쳐야 안전한 명령은 같은 셸 안에서 rm 이 셰임으로 잡히는지 먼저 확인한다. Windows 의
 # PATH 에서 `bash` 가 WSL 로 잡히면 PATH·HOME 이 넘어가지 않아, 여기 있는 명령이 WSL 의 진짜
@@ -213,6 +320,162 @@ def test_root_and_home_are_refused(script, tmp_path):
     assert (home / "keep").is_file()
 
 
+def _tmp_link_to_home(home):
+    """/tmp 아래에 홈을 가리키는 링크를 만든다. /tmp 대상은 원본 rm 으로 가는 빠른 길을 탄다."""
+    link_dir = Path(tempfile.mkdtemp(prefix="rmshim-link-", dir="/tmp"))
+    os.symlink(str(home), str(link_dir / "h"))
+    return link_dir
+
+
+def _drop_tmp_link(link_dir):
+    # 링크부터 떼어 낸다. 정리가 링크 너머의 홈을 건드리지 않게 한다.
+    if os.path.islink(str(link_dir / "h")):
+        os.unlink(str(link_dir / "h"))
+    shutil.rmtree(str(link_dir), ignore_errors=True)
+
+
+def test_trailing_slash_through_a_tmp_link_to_home_is_refused(tmp_path):
+    """`/tmp/h -> ~` 에서 `rm -rf /tmp/h/` 는 GNU rm 이 링크 너머의 홈을 비운다."""
+    if os.name == "nt":
+        pytest.skip("creating symlinks on Windows needs extra privileges")
+    home = _guarded_home()
+    link_dir = _tmp_link_to_home(home)
+    try:
+        env = dict(os.environ, HOME=str(home), T=str(link_dir), PATH=_fake_trash_path(tmp_path))
+        env.pop("CLAUDE_NO_TRASH", None)
+        proc = run_via_shim('rm -rf "$T/h/"', cwd=str(BASE), env=env)
+        assert proc.returncode != 0
+        assert "refusing" in proc.stderr
+        assert (home / "keep").is_file()
+    finally:
+        _drop_tmp_link(link_dir)
+
+
+def test_tmp_link_to_home_without_trailing_slash_removes_only_the_link(tmp_path):
+    """슬래시가 없으면 rm 은 링크만 지운다. 이것까지 거부하면 안 된다."""
+    if os.name == "nt":
+        pytest.skip("creating symlinks on Windows needs extra privileges")
+    home = _guarded_home()
+    link_dir = _tmp_link_to_home(home)
+    try:
+        env = dict(os.environ, HOME=str(home), T=str(link_dir), PATH=_fake_trash_path(tmp_path))
+        env.pop("CLAUDE_NO_TRASH", None)
+        proc = run_via_shim('rm -rf "$T/h"', cwd=str(BASE), env=env)
+        assert proc.returncode == 0, proc.stderr
+        assert not os.path.lexists(str(link_dir / "h"))
+        assert (home / "keep").is_file()
+    finally:
+        _drop_tmp_link(link_dir)
+
+
+@pytest.mark.parametrize("script", ['rm -rf "$REAL_HOME"', 'cd "$REAL_HOME" && rm -rf ../home/'])
+def test_home_behind_a_linked_parent_is_refused(script, tmp_path):
+    """HOME 이 링크를 거친 경로여도(HOME=link/home, link -> real) 실제 경로로 지우면 홈이다."""
+    if os.name == "nt":
+        pytest.skip("creating symlinks on Windows needs extra privileges")
+    real = BASE / "linked-real"
+    (real / "home").mkdir(parents=True, exist_ok=True)
+    (real / "home" / "keep").write_text("x", encoding="utf-8")
+    link = BASE / "linked"
+    if not os.path.lexists(str(link)):
+        os.symlink("linked-real", str(link))
+    env = dict(os.environ, HOME=str(link / "home"), REAL_HOME=str(real / "home"),
+               PATH=_fake_trash_path(tmp_path))
+    env.pop("CLAUDE_NO_TRASH", None)
+    proc = run_via_shim(script, cwd=str(BASE), env=env)
+    assert proc.returncode != 0
+    assert "refusing" in proc.stderr
+    assert (real / "home" / "keep").is_file()
+
+
+def _fake_cygpath(tmp_path):
+    """cygpath -u 흉내: 역슬래시를 슬래시로, `C:` 를 $FAKE_C 로 바꾼다. fakebin 은 _fake_trash_path 가 만든다."""
+    stub = tmp_path / "fakebin" / "cygpath"
+    stub.write_text('#!/bin/sh\n[ "$1" = -u ] || exit 2\n'
+                    'printf \'%s\\n\' "$2" | sed -e \'s#\\\\#/#g\' -e "s#^[A-Za-z]:#$FAKE_C#"\n',
+                    encoding="utf-8")
+    stub.chmod(0o755)
+
+
+def _fake_uname(tmp_path, name):
+    """uname -s 흉내. 대소문자 무시 비교와 드라이브 루트 보호는 OS 에 따라 갈린다."""
+    stub = tmp_path / "fakebin" / "uname"
+    stub.write_text("#!/bin/sh\necho %s\n" % name, encoding="utf-8")
+    stub.chmod(0o755)
+
+
+@pytest.mark.parametrize("sep", ["\\", "/"])
+def test_windows_drive_operand_for_home_is_refused(sep, tmp_path):
+    """Git Bash 에서 "$USERPROFILE"(C:\\Users\\me) 같은 드라이브 경로를 상대경로로 보면 홈 검사를
+    빠져나가 프로필이 통째로 휴지통에 간다. POSIX 에서는 C: 를 BASE 로 옮기는 가짜 cygpath 로 흉내 낸다."""
+    home = _guarded_home()
+    env = dict(os.environ, HOME=str(home), PATH=_fake_trash_path(tmp_path))
+    env.pop("CLAUDE_NO_TRASH", None)
+    if os.name == "nt":
+        operand = str(home).replace("\\", sep)
+    else:
+        operand = "C:" + sep + home.name
+        _fake_cygpath(tmp_path)
+        env["FAKE_C"] = str(BASE)
+    proc = run_via_shim("rm -rf %s" % shlex.quote(operand), cwd=str(BASE), env=env)
+    assert proc.returncode != 0
+    assert "refusing" in proc.stderr
+    assert (home / "keep").is_file()
+
+
+@pytest.mark.parametrize("os_name", ["Darwin", "MINGW64_NT-10.0-19045"])
+def test_home_in_another_case_is_refused_on_case_insensitive_systems(os_name, tmp_path):
+    """APFS·NTFS 는 대소문자를 구분하지 않는다. `rm -rf /Users/ME` 도 홈 `/Users/me` 다."""
+    home = _guarded_home()
+    env = dict(os.environ, HOME=str(home), PATH=_fake_trash_path(tmp_path))
+    env.pop("CLAUDE_NO_TRASH", None)
+    _fake_uname(tmp_path, os_name)
+    operand = shell_path(home)
+    operand = operand[:-len(home.name)] + home.name.upper()
+    proc = run_via_shim("rm -rf %s" % shlex.quote(operand), cwd=str(BASE), env=env)
+    assert proc.returncode != 0
+    assert "refusing" in proc.stderr
+    assert (home / "keep").is_file()
+
+
+def test_home_in_another_case_is_a_different_directory_on_linux(tmp_path):
+    """대소문자를 구분하는 파일 시스템에서 GUARDED-HOME 은 홈이 아니다. 거부하면 안 된다."""
+    if sys.platform in ("darwin", "win32"):
+        pytest.skip("needs a case-sensitive file system")
+    home = _guarded_home()
+    env = dict(os.environ, HOME=str(home), PATH=_fake_trash_path(tmp_path))
+    env.pop("CLAUDE_NO_TRASH", None)
+    _fake_uname(tmp_path, "Linux")
+    proc = run_via_shim("rm -rf %s" % shlex.quote(str(BASE / home.name.upper())), cwd=str(BASE), env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert "refusing" not in proc.stderr
+
+
+@pytest.mark.parametrize("operand", ["/c", "/c/", "/C", "C:\\", "C:/"])
+def test_drive_root_is_refused_on_git_bash(operand, tmp_path):
+    """Git Bash 의 /c 는 C: 드라이브 전체다. `/` 만 막으면 `rm -rf /c` 가 통과한다."""
+    env = dict(os.environ, HOME=str(_guarded_home()), PATH=_fake_trash_path(tmp_path))
+    env.pop("CLAUDE_NO_TRASH", None)
+    _fake_uname(tmp_path, "MINGW64_NT-10.0-19045")
+    if os.name != "nt":
+        _fake_cygpath(tmp_path)
+        env["FAKE_C"] = "/c"
+    proc = run_via_shim("rm -rf %s" % shlex.quote(operand), cwd=str(BASE), env=env)
+    assert proc.returncode != 0
+    assert "refusing" in proc.stderr
+
+
+def test_one_letter_top_level_dir_is_not_a_drive_root_on_linux(tmp_path):
+    """Linux·macOS 의 /c 는 그냥 디렉터리다. 드라이브 루트로 보고 거부하면 안 된다."""
+    if os.name == "nt":
+        pytest.skip("on Git Bash /c is the drive root")
+    env = dict(os.environ, HOME=str(_guarded_home()), PATH=_fake_trash_path(tmp_path))
+    env.pop("CLAUDE_NO_TRASH", None)
+    _fake_uname(tmp_path, "Linux")
+    proc = run_via_shim("rm -rf /c", cwd=str(BASE), env=env)
+    assert "refusing" not in proc.stderr
+
+
 def test_home_is_refused_even_without_a_trash_tool(tmp_path):
     """휴지통 도구가 없으면 실제 rm 으로 넘기지만, 홈 검사는 그보다 먼저다.
     셰임만 복사해 옆의 send_to_trash.py 를 떼어 낸다."""
@@ -239,7 +502,7 @@ def test_home_is_refused_even_without_a_trash_tool(tmp_path):
 
 def test_send_to_trash_succeeds_on_a_console_that_cannot_print_its_message(tmp_path):
     """한국어 Windows 콘솔(cp949)은 🗑 를 인코딩하지 못한다. 옮긴 뒤의 출력 오류를 실패로 세면
-    rm 이 휴지통으로 옮겨 놓고 exit 1 을 낸다(win-host 실측)."""
+    rm 이 휴지통으로 옮겨 놓고 exit 1 을 낸다(Windows 실측)."""
     fake = tmp_path / "mods"
     fake.mkdir()
     (fake / "send2trash.py").write_text("import os\ndef send2trash(p):\n    os.remove(p)\n", encoding="utf-8")

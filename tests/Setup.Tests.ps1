@@ -306,6 +306,32 @@ Describe "real install path (S2)" {
         Test-Path (Join-Path $env:USERPROFILE ".claude\settings.json") | Should -Be $false
     }
 
+    # 영수증은 하네스·도구 설치 기록도 함께 담는다. 읽지 못한다고 지우면 그 기록이 사라진다.
+    It "-Uninstall leaves an unparseable receipt untouched and fails" {
+        Invoke-Script $script:Setup @("-Hooks") | Out-Null
+        $manifestPath = Join-Path $env:USERPROFILE ".claude\.claude-code-setup.json"
+        $broken = '{"harness_installs": {"codex": true}, broken'
+        [IO.File]::WriteAllText($manifestPath, $broken)
+        $r = Invoke-Script $script:SetupHooks @("-Uninstall")
+        $r.ExitCode | Should -Not -Be 0 -Because $r.Output
+        $r.Output | Should -Match "receipt"
+        [IO.File]::ReadAllText($manifestPath) | Should -Be $broken
+        Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $true
+    }
+
+    # 키바인드 제거가 남기는 {} 처럼, 기록이 없는 영수증은 빈 영수증이다. StrictMode 에서 죽으면 훅을 못 뺀다.
+    It "-Uninstall treats a receipt without records (<receipt>) as empty" -ForEach @(
+        @{ receipt = '{}' }, @{ receipt = '[]' }, @{ receipt = 'null' }
+    ) {
+        Invoke-Script $script:Setup @("-Hooks") | Out-Null
+        $manifestPath = Join-Path $env:USERPROFILE ".claude\.claude-code-setup.json"
+        [IO.File]::WriteAllText($manifestPath, $receipt)
+        $r = Invoke-Script $script:SetupHooks @("-Uninstall")
+        $r.ExitCode | Should -Be 0 -Because $r.Output
+        Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $false
+        Test-Path $manifestPath | Should -Be $false
+    }
+
     It "keeps the existing settings.json model/env and only switches defaultMode to auto" {
         New-Item -ItemType Directory -Force -Path (Join-Path $env:USERPROFILE ".claude") | Out-Null
         $seed = @{ env = @{ MY_VAR = "keep-me" }; model = "sonnet"; permissions = @{ defaultMode = "acceptEdits" } } | ConvertTo-Json -Depth 5

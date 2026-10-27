@@ -460,7 +460,12 @@ def configure_orca_host(plan, home, cli, pairing_address=None, dry_run=False, ex
         sys.path.insert(0, tool_dir)
     import orca_server
 
-    address = pairing_address or orca_server.discover_pairing_address()
+    try:
+        address = pairing_address or orca_server.discover_pairing_address()
+    except RuntimeError as error:
+        # 서버만 건너뛴다. 실패로 끝내면 단계형 설치가 여기서 멈춰 뒤 단계(가드 훅)가 깔리지 않는다.
+        print('Orca server not configured: ' + str(error), file=sys.stderr)
+        return {"state": "skipped"}
     result = orca_server.setup_server_client(
         cli, home, address, sys.executable, Path(tool_dir) / "orca_server.py",
         plat=sys.platform, existing_record=existing_record, on_record=on_record,
@@ -522,7 +527,7 @@ def main(argv=None):
                 receipt.get('tool_installs', {}).get('orca_server'),
                 on_record=lambda record: save_orca_server_record(receipt, path, record),
             )
-            if not args.dry_run and setup.get('state') != 'configured':
+            if not args.dry_run and setup.get('state') not in ('configured', 'skipped'):
                 raise RuntimeError('Orca server and desktop client setup did not complete')
             if setup.get('state') == 'configured':
                 save_orca_server_record(receipt, path, setup)
@@ -558,7 +563,7 @@ def main(argv=None):
             receipt.get('tool_installs', {}).get('orca_server'),
             on_record=lambda record: save_orca_server_record(receipt, path, record),
         )
-        if setup.get('state') != 'configured':
+        if setup.get('state') not in ('configured', 'skipped'):
             raise RuntimeError('Orca server and desktop client setup did not complete')
         if setup.get('state') == 'configured':
             save_orca_server_record(receipt, path, setup)

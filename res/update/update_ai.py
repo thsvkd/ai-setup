@@ -27,7 +27,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "res" / "doctor"))
+sys.path.insert(0, str(ROOT / "res" / "tools"))
 from doctor import kill_tree, locations, platform_key  # noqa: E402
+import orca as orca_release  # noqa: E402
 
 CATALOG = ROOT / "res" / "catalog.json"
 STEP_TIMEOUT = 900
@@ -327,31 +329,27 @@ def run_sudo_step(label, argv):
 
 
 def update_orca_deb(path):
-    """GitHub 최신 릴리스의 .deb 로 올린다. 이미 최신이면 아무것도 받지 않는다. 결과: ok·failed·skipped."""
-    version = orca_latest_tag().lstrip("v")
-    if not re.fullmatch(r"\d+(\.\d+)+", version):
+    """공식 매니페스트의 최신 .deb 로 올린다. 크기·SHA-512 를 통과한 파일만 설치한다. 결과: ok·failed·skipped."""
+    out = run_quiet(["dpkg", "--print-architecture"])
+    arch = out.stdout.strip() if out and out.returncode == 0 else ""
+    try:
+        plan = orca_release.package_plan("linux", {"amd64": "x86_64"}.get(arch, arch))
+        version, meta = orca_release.fetch_manifest(plan)
+    except (OSError, ValueError, RuntimeError):
         say("  {:<14}  cannot read the latest release from GitHub".format("package"))
         return "failed"
     if version_of(path) == version:
         say("  {:<14}  orca-ide {} is already the latest".format("package", version))
         return "ok"
-    out = run_quiet(["dpkg", "--print-architecture"])
-    arch = out.stdout.strip() if out and out.returncode == 0 else ""
-    if not arch:
-        return "failed"
-    name = "orca-ide_{}_{}.deb".format(version, arch)
     scratch = tempfile.mkdtemp(prefix="update-ai-orca-")
     try:
-        target = os.path.join(scratch, name)
-        url = "https://github.com/stablyai/orca/releases/download/v{}/{}".format(version, name)
-        say("  {:<14}  download {}".format("package", url))
+        say("  {:<14}  download {}".format("package", meta["name"]))
         try:
-            with urllib.request.urlopen(url, timeout=60) as response, open(target, "wb") as handle:
-                shutil.copyfileobj(response, handle)
-        except OSError as error:
-            say("      download failed: {}".format(type(error).__name__))
+            target = orca_release.download(version, meta, Path(scratch))
+        except (OSError, RuntimeError) as error:
+            say("      download failed: {}".format(error if isinstance(error, RuntimeError) else type(error).__name__))
             return "failed"
-        return run_sudo_step("package", ["apt-get", "install", "-y", target])
+        return run_sudo_step("package", ["apt-get", "install", "-y", str(target)])
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 

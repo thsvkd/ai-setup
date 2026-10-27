@@ -86,24 +86,40 @@ PS_SHIM = os.path.join(SHIM_DIR, "RmShim.psm1")
 _RM_POS = (r"(?:^|[\n;&|(]\s*"
            r"|\b(?:sudo|doas|env|command|exec|builtin|nohup|time|busybox|xargs|then|else|do)\s+"
            r"|\b(?:timeout|nice|ionice|stdbuf|setsid|taskset|chrt)\s+\S+\s+)")
+_RM_ARGS = _RM_POS + r"""(?:\S*/)?rm\b(?:\s+-{1,2}[^\s]+)*\s+['"]?"""
+# 닫는 따옴표 뒤에도 `/`·`/*` 까지만 허용한다 — `"$HOME"/.cache` 는 홈 '아래'다.
+_TARGET_END = r"""['"]?[\\/]?\*?['"]?(?=\s|;|&|\||\)|$)"""
+# Git Bash 에서는 Windows 홈($USERPROFILE, C:/Users/<이름>)과 드라이브 루트도 같다.
 ROOT_DELETE_RE = re.compile(
-    _RM_POS + r"""(?:\S*/)?rm\b(?:\s+-{1,2}[^\s]+)*\s+"""
-    r"""['"]?(?:/|~|\$HOME|\$\{HOME\})/?\*?['"]?"""
-    r"""(?=\s|;|&|\||\)|$)"""
+    _RM_ARGS + r"""(?:/|~|\$HOME|\$\{HOME\}|\$USERPROFILE|\$\{USERPROFILE\}|%USERPROFILE%"""
+    r"""|[A-Za-z]:[\\/]+(?:(?i:Users)[\\/]+[^\\/\s'";&|)]+)?)""" + _TARGET_END
 )
+# Git Bash 의 드라이브 루트 `/c` 와 홈 `/c/Users/<이름>`. Linux·macOS 에서는 평범한 경로라
+# 문자열만으로는 가를 수 없으므로 훅이 도는 플랫폼으로 정한다.
+IS_WINDOWS = os.name == "nt" or sys.platform.startswith(("cygwin", "msys"))
+DRIVE_ROOT_RE = re.compile(
+    _RM_ARGS + r"""/[A-Za-z](?:/(?i:Users)/+[^/\s'";&|)]+)?""" + _TARGET_END)
 
 # PowerShell 은 매개변수 순서가 자유로워(`Remove-Item -Recurse -Force C:\`) 인접 규칙을
 # 쓸 수 없다. 그래서 '삭제 동사'와 '루트 대상'이 같은 구간에 함께 있으면 거부한다.
 # 구간 맨 앞(= 명령 자리)에 있을 때만 삭제 동사로 본다. `grep -rn "del ~"` 같은 데이터
 # 취급 명령을 잡지 않기 위해서다.
 PS_DELETE_RE = re.compile(
-    r"""^\s*(?:&\s*)?['"]?(?:[\w:\\/.-]*[\\/])?"""
+    r"""^\s*(?:\$[\w:]+\s*=\s*)?(?:&\s*)?['"]?(?:[\w:\\/.-]*[\\/])?"""
     r"""(?:Remove-Item|ri|rd|rmdir|del|erase|rm)\b""", re.IGNORECASE)
 PS_ROOT_TARGET_RE = re.compile(
     r"""(?:^|[\s'"=,])(?:[A-Za-z]:[\\/]?\*?|\$HOME|\$env:USERPROFILE|%USERPROFILE%|~)"""
-    r"""(?=[\s'"]|$)""", re.IGNORECASE)
+    r"""(?=['"]?(?:\s|[;&|)},]|$))""", re.IGNORECASE)
 # 구간 나누기용. 따옴표를 보지 않는 거친 분할이라 잘못 쪼개도 검사가 좁아질 뿐 넓어지지 않는다.
 SEGMENT_SPLIT_RE = re.compile(r"[\n;|&]+")
+# 따옴표 밖의 괄호·중괄호도 나눈다 — `if (…) { Remove-Item … }`, `$(Remove-Item …)` 의 삭제 동사도
+# 구간 맨 앞에 오게. 따옴표 안(`git commit -m "fix (del ~)"`)은 산문이라 그대로 둔다.
+QUOTED_OR_BRACKET_RE = re.compile(r"""("[^"]*"|'[^']*')|[(){}]""")
+
+
+def _segments(command):
+    return SEGMENT_SPLIT_RE.split(
+        QUOTED_OR_BRACKET_RE.sub(lambda m: m.group(1) or "\n", command))
 
 # 디스크 자체를 파괴하는 명령. 산문 속 언급을 피하려고 '명령 자리'(줄 처음, 구분자 뒤,
 # sudo 뒤)에서 시작할 때만 잡는다.
@@ -136,17 +152,27 @@ PRUNE_DAYS = 14
 MAX_IGNORED_FILES = 10000
 MAX_IGNORED_BYTES = 100 * 1024 * 1024
 
-GIT_WIPE_RE = re.compile(r"""\bgit\b[^\n]*?\b(?:
-      reset\b[^\n]*?--hard
-    | (?:checkout|switch)\b[^\n]*?(?:--force\b|\s-[a-zA-Z]*f\b)
-    | checkout\b[^\n]*?(?:\s--\s|\s\.(?:\s|$))
+# git·하위 명령·플래그 사이는 구분자를 넘지 않는다 — `git add x && rm -f y` 를 `git rm -f` 로,
+# `git switch main && ls -lf` 를 강제 전환으로 보지 않게.
+GIT_WIPE_RE = re.compile(r"""\bgit\b[^\n;&|]*?\b(?:
+      reset\b[^\n;&|]*?--hard
+    | (?:checkout|switch)\b[^\n;&|]*?(?:--force\b|\s-[a-zA-Z]*f)
+    | switch\b[^\n;&|]*?--discard-changes\b
+    | checkout\b[^\n;&|]*?(?:\s--\s|\s\.(?:\s|$))
     | restore\b
-    | clean\b[^\n]*?\s-[a-zA-Z]*f
-    | worktree\b[^\n]*?\bremove\b
+    | clean\b[^\n;&|]*?(?:\s-[a-zA-Z]*f|--force\b)
+    | rm\b[^\n;&|]*?(?:\s-[a-zA-Z]*f|--force\b)
+    | worktree\b[^\n;&|]*?\bremove\b
 )""", re.VERBOSE)
 
+# `git checkout <path>` 는 `--` 없이도 미커밋 편집을 덮어쓰지만, 같은 꼴의 `git checkout <branch>` 는
+# 잃는 것이 없다. 그래서 인자가 대상 디렉터리에 실제 경로로 있거나, 글로브·pathspec 매직(브랜치
+# 이름에 올 수 없는 `*?[:`)이거나, 비옵션 인자가 둘 이상(<tree-ish> <path>)일 때만 스냅샷한다.
+CHECKOUT_ARGS_RE = re.compile(r"\bgit\b[^\n;&|]*?\bcheckout\b([^\n;&|]*)")
+PATHSPEC_MAGIC_RE = re.compile(r"[*?\[:]")
+
 # -x/-X 는 .gitignore 대상(.env, 로컬 설정)까지 지운다 → 스냅샷에도 포함해야 한다.
-CLEAN_IGNORED_RE = re.compile(r"\bclean\b[^\n]*?\s-[a-zA-Z]*[xX]")
+CLEAN_IGNORED_RE = re.compile(r"\bclean\b[^\n;&|]*?\s-[a-zA-Z]*[xX]")
 # `git worktree remove <path>` 의 대상은 cwd 가 아니라 인자다.
 WORKTREE_RE = re.compile(r"\bworktree\s+remove\s+(?:(?:--force|-f)\s+)*(\S+)")
 # 명령이 `cd <경로>` 로 시작하면 백업도 거기서 돌아야 한다. 경로에 변수가 섞이면 특정 불가 →
@@ -205,9 +231,9 @@ def _git(args, cwd, env=None, timeout=60):
 
 
 def root_delete_reason(command):
-    if ROOT_DELETE_RE.search(command):
+    if ROOT_DELETE_RE.search(command) or (IS_WINDOWS and DRIVE_ROOT_RE.search(command)):
         return "Blocked: attempt to delete the entire root/home directory."
-    for segment in SEGMENT_SPLIT_RE.split(command):
+    for segment in _segments(command):
         if PS_DELETE_RE.search(segment) and PS_ROOT_TARGET_RE.search(segment):
             return "Blocked: attempt to delete the entire drive root/home directory."
     return None
@@ -228,7 +254,9 @@ def _target_dirs(command, cwd):
         cand = cand if os.path.isabs(cand) else os.path.join(cwd, cand)
         if os.path.isdir(cand):
             base = cand
-    dirs.append(base)
+    for d in _git_c_dirs(command, base):
+        if d not in dirs:
+            dirs.append(d)
     for wt in WORKTREE_RE.findall(command):
         if "$" in wt or "`" in wt:
             continue
@@ -237,6 +265,44 @@ def _target_dirs(command, cwd):
         if os.path.isdir(wt) and wt not in dirs:
             dirs.append(wt)
     return dirs
+
+
+def _git_c_dirs(command, base):
+    """git 호출마다 실행될 디렉터리. `-C` 는 git 처럼 누적하고(`-C a -C b` = a/b), 따옴표는
+    shlex 로 푼다. 풀 수 없는 -C(변수, 없는 경로)나 토큰화 실패는 base 로 대신한다 — 아무것도
+    안 하느니 엉뚱한 곳일 수 있어도 백업하는 편이 낫다(오탐 비용은 ref 하나)."""
+    try:
+        lex = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        toks = list(lex)
+    except ValueError:
+        return [base]
+    out = []
+    for i, t in enumerate(toks):
+        if os.path.basename(t) not in ("git", "git.exe"):
+            continue
+        d, j = base, i + 1
+        while j < len(toks) and toks[j].startswith("-"):
+            if toks[j] in ("-C", "-c") and j + 1 < len(toks):
+                if toks[j] == "-C":
+                    d = os.path.join(d, os.path.expanduser(toks[j + 1]))
+                j += 1
+            j += 1
+        d = os.path.normpath(d)
+        out.append(d if os.path.isdir(d) else base)
+    return out or [base]
+
+
+def _checkout_names_path(command, d):
+    for m in CHECKOUT_ARGS_RE.finditer(command):
+        args = m.group(1).split()
+        if {"-b", "-B", "--orphan"} & set(args):
+            continue
+        names = [a.strip("'\"") for a in args if not a.startswith("-")]
+        if len(names) > 1 or any(PATHSPEC_MAGIC_RE.search(n) or os.path.exists(os.path.join(d, n))
+                                 for n in names):
+            return True
+    return False
 
 
 def _prune(repo):
@@ -268,12 +334,16 @@ def _ignored_volume(repo):
 
 def git_snapshot(command, cwd):
     """되돌릴 대상을 refs/claude-backups/ 에 고정한다. 반환: 사람에게 보여줄 문구 목록."""
-    if not GIT_WIPE_RE.search(command):
+    wipe = GIT_WIPE_RE.search(command)
+    if not wipe and not CHECKOUT_ARGS_RE.search(command):
         return []
+    dirs = _target_dirs(command, cwd)
+    if not wipe:
+        dirs = [d for d in dirs if _checkout_names_path(command, d)]
 
     wants_ignored = bool(CLEAN_IGNORED_RE.search(command))
     notes = []
-    for d in _target_dirs(command, cwd):
+    for d in dirs:
         r = _git(["rev-parse", "--show-toplevel"], d)
         if r.returncode != 0:
             continue
@@ -357,7 +427,9 @@ def shim_prefix(tool_name, command):
     원본 명령은 한 글자도 바꾸지 않는다 — 인자 해석은 전적으로 PowerShell 몫이다.
     """
     if tool_name == "PowerShell":
-        if not PS_DELETE_RE.search(command) or not os.path.isfile(PS_SHIM):
+        # 명령 맨 앞만 보면 `ls | Remove-Item`, `cd x; del y` 의 삭제가 셰임 없이 영구 삭제된다.
+        if (not any(PS_DELETE_RE.search(s) for s in _segments(command))
+                or not os.path.isfile(PS_SHIM)):
             return None
         p = PS_SHIM.replace("'", "''")
         return ("if (-not (Get-Module RmShim)) { Import-Module '%s' -DisableNameChecking "

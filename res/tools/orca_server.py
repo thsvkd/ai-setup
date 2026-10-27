@@ -558,17 +558,12 @@ def discover_pairing_address():
             address = line.strip()
             if address and not address.startswith("127."):
                 return address
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        sock.connect(("8.8.8.8", 80))
-        address = sock.getsockname()[0]
-    except OSError as error:
-        raise RuntimeError("Could not determine a reachable Orca pairing address") from error
-    finally:
-        sock.close()
-    if not address or address.startswith("127.") or address == "0.0.0.0":
-        raise RuntimeError("Could not determine a reachable Orca pairing address")
-    return address
+    # orca serve 는 바인드 주소를 고를 수 없어 모든 인터페이스에서 수신한다. 기본 경로 IP 로
+    # 폴백하면 공인 IP 의 VPS 에서 페어링 토큰 하나로 원격 터미널이 열리므로 Tailscale 에서만 설정한다.
+    raise RuntimeError(
+        "No Tailscale IPv4 address found. The Orca server listens on every network interface, "
+        "so it is only set up over Tailscale: run `tailscale up`, then re-run the installer with --tools orca."
+    )
 
 
 def save_pairing_codes(plan, pairings):

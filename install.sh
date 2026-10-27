@@ -13,7 +13,7 @@
 #
 # 인자 없이 실행하면 setup.sh 가 대화형 온보딩을 띄운다. 이 스크립트는 stdin 이 파이프인
 # 채로 setup.sh 를 부르지만(위 curl | sh), 온보딩이 /dev/tty 를 직접 열기 때문에 정상
-# 동작한다. 터미널이 없으면 온보딩은 조용히 건너뛰고 예전처럼 전체 설치가 진행된다.
+# 동작한다. 터미널이 없으면 아무것도 설치하지 않는다. 예전 기본 설치는 --no-onboard 로 한다.
 #
 # 환경변수:
 #   CLAUDE_SETUP_REPO=owner/repo   대상 레포 (기본 thsvkd/ai-setup)
@@ -42,11 +42,14 @@ Usage:
   curl -fsSL .../install.sh | sh -s -- --output-style # fluent-korean output style
   curl -fsSL .../install.sh | sh -s -- --mods     # Claude Code mod (Bash diff filter, cache TTL status line)
   curl -fsSL .../install.sh | sh -s -- --newline ctrl-enter
+  curl -fsSL .../install.sh | sh -s -- --stages all --dry-run # preview the staged installer
+  curl -fsSL .../install.sh | sh -s -- --doctor   # read-only health report
   curl -fsSL .../install.sh | sh -s -- --help     # this help
 
 Run without arguments to get an onboarding that picks the install scope and permission mode (auto/bypassPermissions).
 It works even when piped (stdin is the script body) by opening the controlling terminal directly;
-without a terminal (CI, etc.) it does a full install without onboarding.
+without a terminal (CI, etc.) nothing is installed. --no-onboard keeps the old default install.
+Other options (--orca-desktop, --jarvis-role, --herdr, --ss-caps, ...) are passed to scripts/setup.sh as is.
 
 Environment variables:
   CLAUDE_SETUP_REPO=owner/repo   target repo (default thsvkd/ai-setup)

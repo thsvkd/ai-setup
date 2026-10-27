@@ -57,15 +57,19 @@ VALID_DEFAULT_MODES = (
 
 
 def load_manifest(path):
-    """설치 영수증을 읽는다. 없거나 깨졌으면 빈 dict."""
+    """설치 영수증을 읽는다. 없으면 빈 dict.
+    영수증은 하네스·도구·Orca 설치 기록도 담으므로, 읽지 못하면 덮어쓰지 않도록 아무것도 쓰기 전에
+    오류로 멈춘다. BOM 은 PowerShell 쪽과 같게 허용한다."""
     if not path or not os.path.exists(path):
         return {}
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
     except (OSError, ValueError):
-        return {}
-    # 목록·null 같은 JSON 도 '깨진 영수증'이다. 그대로 돌려주면 병합이 중간에 죽는다.
+        print(f"❌ Cannot parse the install receipt: {path}\n"
+              "   Nothing was changed. Fix or move the file, then run again.", file=sys.stderr)
+        raise SystemExit(1)
+    # 목록·null 같은 JSON 은 키 섹션을 담을 수 없어 잃을 기록이 없다. 빈 영수증으로 본다.
     return data if isinstance(data, dict) else {}
 
 
@@ -491,7 +495,8 @@ def revert_env(existing: dict, receipt: dict) -> list:
 
 
 def remove_hooks(existing: dict, targets: list) -> list:
-    """PreToolUse 등 hooks.* 에서, 지정한 스크립트 파일명을 참조하는 항목을 제거한다."""
+    """PreToolUse 등 hooks.* 에서, 지정한 스크립트 파일명을 참조하는 훅을 제거한다.
+    같은 matcher 항목 안의 사용자 훅은 남기고, 항목은 안쪽 hooks 가 비었을 때만 지운다."""
     changes = []
     hooks = existing.get("hooks", {})
     target_set = set(targets)
@@ -501,7 +506,9 @@ def remove_hooks(existing: dict, targets: list) -> list:
             hit = set(script_names(entry)) & target_set
             if hit:
                 changes.append(f"hooks.{event}: - matcher={entry.get('matcher')!r} ({', '.join(sorted(hit))})")
-            else:
+                entry["hooks"] = [h for h in entry.get("hooks", [])
+                                  if not set(PY_RE.findall(h.get("command", ""))) & target_set]
+            if not hit or entry["hooks"]:
                 kept.append(entry)
         if kept:
             hooks[event] = kept

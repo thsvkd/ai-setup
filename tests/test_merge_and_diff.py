@@ -204,6 +204,60 @@ def test_uninstall_keeps_foreign_hooks(tmp_path):
     assert not any("danger_guard.py" in c for c in cmds)       # 우리 것만 제거
 
 
+def test_uninstall_keeps_user_hook_sharing_our_matcher_entry(tmp_path):
+    """사용자가 우리 훅과 같은 matcher 항목 안에 자기 훅을 넣었으면, 우리 훅만 빼고 그 항목은 남긴다."""
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    run_merge(target, manifest_path=manifest)
+    settings = json.loads(target.read_text(encoding="utf-8"))
+    settings["hooks"]["PreToolUse"][0]["hooks"].append({"type": "command", "command": "bash /h/my-audit.sh"})
+    target.write_text(json.dumps(settings), encoding="utf-8")
+
+    proc, result = run_uninstall(target, manifest)
+    assert proc.returncode == 0
+    entries = result["hooks"]["PreToolUse"]
+    cmds = [h["command"] for e in entries for h in e["hooks"]]
+    assert cmds == ["bash /h/my-audit.sh"]
+    assert entries[0]["matcher"] == "Bash|PowerShell"
+
+
+@pytest.mark.parametrize("receipt", ['{"harness_installs": {"codex": true}, broken', ''])
+def test_install_stops_on_unparseable_receipt(tmp_path, receipt):
+    """영수증은 하네스·도구 설치 기록도 담는다. 읽지 못한 영수증을 훅 영수증으로 덮어쓰면 그 기록이 사라진다."""
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    target.write_text('{"model": "x"}', encoding="utf-8")
+    manifest.write_text(receipt, encoding="utf-8")
+
+    proc, _ = run_merge(target, manifest_path=manifest)
+    assert proc.returncode != 0
+    assert str(manifest) in proc.stderr
+    assert target.read_text(encoding="utf-8") == '{"model": "x"}'
+    assert manifest.read_text(encoding="utf-8") == receipt
+    assert not list(tmp_path.glob("settings.json.bak.*"))
+
+
+def test_uninstall_stops_on_unparseable_receipt(tmp_path):
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    run_merge(target, manifest_path=manifest)
+    before = target.read_text(encoding="utf-8")
+    manifest.write_text('{"version": 1, broken', encoding="utf-8")
+
+    proc, _ = run_uninstall(target, manifest)
+    assert proc.returncode != 0
+    assert str(manifest) in proc.stderr
+    assert target.read_text(encoding="utf-8") == before
+    assert manifest.read_text(encoding="utf-8") == '{"version": 1, broken'
+
+
+def test_install_reads_a_receipt_with_bom(tmp_path):
+    """PowerShell 5.1 은 BOM 을 붙여 쓸 수 있다. BOM 하나로 다른 섹션을 잃으면 안 된다."""
+    target, manifest = tmp_path / "settings.json", tmp_path / "manifest.json"
+    manifest.write_text('\ufeff{"harness_installs": {"codex": true}}', encoding="utf-8")
+
+    proc, _ = run_merge(target, manifest_path=manifest)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(manifest.read_text(encoding="utf-8"))["harness_installs"] == {"codex": True}
+
+
 def test_uninstall_without_manifest_only_removes_hooks(tmp_path):
     # 매니페스트가 없으면(구버전 설치) 권한은 되돌리지 못하고 훅 등록만 해제한다.
     target, manifest = tmp_path / "settings.json", tmp_path / "missing.json"
@@ -632,6 +686,22 @@ def test_retired_hook_registration_is_pruned(tmp_path):
     # 사용자가 직접 넣은 훅은 그대로 둔다.
     assert any("mine.py" in c for c in cmds)
     assert any("danger_guard.py" in c for c in cmds)
+
+
+def test_retired_hook_prune_keeps_user_hook_in_the_same_entry(tmp_path):
+    """그만둔 훅을 걷어낼 때도 같은 항목 안의 사용자 훅은 남긴다."""
+    target = tmp_path / "settings.json"
+    target.write_text(json.dumps({
+        "hooks": {"PreToolUse": [
+            {"matcher": "Read|Write|Edit|MultiEdit",
+             "hooks": [{"type": "command", "command": "python -X utf8 \"/h/secrets_guard.py\""},
+                       {"type": "command", "command": "bash /h/my-audit.sh"}]},
+        ]}
+    }), encoding="utf-8")
+
+    _, result = run_merge(target)
+    entries = [e for e in result["hooks"]["PreToolUse"] if e["matcher"] == "Read|Write|Edit|MultiEdit"]
+    assert [h["command"] for e in entries for h in e["hooks"]] == ["bash /h/my-audit.sh"]
 
 
 def test_receipt_forgets_retired_rules_already_gone_so_a_user_copy_survives(tmp_path):

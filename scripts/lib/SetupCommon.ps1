@@ -301,10 +301,18 @@ function Uninstall-Hooks {
     $manifestPath = Join-Path $ClaudeDir $MANIFEST_NAME
     $files = @()
     if (Test-Path $manifestPath) {
-        try {
-            $m = Get-Content $manifestPath -Raw | ConvertFrom-Json
-            if ($m.PSObject.Properties.Name -contains "hook_files") { $files = @($m.hook_files) }
-        } catch {}
+        # 영수증은 하네스·도구·Orca 설치 기록도 함께 담는다. 읽지 못하면 아무것도 건드리지 않고 멈춘다.
+        # 객체가 아닌 JSON 은 기록을 담을 수 없으므로 merge_and_diff.py 처럼 빈 영수증으로 본다.
+        $parsed = $true
+        try { $m = Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $parsed = $false }
+        if ($parsed -and $m -isnot [pscustomobject]) { $m = [pscustomobject]@{} }
+        if (-not $parsed) {
+            Write-Host "❌ Cannot parse the install receipt: $manifestPath" -ForegroundColor Red
+            Write-Host "   Nothing was changed. Fix or move the file, then run the uninstall again." -ForegroundColor Red
+            exit 1
+        }
+        # StrictMode 에서 빈 객체의 .Properties.Name 은 예외다. 인덱서로 조회한다.
+        if ($null -ne $m.PSObject.Properties["hook_files"]) { $files = @($m.hook_files) }
     }
     if (-not $files -or $files.Count -eq 0) {
         $files = @("danger_guard.py", "secrets_guard.py", "send_to_trash.py",
@@ -349,18 +357,16 @@ function Uninstall-Hooks {
         if ($DryRun) {
             Write-Host "  🧪 (dry-run) would remove: $manifestPath"
         } else {
+            # $m 은 위에서 이미 읽고 검증한 영수증이다. 읽지 못한 영수증은 여기까지 오지 않는다.
             $payload = [ordered]@{}
-            try {
-                $m = Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-                foreach ($key in @("keybinds", "omc_hud", "output_style", "mods", "tool_installs", "tool_attempts", "harness_installs", "plugins", "mcp", "jarvis_unit", "agentsmd", "skills", "marketplaces")) {
-                    # 빈 객체({})도 PowerShell 에서는 참이다. bash 쪽과 같게 빈 값은 버린다.
-                    $value = if ($m -and $m.PSObject.Properties.Name -contains $key) { $m.$key } else { $null }
-                    $present = if ($value -is [pscustomobject]) { @($value.PSObject.Properties).Count -gt 0 } else { [bool]$value }
-                    if ($present) {
-                        $payload[$key] = $m.$key
-                    }
+            foreach ($key in @("keybinds", "omc_hud", "output_style", "mods", "tool_installs", "tool_attempts", "harness_installs", "plugins", "mcp", "jarvis_unit", "agentsmd", "skills", "marketplaces")) {
+                # 빈 객체({})도 PowerShell 에서는 참이다. bash 쪽과 같게 빈 값은 버린다.
+                $value = if ($null -ne $m.PSObject.Properties[$key]) { $m.$key } else { $null }
+                $present = if ($value -is [pscustomobject]) { @($value.PSObject.Properties).Count -gt 0 } else { [bool]$value }
+                if ($present) {
+                    $payload[$key] = $m.$key
                 }
-            } catch { $payload = [ordered]@{} }
+            }
             if ($payload.Count -gt 0) {
                 # BOM 없이 쓴다. Windows PowerShell 5.1 의 Set-Content -Encoding UTF8 은 BOM 을 붙인다.
                 [IO.File]::WriteAllText($manifestPath, ($payload | ConvertTo-Json -Depth 20), (New-Object Text.UTF8Encoding $false))
