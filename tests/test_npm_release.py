@@ -123,6 +123,8 @@ def test_update_switches_current_only_after_the_new_version_is_complete_and_neve
     shim = npm_release.shim_path(ENTRY)
     assert npm_release.read_pointer(root, "current") == "1.0.0"
     assert run_shim("--version").stdout.strip() == "gemini 1.0.0"
+    # npm 12 는 허용하지 않은 install 스크립트를 막는다. 설치하는 그 패키지만 허용한다.
+    assert (root / "1.0.0" / ".npmrc").read_text(encoding="utf-8") == "allow-scripts=@google/gemini-cli\n"
     before = (shim.read_bytes(), shim.stat().st_ino, shim.stat().st_mtime_ns)
 
     monkeypatch.setenv("NPM_LATEST", "2.0.0")

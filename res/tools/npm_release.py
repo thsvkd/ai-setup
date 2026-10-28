@@ -241,6 +241,11 @@ def install_version(entry, root, version):
         # current 가 된 적이 없는 미완성 설치다. 아무도 이 경로로 실행하지 않았다.
         shutil.rmtree(target, ignore_errors=True)
     target.mkdir(parents=True)
+    # npm 12 는 허용하지 않은 패키지의 install 스크립트를 막고, --prefix(프로젝트 범위) 설치에는 --allow-scripts 를
+    # 받지 않는다(https://docs.npmjs.com/cli/v12/commands/npm-install-scripts). 이 버전 디렉터리의 .npmrc 에
+    # 우리가 고른 그 패키지만 허용한다. postinstall 로 네이티브 바이너리를 놓는 패키지(@opencode/cli)가 있다.
+    # 의존성의 스크립트는 계속 막힌다. 예전 npm 은 모르는 설정으로 보고 무시한다.
+    (target / ".npmrc").write_text("allow-scripts=" + package + "\n", encoding="utf-8")
     say("  {:<14}  npm install --prefix {} {}@{}".format("package", target, package, version))
     out = run_quiet([npm(), "install", "--prefix", str(target), "--no-fund", "--no-audit",
                      "{}@{}".format(package, version)], timeout=900)

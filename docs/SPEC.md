@@ -70,7 +70,7 @@
   - `install` 의 `npm-release` 방식: npm 외의 공식 설치 방식이 없는 대상(gemini·codegraph 전 플랫폼, opencode·copilot 의 Windows)은 `python3 res/tools/npm_release.py install|uninstall <id>` 로 설치·제거한다. 카탈로그 명령은 저장소 루트에서 실행하고, 맨 앞의 `python3`/`python` 은 지금 인터프리터로 바꾼다. copilot 의 Linux·macOS 는 공식 native(`gh.io/copilot-install`, 갱신 `copilot update`)다. 제거는 예전 영수증(npm -g 설치)을 위해 같은 패키지의 npm -g 사본도 지운다. npm-release 의 uninstall 도 배치가 없으면 같은 방식으로 예전 npm -g 사본을 지우고, Windows 에서는 카탈로그의 winget 패키지 사본(예전 copilot)도 지운다. 실패하면 exit 1 로 영수증을 남긴다.
   - `detect.sessions`(선택): 실행 중인 세션 판정 보정. 제자리 교체 방식의 사용 중 판정과 `--allow-interrupt` 단계에만 쓴다. `match` 는 실행 파일 이름이 다른 세션(`/opt/Orca/orca-ide`, qemu 로 도는 grok)을, `ignore` 는 세션이 아닌 상주 프로세스(데몬·데스크톱 앱: `herdr server`, `serve --mcp`, codex app-server 데몬, Claude Desktop)를 명령줄 부분 문자열로 적는다.
 - npm-release 배치(`res/tools/npm_release.py`):
-  - 루트는 `~/.local/share/ai-setup/npm/<id>/`(Windows `%LOCALAPPDATA%\ai-setup\npm\<id>\`). 버전마다 `<ver>/` 에 `npm install --prefix` 로 설치하고, 완료 표시(`.complete`)가 있어야 버전으로 친다.
+  - 루트는 `~/.local/share/ai-setup/npm/<id>/`(Windows `%LOCALAPPDATA%\ai-setup\npm\<id>\`). 버전마다 `<ver>/` 에 `npm install --prefix` 로 설치하고, 완료 표시(`.complete`)가 있어야 버전으로 친다. npm 12 는 허용하지 않은 install 스크립트를 막으므로, 그 버전 디렉터리의 `.npmrc` 에 설치하는 패키지 하나만 `allow-scripts` 로 허용한다(의존성 스크립트는 계속 막힌다). 새 버전은 진입점 `--version` 이 성공해야 `current` 가 된다.
   - `current`(지금 버전)·`previous`(직전 버전)는 임시 파일을 만든 뒤 원자적으로 교체한다. 새 버전이 완성된 뒤에만 `current` 를 바꾸고, 설치가 실패하면 미완성 디렉터리를 지운다.
   - 셔임은 POSIX `~/.local/bin/<bin>`(sh), Windows `%LOCALAPPDATA%\ai-setup\bin\<bin>.cmd` 이다. Windows 셔임 디렉터리는 사용자 PATH 맨 앞에 둔다. 셔임 내용은 고정이라 다시 쓰지 않고, `current` 를 읽어 구체적인 버전 경로를 실행한다. 이미 뜬 세션은 자기 버전 경로를 계속 쓴다.
   - 셔임 경로에 ai-setup 셔임도 그 패키지의 npm 링크도 아닌 파일이 있으면 설치하기 전에 멈춘다.
