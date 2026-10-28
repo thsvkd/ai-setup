@@ -797,6 +797,7 @@ def test_user_bin_goes_on_path_so_fresh_harness_installs_are_found(monkeypatch, 
     assert os.environ["PATH"] == os.pathsep.join([*map(str, expected), "/usr/bin"])
 
 
+@pytest.mark.skipif(shutil.which("sh") is None, reason="POSIX sh not found")
 def test_apt_install_refreshes_package_lists_when_the_package_is_missing(tmp_path):
     """새 Debian 은 apt 목록이 비어 있다. 첫 설치가 실패하면 update 뒤 한 번 더 설치한다."""
     bindir = tmp_path / "bin"
@@ -1257,6 +1258,7 @@ def _run_setup(command, home: Path, project: Path):
                           encoding="utf-8", errors="replace", timeout=60)
 
 
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not found")
 def test_setup_sh_forwards_declined_claude_specials(tmp_path):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
