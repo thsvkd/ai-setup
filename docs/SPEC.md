@@ -81,6 +81,7 @@
 - update-ai 실시간 업데이트:
   - 버전별 배치(native self-update, npm-release, brew)는 세션 유무와 상관없이 올린다. brew 는 `HOMEBREW_NO_INSTALL_CLEANUP=1` 로 실행해 formula 의 이전 버전을 남긴다(cask 는 이 값과 상관없이 이전 버전을 지울 수 있다. macOS 실측 전).
   - 파일을 제자리에서 바꾸거나 세션을 끝내는 방식(npm -g, winget portable, Orca deb, 설치 폴더의 데스크톱 앱을 끝내는 Windows Orca 설치기)은 그 대상의 세션이 돌면 `--allow-interrupt` 없이는 바꾸지 않고 보류(실패)로 보고하며, 카탈로그 설치 방식이 다르면 그 설치 명령을 안내한다. codex 관리형 데몬 교체도 실행 중이면 `--allow-interrupt` 를 요구한다.
+  - 설치본이 최신 릴리스와 같거나 더 새로우면(앱 안에서 받은 prerelease, 매니페스트 지연) 최신으로 판정한다. `--check`, 갱신 뒤 검사, Orca 의 매니페스트 비교가 모두 이 규칙을 쓰며, 더 오래된 패키지로 내리지 않는다.
   - 갱신한 뒤에도 이전 버전으로 도는 세션은 실패가 아니라 결과 표 아래 안내(재시작하면 새 버전)로 남긴다.
   - 프로세스 목록은 명령줄을 자르지 않고 읽는다(`ps -ww`).
 - 영수증 `harness_installs`·`tool_installs` 는 항목마다 실제로 쓴 설치 방식을 기록하고, uninstall 은 그 방식에 짝지은 `uninstall` 명령을 쓴다.

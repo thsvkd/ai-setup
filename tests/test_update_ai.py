@@ -345,7 +345,7 @@ def test_orca_package_is_not_installed_under_a_running_session_without_allow_int
 
 
 def test_an_install_newer_than_the_latest_release_counts_as_up_to_date(monkeypatch, capsys):
-    """--check 와 갱신 뒤 검사 모두 설치본이 최신보다 새로우면 실패로 보지 않는다."""
+    """covers: AI-65 — --check 와 갱신 뒤 검사 모두 설치본이 최신보다 새로우면 실패로 보지 않는다."""
     import argparse
 
     monkeypatch.setattr(update_ai, "locations", lambda name: ["/opt/Orca/orca-ide"])
@@ -535,7 +535,7 @@ def test_orca_deb_update_installs_only_a_verified_package(tmp_path, monkeypatch,
 
 
 def test_an_install_newer_than_the_release_manifest_is_not_downgraded(tmp_path, monkeypatch):
-    """앱 안에서 받은 prerelease 나 늦게 갱신된 매니페스트 때문에 설치본이 더 새로우면 이전 판 설치기를 돌리지 않는다."""
+    """covers: AI-65 — 앱 안에서 받은 prerelease 나 늦게 갱신된 매니페스트 때문에 설치본이 더 새로우면 이전 판 설치기를 돌리지 않는다."""
     mod = _update_ai_module()
     assert mod.is_current("9.9.10", "9.9.9") and mod.is_current("9.9.9", "9.9.9")
     assert not mod.is_current("9.9.8", "9.9.9") and not mod.is_current("", "9.9.9")
