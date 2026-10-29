@@ -359,27 +359,79 @@ def update_orca_deb(path):
     installed = version_of(path)
     if is_current(installed, version):
         say("  {:<14}  orca-ide {} is already the latest".format("package", installed))
-        return "ok"
-    scratch = tempfile.mkdtemp(prefix="update-ai-orca-")
-    try:
-        say("  {:<14}  download {}".format("package", meta["name"]))
+        result = "ok"
+    else:
+        scratch = tempfile.mkdtemp(prefix="update-ai-orca-")
         try:
-            target = orca_release.download(version, meta, Path(scratch))
-        except (OSError, RuntimeError) as error:
-            say("      download failed: {}".format(error if isinstance(error, RuntimeError) else type(error).__name__))
-            return "failed"
-        return run_sudo_step("package", ["apt-get", "install", "-y", str(target)])
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+            say("  {:<14}  download {}".format("package", meta["name"]))
+            try:
+                target = orca_release.download(version, meta, Path(scratch))
+            except (OSError, RuntimeError) as error:
+                say("      download failed: {}".format(error if isinstance(error, RuntimeError) else type(error).__name__))
+                return "failed"
+            result = run_sudo_step("package", ["apt-get", "install", "-y", str(target)])
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+    server = orca_server_record("systemd-user")
+    if result == "ok" and server and server.get("state") == "configured" and server.get("cli") and \
+            orca_server.runtime_is_active(server["server_profile"]):
+        # PATH 의 orca 는 데스크톱 프로필의 shim 일 수 있다. 서버가 쓰는 deb 의 CLI 로 설치본 판을 읽는다.
+        return "ok" if restart_orca_server_unit(server, version_of(server["cli"])) else "failed"
+    return result
+
+
+def restart_orca_server_unit(server, version):
+    """deb 는 /opt/Orca 를 제자리에서 바꾸고 서버를 다시 띄우지 않는다. 설치본과 판이 다르면 터미널이 없을 때만 다시 띄운다.
+
+    Linux 에는 스스로 옮겨 가는 러너가 없으므로, 이미 최신인 재실행도 이전 판에 남은 서버를 여기서 옮긴다.
+    터미널이 있으면 끊지 않고 이전 판을 유지한다고 알린다(True). 재시작이나 버전 확인이 실패하면 False.
+    """
+    running = orca_server_version(server)
+    if not version or not running:
+        say("  {:<14}  cannot read the {} version; the Orca server was not restarted".format(
+            "server", "installed" if not version else "running"))
+        return True
+    if running == version:
+        return True
+    terminals = orca_server.live_terminal_count(server.get("cli"), server["server_profile"])
+    if terminals != 0:
+        say("  {:<14}  the Orca server keeps the previous version until it restarts ({}); "
+            "run update-ai orca --allow-interrupt again once it has none".format(
+                "server", orca_server.terminal_count_problem(terminals)))
+        return True
+    # try-restart: 유닛이 멈춰 있으면(같은 프로필의 다른 서버) 띄우지 않는다.
+    if not run_step("server", ["systemctl", "--user", "try-restart", Path(server["service_path"]).name]):
+        return False
+    deadline = time.monotonic() + ORCA_SERVER_SWITCH_SECONDS
+    while True:
+        running = orca_server_version(server)
+        if running == version:
+            say("  {:<14}  the Orca server now runs {}".format("server", version))
+            return True
+        if time.monotonic() >= deadline:
+            say("  {:<14}  the Orca server runs {} after the restart (expected {})".format(
+                "server", running or "nothing readable", version))
+            return False
+        time.sleep(5)
+
+
+def orca_server_version(server):
+    """ai-setup 서버가 지금 실행 중인 Orca 버전. 읽지 못하면 빈 문자열."""
+    env = dict(os.environ, ORCA_USER_DATA_PATH=str(server["server_profile"]))
+    out = run_quiet([server["cli"], "status", "--json"], env=env)
+    try:
+        return json.loads(out.stdout)["result"]["runtime"]["appVersion"] or ""
+    except (AttributeError, ValueError, KeyError, TypeError):
+        return ""
 
 
 ORCA_SERVER_SWITCH_SECONDS = 300
 
 
-def orca_server_record():
+def orca_server_record(manager="task-scheduler"):
     receipt = orca_release.read_receipt(orca_release.home_dir() / ".claude/.claude-code-setup.json")
     record = (receipt.get("tool_installs") or {}).get("orca_server")
-    return record if isinstance(record, dict) and record.get("service_manager") == "task-scheduler" else None
+    return record if isinstance(record, dict) and record.get("service_manager") == manager else None
 
 
 def update_orca_windows():

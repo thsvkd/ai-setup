@@ -525,6 +525,7 @@ def test_orca_deb_update_installs_only_a_verified_package(tmp_path, monkeypatch,
     monkeypatch.setattr(mod, "run_quiet", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "arm64\n", ""))
     steps = []
     monkeypatch.setattr(mod, "run_sudo_step", lambda label, argv: steps.append(argv) or "ok")
+    monkeypatch.setattr(mod.orca_release, "read_receipt", lambda path: {})
     assert mod.update_orca_deb("/opt/Orca/orca-ide") == "failed"
     assert steps == []
 
@@ -540,12 +541,122 @@ def test_an_install_newer_than_the_release_manifest_is_not_downgraded(tmp_path, 
     assert not mod.is_current("9.9.8", "9.9.9") and not mod.is_current("", "9.9.9")
     monkeypatch.setattr(mod.orca_release, "fetch_manifest", lambda plan: ("9.9.9", {"name": "orca-ide_9.9.9_arm64.deb"}))
     monkeypatch.setattr(mod.orca_release, "download", lambda *args: pytest.fail("downloaded an older release"))
+    monkeypatch.setattr(mod.orca_release, "read_receipt", lambda path: {})
     monkeypatch.setattr(mod, "version_of", lambda path: "9.9.10")
     monkeypatch.setattr(mod, "run_quiet", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "arm64\n", ""))
     assert mod.update_orca_deb("/opt/Orca/orca-ide") == "ok"
     steps, _ = _orca_windows_release(mod, monkeypatch, tmp_path, b"official", {"state": None})
     monkeypatch.setattr(mod.orca_release, "installed_version", lambda plan: "9.9.10")
     assert mod.update_orca_windows() == "ok" and steps == []
+
+
+ORCA_SHIM = "/home/u/.config/orca/cli/bin/orca"
+
+
+def _orca_deb_server(mod, monkeypatch, tmp_path, terminals, running_after, installed_latest=False, state="configured"):
+    """apt 가 9.9.9 를 깐 뒤의 Linux ai-setup 서버. (실행한 단계, 서버 버전 조회 횟수)를 돌려준다."""
+    import base64
+    import hashlib
+    import io
+
+    good = b"official"
+    meta = {"name": "orca-ide_9.9.9_arm64.deb", "size": len(good),
+            "sha512": base64.b64encode(hashlib.sha512(good).digest()).decode("ascii")}
+    monkeypatch.setattr(mod.orca_release, "fetch_manifest", lambda plan: ("9.9.9", meta))
+    monkeypatch.setattr(mod.orca_release, "open_release", lambda url: io.BytesIO(good))
+    monkeypatch.setattr(mod.orca_release, "read_receipt", lambda path: {"tool_installs": {"orca_server": {
+        "service_manager": "systemd-user", "service_path": str(tmp_path / "ai-setup-orca.service"),
+        "server_profile": str(tmp_path / "orca"), "cli": "/opt/Orca/resources/bin/orca-ide", "state": state}}})
+    monkeypatch.setattr(mod, "ORCA_SERVER_SWITCH_SECONDS", 0)
+    monkeypatch.setattr(mod.orca_server, "live_terminal_count", lambda cli, profile: terminals)
+    steps, statuses = [], []
+    # PATH 의 shim 은 apt 뒤에도 이전 판을 말한다. 설치본 판은 서버가 쓰는 deb CLI 로만 읽어야 한다.
+    monkeypatch.setattr(mod, "version_of", lambda path: "1.0.0" if path == ORCA_SHIM
+                        else "9.9.9" if steps or installed_latest else "1.0.0")
+    monkeypatch.setattr(mod, "run_sudo_step", lambda label, argv: steps.append(argv[:3]) or "ok")
+    monkeypatch.setattr(mod, "run_step", lambda label, argv, **kw: steps.append(argv) or True)
+
+    def run_quiet(argv, **kw):
+        if argv[1:] == ["status", "--json"]:
+            statuses.append(kw["env"]["ORCA_USER_DATA_PATH"])
+            version = running_after if steps and steps[-1][0] == "systemctl" else "1.0.0"
+            return subprocess.CompletedProcess(argv, 0, json.dumps({"result": {"runtime": {"appVersion": version}}}), "")
+        return subprocess.CompletedProcess(argv, 0, "arm64\n", "")
+
+    monkeypatch.setattr(mod, "run_quiet", run_quiet)
+    return steps, statuses
+
+
+def test_deb_update_restarts_an_idle_ai_setup_server_and_checks_its_version(tmp_path, monkeypatch, capsys):
+    """covers: AI-64"""
+    mod = _update_ai_module()
+    monkeypatch.setattr(mod.orca_server, "runtime_is_active", lambda profile: True)
+    steps, statuses = _orca_deb_server(mod, monkeypatch, tmp_path, 0, "9.9.9")
+    assert mod.update_orca_deb(ORCA_SHIM) == "ok"  # PATH 에서 먼저 찾은 것이 데스크톱 shim 이어도
+    assert steps == [["apt-get", "install", "-y"], ["systemctl", "--user", "try-restart", "ai-setup-orca.service"]]
+    assert statuses == [str(tmp_path / "orca")] * 2  # 재시작 전 판 확인, 재시작 뒤 판 확인
+    assert "now runs 9.9.9" in capsys.readouterr().out
+
+
+def test_an_already_current_deb_still_moves_a_server_left_on_the_previous_version(tmp_path, monkeypatch, capsys):
+    """covers: AI-64 — 터미널 때문에 이전 판에 남은 서버는 다음 실행이 옮긴다(Linux 에는 스스로 옮기는 러너가 없다)."""
+    mod = _update_ai_module()
+    monkeypatch.setattr(mod.orca_server, "runtime_is_active", lambda profile: True)
+    monkeypatch.setattr(mod.orca_release, "download", lambda *args: pytest.fail("downloaded an installed release"))
+    steps, _ = _orca_deb_server(mod, monkeypatch, tmp_path, 0, "9.9.9", installed_latest=True)
+    assert mod.update_orca_deb("/opt/Orca/orca-ide") == "ok"
+    assert steps == [["systemctl", "--user", "try-restart", "ai-setup-orca.service"]]
+
+
+@pytest.mark.parametrize("state", ["pairing", "configuring"])
+def test_deb_update_leaves_a_server_whose_setup_is_unfinished(tmp_path, monkeypatch, state):
+    """covers: AI-64 — 구성이 끝나지 않은 서버는 유닛이 아직 없을 수 있다."""
+    mod = _update_ai_module()
+    monkeypatch.setattr(mod.orca_server, "runtime_is_active", lambda profile: True)
+    steps, _ = _orca_deb_server(mod, monkeypatch, tmp_path, 0, "9.9.9", state=state)
+    assert mod.update_orca_deb("/opt/Orca/orca-ide") == "ok"
+    assert steps == [["apt-get", "install", "-y"]]
+
+
+def test_deb_update_does_not_restart_when_a_version_cannot_be_read(tmp_path, monkeypatch, capsys):
+    """covers: AI-64 — 판을 읽지 못하면 다르다고 보지 않는다."""
+    mod = _update_ai_module()
+    monkeypatch.setattr(mod.orca_server, "runtime_is_active", lambda profile: True)
+    steps, _ = _orca_deb_server(mod, monkeypatch, tmp_path, 0, "9.9.9")
+    monkeypatch.setattr(mod, "orca_server_version", lambda server: "")
+    assert mod.update_orca_deb("/opt/Orca/orca-ide") == "ok"
+    assert steps == [["apt-get", "install", "-y"]]
+    assert "cannot read the running version" in capsys.readouterr().out
+
+
+def test_deb_update_fails_when_the_restarted_server_runs_another_version(tmp_path, monkeypatch, capsys):
+    """covers: AI-64"""
+    mod = _update_ai_module()
+    monkeypatch.setattr(mod.orca_server, "runtime_is_active", lambda profile: True)
+    _orca_deb_server(mod, monkeypatch, tmp_path, 0, "1.0.0")
+    assert mod.update_orca_deb("/opt/Orca/orca-ide") == "failed"
+    assert "expected 9.9.9" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("terminals, reason", [(2, "2 live terminals"), (None, "could not be counted")])
+def test_deb_update_leaves_a_server_with_live_or_unknown_terminals_running(tmp_path, monkeypatch, capsys, terminals, reason):
+    """covers: AI-64"""
+    mod = _update_ai_module()
+    monkeypatch.setattr(mod.orca_server, "runtime_is_active", lambda profile: True)
+    steps, _ = _orca_deb_server(mod, monkeypatch, tmp_path, terminals, "9.9.9")
+    assert mod.update_orca_deb("/opt/Orca/orca-ide") == "ok"
+    assert steps == [["apt-get", "install", "-y"]]
+    out = capsys.readouterr().out
+    assert "keeps the previous version" in out and reason in out
+
+
+def test_deb_update_does_not_start_a_server_that_is_down(tmp_path, monkeypatch):
+    """covers: AI-64"""
+    mod = _update_ai_module()
+    monkeypatch.setattr(mod.orca_server, "runtime_is_active", lambda profile: False)
+    steps, _ = _orca_deb_server(mod, monkeypatch, tmp_path, 0, "9.9.9")
+    assert mod.update_orca_deb("/opt/Orca/orca-ide") == "ok"
+    assert steps == [["apt-get", "install", "-y"]]
 
 
 def _update_ai_module():
