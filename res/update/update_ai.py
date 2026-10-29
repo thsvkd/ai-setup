@@ -356,8 +356,9 @@ def update_orca_deb(path):
     except (OSError, ValueError, RuntimeError):
         say("  {:<14}  cannot read the latest release from GitHub".format("package"))
         return "failed"
-    if version_of(path) == version:
-        say("  {:<14}  orca-ide {} is already the latest".format("package", version))
+    installed = version_of(path)
+    if is_current(installed, version):
+        say("  {:<14}  orca-ide {} is already the latest".format("package", installed))
         return "ok"
     scratch = tempfile.mkdtemp(prefix="update-ai-orca-")
     try:
@@ -396,8 +397,8 @@ def update_orca_windows():
     except (OSError, ValueError, KeyError, RuntimeError):
         say("  {:<14}  cannot read the latest release or the installed version".format("package"))
         return "failed"
-    if installed == version:
-        say("  {:<14}  Orca {} is already the latest".format("package", version))
+    if is_current(installed, version):
+        say("  {:<14}  Orca {} is already the latest".format("package", installed))
         return "ok"
     if server and orca_server.runtime_is_active(server["server_profile"]) and not (
             orca_server.running_runner_state(server["service_root"]) or {}).get("app"):
@@ -440,8 +441,7 @@ def wait_for_orca_server_switch(server, root):
             return True
         terminals = orca_server.live_terminal_count(orca_server.server_query_cli(server), server["server_profile"])
         if terminals != 0 or time.monotonic() >= deadline:
-            reason = ("it has {} live terminals".format(terminals) if terminals
-                      else "its terminals could not be counted" if terminals is None
+            reason = (orca_server.terminal_count_problem(terminals) if terminals != 0
                       else "it did not switch within {} seconds".format(ORCA_SERVER_SWITCH_SECONDS))
             say("  {:<14}  the Orca server keeps the previous version for now ({}); "
                 "it switches by itself once it has no live terminals".format("server", reason))
@@ -462,6 +462,11 @@ def claude_user_plugins(path):
 
 def version_key(text):
     return tuple(int(n) for n in re.findall(r"\d+", text)[:3])
+
+
+def is_current(installed, latest):
+    """설치본이 최신 이상인가. 앱 안에서 받은 prerelease·늦게 갱신된 매니페스트로 설치본이 더 새로울 수 있다."""
+    return installed == latest or version_key(str(installed or "")) > version_key(str(latest or ""))
 
 
 def codex_daemon_state(path):
@@ -680,7 +685,7 @@ def run_all(catalog, only, args):
         before = version_of(path)
         if args.check:
             latest = latest_of(entry, path, method, value)
-            state = "cannot check latest" if not latest else ("up to date" if latest == before else "new version")
+            state = "cannot check latest" if not latest else ("up to date" if is_current(before, latest) else "new version")
             results.append((entry["id"], state, before, latest or before))
             if entry["id"] == "codex":
                 results += codex_check_rows(path, latest or before, table())
@@ -717,7 +722,7 @@ def run_all(catalog, only, args):
             broke.append("version")
         if not broke:
             latest = latest_of(entry, path, method, value)
-            if latest and latest != after:
+            if latest and not is_current(after, latest):
                 broke.append("latest is " + latest)
         if broke:
             state = "failed: " + ", ".join(broke + warnings)

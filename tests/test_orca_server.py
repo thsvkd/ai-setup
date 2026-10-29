@@ -1391,6 +1391,28 @@ def test_stopping_the_service_refuses_while_the_server_has_live_or_unknown_termi
     assert runner.exists() and service.exists()
 
 
+def test_live_terminal_count_keeps_why_it_could_not_count(tmp_path, monkeypatch):
+    """세지 못한 이유를 남기고, Windows 의 접근 거부는 관리자 셸에서 다시 하라고 알린다."""
+    denied = json.dumps({"id": "local", "ok": False, "error": {
+        "code": "runtime_access_denied", "message": "Permission denied connecting to Orca (EPERM)."}})
+    monkeypatch.setattr(orca_server.subprocess, "run",
+                        lambda command, **kwargs: subprocess.CompletedProcess(command, 1, denied, ""))
+    monkeypatch.setattr(orca_server.os, "name", "nt")
+    assert orca_server.live_terminal_count("orca", tmp_path / "orca") is None
+    problem = orca_server.terminal_count_problem(None)
+    assert "could not be counted" in problem and "EPERM" in problem and "administrator shell" in problem
+    monkeypatch.setattr(orca_server.subprocess, "run", lambda command, **kwargs: subprocess.CompletedProcess(
+        command, 2, "", "starting\nconnect failed: orca://pair?code=secret\n"))
+    assert orca_server.live_terminal_count("orca", tmp_path / "orca") is None
+    assert "exited 2" in orca_server.last_terminal_query_error and "secret" not in orca_server.last_terminal_query_error
+    for stderr in ('null', '{"msg": "see orca://pair?code=secret"}'):
+        monkeypatch.setattr(orca_server.subprocess, "run", lambda command, stderr=stderr, **kwargs:
+                            subprocess.CompletedProcess(command, 1, "", stderr))
+        assert orca_server.live_terminal_count("orca", tmp_path / "orca") is None
+        assert "secret" not in orca_server.last_terminal_query_error
+    assert orca_server.terminal_count_problem(3) == "it has 3 live terminals"
+
+
 def test_live_terminal_count_reads_the_server_profile_and_treats_failures_as_unknown(tmp_path, monkeypatch):
     calls = []
 

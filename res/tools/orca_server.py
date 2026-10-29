@@ -43,17 +43,19 @@ def parse_ready_event(line, expected_scope):
     return {"scope": scope, "url": pairing["url"], "runtime_id": event.get("runtimeId")}
 
 
+def mentions_pairing(line):
+    return bool(
+        "orca://pair" in line.casefold()
+        or "pairing qr" in line.casefold()
+        or re.search(r"[?&](?:pair|code|token)=", line, re.IGNORECASE)
+    )
+
+
 def redact_server_line(line):
     try:
         event = json.loads(line)
     except (TypeError, ValueError):
-        if (
-            "orca://pair" in line.casefold()
-            or "pairing qr" in line.casefold()
-            or re.search(r"[?&](?:pair|code|token)=", line, re.IGNORECASE)
-        ):
-            return "[pairing output redacted]"
-        return line
+        return "[pairing output redacted]" if mentions_pairing(line) else line
     if event.get("type") == "orca_server_ready":
         pairing = event.get("pairing")
         if isinstance(pairing, dict):
@@ -403,10 +405,24 @@ def refresh_app_snapshot(source, copies, keep=None):
     return current
 
 
+# 마지막 live_terminal_count 가 터미널을 세지 못한 이유. 호출자가 안내 문구에 붙인다.
+last_terminal_query_error = ""
+
+
 def live_terminal_count(cli, server_profile):
-    """서버의 살아 있는 Orca 터미널 수. 확인하지 못하면 None 이며, 호출자는 활성으로 다룬다."""
+    """서버의 살아 있는 Orca 터미널 수. 확인하지 못하면 None 이며, 호출자는 활성으로 다룬다.
+
+    세지 못한 이유는 last_terminal_query_error 에 남긴다.
+    """
+    global last_terminal_query_error
+    count, last_terminal_query_error = query_live_terminals(cli, server_profile)
+    return count
+
+
+def query_live_terminals(cli, server_profile):
+    """(터미널 수, 세지 못한 이유)."""
     if not cli:
-        return None
+        return None, "no Orca CLI to ask"
     env = os.environ.copy()
     env["ORCA_USER_DATA_PATH"] = str(server_profile)
     try:
@@ -414,12 +430,42 @@ def live_terminal_count(cli, server_profile):
             [str(cli), "terminal", "list", "--json"], check=False, capture_output=True,
             text=True, encoding="utf-8", errors="replace", env=env, timeout=60,
         )
+    except subprocess.TimeoutExpired:
+        return None, "orca terminal list timed out"
+    except (OSError, subprocess.SubprocessError) as error:
+        return None, getattr(error, "strerror", None) or type(error).__name__
+    try:
         payload = json.loads(result.stdout)
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return None
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict) and payload.get("ok") is False:
+        error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+        reason = redact_reason(str(error.get("message") or error.get("code") or "orca terminal list failed"))
+        if error.get("code") == "runtime_access_denied" and os.name == "nt":
+            # S4U 서버는 High 무결성이라 일반 권한 셸은 그 파이프를 열지 못한다(thsvkd-kgolf 실측 2026-10-29).
+            reason += " The ai-setup Orca server runs elevated; run this again from an administrator shell."
+        return None, reason
     listed = payload.get("result") if isinstance(payload, dict) and payload.get("ok") else None
     count = listed.get("totalCount") if isinstance(listed, dict) and not result.returncode else None
-    return count if isinstance(count, int) and not isinstance(count, bool) else None
+    if isinstance(count, int) and not isinstance(count, bool):
+        return count, ""
+    lines = [line for line in (result.stderr or "").splitlines() if line.strip()]
+    tail = redact_reason(lines[-1]) if lines else "unexpected output"
+    return None, "orca terminal list exited {}: {}".format(result.returncode, tail)
+
+
+def redact_reason(text):
+    """사용자에게 보일 CLI 오류 한 줄. 페어링 링크·토큰이 섞였으면 통째로 가린다."""
+    text = text.strip()[:300]
+    return "[pairing output redacted]" if mentions_pairing(text) else text
+
+
+def terminal_count_problem(count):
+    """count(0 이 아님)를 사용자에게 보일 이유로 바꾼다."""
+    if count is not None:
+        return "it has {} live terminals".format(count)
+    return "its terminals could not be counted" + (
+        " ({})".format(last_terminal_query_error) if last_terminal_query_error else "")
 
 
 def write_pairing_codes(path, desktop_environment_id, mobile_url):
@@ -583,11 +629,12 @@ def stop_managed_service(record, service):
     서비스를 멈추면 Orca 터미널 호스트도 함께 끝나므로 터미널이 있거나 확인할 수 없으면 멈추지 않는다.
     """
     # 서버가 꺼져 있으면(크래시 뒤 재시작 대기, 러너만 남음) 끊길 터미널이 없고, 물을 서버도 없다.
-    if runtime_is_active(record["server_profile"]) and \
-            live_terminal_count(server_query_cli(record), record["server_profile"]) != 0:
+    terminals = live_terminal_count(server_query_cli(record), record["server_profile"]) \
+        if runtime_is_active(record["server_profile"]) else 0
+    if terminals != 0:
         raise RuntimeError(
-            "The Orca server has live terminals, or they could not be checked; "
-            "close them (or stop the service yourself) and retry"
+            "Not stopping the Orca server: {}; close them (or stop the service yourself) and retry".format(
+                terminal_count_problem(terminals))
         )
     manager = record["service_manager"]
     elevated = {
@@ -1035,11 +1082,13 @@ def setup_server_client(
         legacy = plan["manager"] == "task-scheduler" and not runner_has_process_job(record)
         if runtime_active and (changed or legacy):
             # 돌고 있는 러너는 예전 코드다. 서버를 멈추면 터미널 호스트도 끝나므로 터미널이 없을 때만 다시 띄운다.
-            if live_terminal_count(server_query_cli(dict(record, cli=record.get("cli") or str(cli))), profiles["server"]) == 0:
+            terminals = live_terminal_count(server_query_cli(dict(record, cli=record.get("cli") or str(cli))), profiles["server"])
+            if terminals == 0:
                 stop_managed_service(dict(record, cli=record.get("cli") or str(cli)), Path(plan["service"]))
                 runtime_active = False
             else:
-                print("The Orca server has live terminals; its updated service files apply when it next starts.", flush=True)
+                print("The Orca server was not restarted ({}); its updated service files apply when it next starts.".format(
+                    terminal_count_problem(terminals)), flush=True)
         if not runtime_active:
             install_user_service(plan)
         if not managed_user_service_is_registered(plan):

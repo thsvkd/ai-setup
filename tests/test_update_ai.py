@@ -344,6 +344,24 @@ def test_orca_package_is_not_installed_under_a_running_session_without_allow_int
     assert installs == [app]
 
 
+def test_an_install_newer_than_the_latest_release_counts_as_up_to_date(monkeypatch, capsys):
+    """--check 와 갱신 뒤 검사 모두 설치본이 최신보다 새로우면 실패로 보지 않는다."""
+    import argparse
+
+    monkeypatch.setattr(update_ai, "locations", lambda name: ["/opt/Orca/orca-ide"])
+    monkeypatch.setattr(update_ai, "method_for", lambda entry, path: ("deb", "orca"))
+    monkeypatch.setattr(update_ai, "version_of", lambda path: "9.9.10")
+    monkeypatch.setattr(update_ai, "latest_of", lambda *a: "9.9.9")
+    monkeypatch.setattr(update_ai, "process_table", lambda: [])
+    monkeypatch.setattr(update_ai, "update_orca_deb", lambda path: "ok")
+    args = argparse.Namespace(check=True, allow_interrupt=False)
+    assert update_ai.run_all([CATALOG["orca"]], ["orca"], args) == 0
+    assert "up to date" in capsys.readouterr().out
+    args.check = False
+    assert update_ai.run_all([CATALOG["orca"]], ["orca"], args) == 0
+    assert "latest is" not in capsys.readouterr().out
+
+
 def test_codegraph_catalog_updates_through_npm_without_an_upgrade_command():
     """npm 탐지가 실패해도 update 배열이 codegraph upgrade 로 떨어지면 안 된다."""
     assert "graft" not in CATALOG
@@ -513,6 +531,21 @@ def test_orca_deb_update_installs_only_a_verified_package(tmp_path, monkeypatch,
     monkeypatch.setattr(mod.orca_release, "open_release", lambda url: io.BytesIO(good))
     assert mod.update_orca_deb("/opt/Orca/orca-ide") == "ok"
     assert steps and steps[0][:3] == ["apt-get", "install", "-y"] and steps[0][3].endswith(meta["name"])
+
+
+def test_an_install_newer_than_the_release_manifest_is_not_downgraded(tmp_path, monkeypatch):
+    """앱 안에서 받은 prerelease 나 늦게 갱신된 매니페스트 때문에 설치본이 더 새로우면 이전 판 설치기를 돌리지 않는다."""
+    mod = _update_ai_module()
+    assert mod.is_current("9.9.10", "9.9.9") and mod.is_current("9.9.9", "9.9.9")
+    assert not mod.is_current("9.9.8", "9.9.9") and not mod.is_current("", "9.9.9")
+    monkeypatch.setattr(mod.orca_release, "fetch_manifest", lambda plan: ("9.9.9", {"name": "orca-ide_9.9.9_arm64.deb"}))
+    monkeypatch.setattr(mod.orca_release, "download", lambda *args: pytest.fail("downloaded an older release"))
+    monkeypatch.setattr(mod, "version_of", lambda path: "9.9.10")
+    monkeypatch.setattr(mod, "run_quiet", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "arm64\n", ""))
+    assert mod.update_orca_deb("/opt/Orca/orca-ide") == "ok"
+    steps, _ = _orca_windows_release(mod, monkeypatch, tmp_path, b"official", {"state": None})
+    monkeypatch.setattr(mod.orca_release, "installed_version", lambda plan: "9.9.10")
+    assert mod.update_orca_windows() == "ok" and steps == []
 
 
 def _update_ai_module():
