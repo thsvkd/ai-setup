@@ -86,13 +86,17 @@ explain_download_failure() {
 }
 
 main() {
+    # Orca 관리는 jarvis 로 옮겨 갔다. 레포를 받기 전에, PowerShell 처럼 --help 보다 먼저 안내만 내고 끝낸다.
+    for a in "$@"; do
+        case "$a" in
+            --tools|--tools=*|--orca-desktop)
+                echo "Orca is now managed by jarvis; ai-setup no longer installs, updates or removes it. From a jarvis checkout run: python3 -m jarvis module orca plan --json (uninstall: module orca uninstall --json --dry-run)." >&2
+                exit 1 ;;
+        esac
+    done
     for a in "$@"; do
         case "$a" in
             -h|--help) print_help; exit 0 ;;
-            # Orca 관리는 jarvis 로 옮겨 갔다. 레포를 받기 전에 안내만 내고 끝낸다.
-            --tools|--tools=*|--orca-desktop)
-                echo "Orca is now managed by jarvis; ai-setup no longer installs or updates it. Use: python3 -m jarvis module orca plan --json" >&2
-                exit 1 ;;
         esac
     done
 

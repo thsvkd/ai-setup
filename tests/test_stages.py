@@ -1659,7 +1659,11 @@ def test_orca_desktop_points_to_jarvis_and_changes_nothing(monkeypatch, tmp_path
     recorded = _record_runs(monkeypatch)
     assert stages.main(["--plan", "--stages", "tools", "--orca-desktop", "--project-dir", str(tmp_path)]) == 1
     assert stages.ORCA_MOVED in capsys.readouterr().err
-    assert "python3 -m jarvis module orca plan --json" in stages.ORCA_MOVED
+    assert stages.ORCA_MOVED == (
+        "Orca is now managed by jarvis; ai-setup no longer installs, updates or removes it. "
+        "From a jarvis checkout run: python3 -m jarvis module orca plan --json "
+        "(uninstall: module orca uninstall --json --dry-run)."
+    )
     assert recorded == []
     assert list(home.iterdir()) == []
 

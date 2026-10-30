@@ -170,7 +170,7 @@ for ($i = 0; $i -lt $Rest.Count; $i++) {
 
 # Orca 관리는 jarvis 로 옮겨 갔다. 예전 진입점은 아무것도 바꾸지 않고 이 안내만 낸다.
 if ($toolsGiven -or $orcaDesktop) {
-    Write-Host "Orca is now managed by jarvis; ai-setup no longer installs or updates it. Use: python3 -m jarvis module orca plan --json" -ForegroundColor Red
+    Write-Host "Orca is now managed by jarvis; ai-setup no longer installs, updates or removes it. From a jarvis checkout run: py -3 -m jarvis module orca plan --json (uninstall: module orca uninstall --json --dry-run)." -ForegroundColor Red
     exit 1
 }
 

@@ -144,11 +144,11 @@ Describe "setup.ps1 dispatcher" {
 
     # Orca 는 jarvis 가 관리한다. 예전 진입점은 안내만 내고 프로필을 그대로 둔 채 exit 1 로 끝난다.
     It "-Tools orca, --tools orca and --orca-desktop point to jarvis and change nothing (covers: AI-66)" {
-        $pointer = [regex]::Escape("Orca is now managed by jarvis; ai-setup no longer installs or updates it. Use: python3 -m jarvis module orca plan --json")
+        $pointer = [regex]::Escape("Orca is now managed by jarvis; ai-setup no longer installs, updates or removes it. From a jarvis checkout run: py -3 -m jarvis module orca plan --json (uninstall: module orca uninstall --json --dry-run).")
         $r = Invoke-Script $script:Setup @("-Tools", "orca")
         $r.ExitCode | Should -Be 1 -Because $r.Output
         $r.Output | Should -Match $pointer
-        foreach ($a in @("--tools orca", "--tools=orca", "-Tools orca -Uninstall", "--orca-desktop", "--stages tools --orca-desktop")) {
+        foreach ($a in @("--tools orca", "--tools=orca", "-Tools orca -Uninstall", "--orca-desktop", "--stages tools --orca-desktop", "--help --tools orca")) {
             $r = Invoke-ScriptInline $script:Setup $a
             $r.ExitCode | Should -Be 1 -Because $a
             $r.Output | Should -Match $pointer -Because $a
@@ -201,11 +201,11 @@ Describe "install.ps1 bootstrap" {
 
     # 레포를 받기 전에 멈추므로 네트워크를 타지 않는다(없는 레포를 가리켜 둔다).
     It "-Tools orca and --orca-desktop point to jarvis before downloading (covers: AI-66)" {
-        $pointer = [regex]::Escape("Orca is now managed by jarvis; ai-setup no longer installs or updates it. Use: python3 -m jarvis module orca plan --json")
+        $pointer = [regex]::Escape("Orca is now managed by jarvis; ai-setup no longer installs, updates or removes it. From a jarvis checkout run: py -3 -m jarvis module orca plan --json (uninstall: module orca uninstall --json --dry-run).")
         $oldRepo = $env:CLAUDE_SETUP_REPO
         $env:CLAUDE_SETUP_REPO = "thsvkd/does-not-exist"
         try {
-            foreach ($a in @("-Tools orca", "--tools orca", "--orca-desktop")) {
+            foreach ($a in @("-Tools orca", "--tools orca", "--orca-desktop", "--help --tools orca")) {
                 $r = Invoke-ScriptInline (Join-Path $script:RepoRoot "install.ps1") $a
                 $r.ExitCode | Should -Be 1 -Because $a
                 $r.Output | Should -Match $pointer -Because $a
@@ -351,6 +351,27 @@ Describe "real install path (S2)" {
         $r.Output | Should -Match "receipt"
         [IO.File]::ReadAllText($manifestPath) | Should -Be $broken
         Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $true
+    }
+
+    # jarvis 의 Orca 모듈이 같은 영수증 키를 읽고 제거한다. 영수증을 다시 쓰는 워커가 그 키를 지우면 안 된다.
+    It "-Hooks -Uninstall keeps the Orca receipt records for jarvis (covers: AI-67)" {
+        Invoke-Script $script:Setup @("-Hooks") | Out-Null
+        $manifestPath = Join-Path $env:USERPROFILE ".claude\.claude-code-setup.json"
+        $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+        $manifest.PSObject.Properties.Name | Should -Contain "hook_files"
+        $orca = '{"tool_installs": {"orca": {"method": "deb", "version": "1.4.242", "skills_added": ["orca-cli"]}, "orca_server": {"service_manager": "systemd-user", "state": "configured"}}, "tool_attempts": {"orca": {"state": "done"}}}' | ConvertFrom-Json
+        foreach ($key in $orca.PSObject.Properties.Name) {
+            $manifest | Add-Member -NotePropertyName $key -NotePropertyValue $orca.$key -Force
+        }
+        [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 20))
+        $r = Invoke-Script $script:Setup @("-Hooks", "-Uninstall")
+        $r.ExitCode | Should -Be 0 -Because $r.Output
+        Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $false
+        $after = Get-Content $manifestPath -Raw | ConvertFrom-Json
+        $after.PSObject.Properties.Name | Should -Not -Contain "hook_files"  # 워커가 영수증을 실제로 다시 썼다
+        foreach ($key in $orca.PSObject.Properties.Name) {
+            ($after.$key | ConvertTo-Json -Depth 20 -Compress) | Should -Be ($orca.$key | ConvertTo-Json -Depth 20 -Compress) -Because $key
+        }
     }
 
     # 키바인드 제거가 남기는 {} 처럼, 기록이 없는 영수증은 빈 영수증이다. StrictMode 에서 죽으면 훅을 못 뺀다.

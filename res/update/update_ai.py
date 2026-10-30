@@ -1,7 +1,7 @@
 """update-ai: bring every installed AI harness and tool up to date, in one pass.
 
 장비마다 갈라져 있던 update-ai.sh(pi·mac)와 Update-Ai.ps1(win)을 한 벌로 합친 구현이다(SPEC D2).
-대상과 업데이트 방법은 res/catalog.json 이 정한다. 설치 방식(npm·winget·brew·deb)을 실행 파일
+대상과 업데이트 방법은 res/catalog.json 이 정한다. 설치 방식(npm·winget·brew)을 실행 파일
 위치로 판별해 그 방식으로 올리고, 해당이 없으면 카탈로그의 기본 update 명령을 쓴다.
 
 - 깔려 있는 것만 손댄다. 없는 것은 설치하지 않고 건너뛴다(SPEC 불변식).
@@ -36,7 +36,7 @@ from stages import ORCA_MOVED  # noqa: E402
 
 CATALOG = ROOT / "res" / "catalog.json"
 # 세션이 쓰는 파일을 그 자리에서 바꾸거나 세션을 끝내는 설치 방식. 세션이 돌면 --allow-interrupt 없이는 손대지 않는다.
-INTERRUPTING = ("npm", "winget", "deb")
+INTERRUPTING = ("npm", "winget")
 STEP_TIMEOUT = 900
 VERSION_RE = re.compile(r"\d+\.\d+\.\d+[-.\w]*")
 # winget 은 올릴 것이 없으면 0x8A15002B 로 끝난다. 실패가 아니다.
@@ -99,7 +99,7 @@ def path_first(directory):
 
 
 def method_for(entry, path):
-    """(방식, 값). 방식: npm·winget·brew·brew_cask·deb·default·none.
+    """(방식, 값). 방식: npm·winget·brew·brew_cask·default·none.
 
     먼저 '찾은 실행 파일이 그 패키지 관리자의 것인가'로 고른다. 같은 도구가 다른 방식으로도
     깔려 있을 수 있어서(win 의 네이티브 claude + winget claude) 패키지 목록만 보면 엉뚱한 사본을 올린다.
@@ -132,10 +132,6 @@ def method_for(entry, path):
         for key, flag in (("brew_cask", ["--cask"]), ("brew", ["--formula"])):
             if packages.get(key) and succeeded(["brew", "list"] + flag + [packages[key].split("/")[-1]]):
                 return key, packages[key]
-    if plat == "linux" and packages.get("deb") and shutil.which("dpkg-query"):
-        out = run_quiet(["dpkg-query", "-W", "-f=${Status}", packages["deb"]])
-        if out and out.returncode == 0 and out.stdout.strip() == "install ok installed":
-            return "deb", packages["deb"]
     return "none", None
 
 
@@ -494,7 +490,7 @@ def main(argv=None):
         return 2
     ids = [e["id"] for e in catalog]
     only = [t for item in args.only + args.targets for t in item.split(",") if t]
-    if "orca" in only:
+    if "orca" in (t.lower() for t in only):
         print(ORCA_MOVED, file=sys.stderr)
         return 1
     unknown = [t for t in only if t not in ids]
@@ -573,7 +569,7 @@ def run_all(catalog, only, args):
                 "deferred", entry["id"], " ".join(map(str, pids)), method))
             say("  {:<14}  close it and run again, or pass --allow-interrupt".format(""))
             official = ((entry.get("install") or {}).get(platform_key()) or [{}])[0]
-            if method != "deb" and official.get("method") not in (None, method):
+            if official.get("method") not in (None, method):
                 say("  {:<14}  installed the catalog way ({}), it updates live: {}".format(
                     "", official["method"], runnable(official["cmd"])))
             results.append((entry["id"], "failed: deferred (in use)", before, before))

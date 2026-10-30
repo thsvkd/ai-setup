@@ -44,12 +44,12 @@
 | AI-15 | WHEN 선택한 하네스가 없으면 THE SYSTEM SHALL 현재 플랫폼의 카탈로그 설치 명령을 호출하고 성공하면 영수증에 기록한다 | | 미착수 |
 | AI-16 | WHEN 하네스의 선행 조건(예: Node 버전)이 맞지 않으면 THE SYSTEM SHALL 설치하지 않고 필요한 조건을 안내한다 | | 미착수 |
 | AI-17 | WHEN `--dry-run` 과 함께 설치 단계를 실행하면 THE SYSTEM SHALL 호출할 명령만 출력하고 아무것도 실행하지 않는다 | | 미착수 |
-| AI-34 | WHEN `--install-harness`·`--tools` 를 `--uninstall` 과 함께 실행하면 THE SYSTEM SHALL 영수증에 기록된 항목만 기록된 설치 방식의 제거 명령으로 지우고, 원래 있던 항목과 설정·인증 디렉터리는 남긴다 | | 미착수 |
+| AI-34 | WHEN `--install-harness` 를 `--uninstall` 과 함께 실행하면 THE SYSTEM SHALL 영수증에 기록된 항목만 기록된 설치 방식의 제거 명령으로 지우고, 원래 있던 항목과 설정·인증 디렉터리는 남긴다 | | 미착수 |
 | AI-35 | WHEN sudo 가 필요한 설치 명령을 실행하기 전이면 THE SYSTEM SHALL 명령 전체를 출력하고, 표준 입력이 TTY 가 아니면 실행하지 않고 건너뛴 것으로 보고한다 | | 미착수 |
 | AI-36 | WHEN 인자 없이 비대화형으로 실행하면 THE SYSTEM SHALL 새 단계를 하나도 실행하지 않는다 | | 미착수 |
 | AI-65 | WHEN `update-ai` 가 확인한 설치본이 최신 릴리스와 같거나 더 새로우면 THE SYSTEM SHALL `--check` 와 갱신 뒤 검사 모두에서 최신으로 판정한다 | `tests/test_update_ai.py::test_an_install_newer_than_the_latest_release_counts_as_up_to_date` | GREEN (단위) |
 | AI-66 | WHEN `--tools orca`(`-Tools orca`), `--orca-desktop` 또는 `update-ai orca` 를 실행하면 THE SYSTEM SHALL Orca 패키지·서버·스킬·영수증 기록을 바꾸지 않고 Orca 는 jarvis 가 관리한다고 안내한 뒤 종료 코드 1 로 끝난다 (ORCA-12) | `tests/test_stages.py::test_orca_desktop_points_to_jarvis_and_changes_nothing`, `tests/test_update_ai.py::test_update_ai_orca_points_to_jarvis_and_updates_nothing`, `tests/test_update_ai.py::test_plain_update_ai_does_not_list_orca`, bats `setup.sh and install.sh Orca options point to jarvis and change nothing`, Pester `-Tools orca, --tools orca and --orca-desktop point to jarvis and change nothing`, Pester `-Tools orca and --orca-desktop point to jarvis before downloading` | GREEN |
-| AI-67 | WHEN tools 단계나 `--stages all --uninstall` 을 실행하면 THE SYSTEM SHALL Orca 를 설치·제거하지 않고 영수증의 `tool_installs.orca`·`tool_installs.orca_server` 를 그대로 둔다(jarvis 의 Orca 모듈이 같은 키를 읽고 제거한다) | `tests/test_stages.py::test_tools_and_full_uninstall_leave_orca_and_its_receipt_records_to_jarvis` | GREEN |
+| AI-67 | WHEN tools 단계나 `--stages all --uninstall` 을 실행하면 THE SYSTEM SHALL Orca 를 설치·제거하지 않고 영수증의 `tool_installs.orca`·`tool_installs.orca_server` 를 그대로 둔다(jarvis 의 Orca 모듈이 같은 키를 읽고 제거한다) | `tests/test_stages.py::test_tools_and_full_uninstall_leave_orca_and_its_receipt_records_to_jarvis`, bats `setup.sh --uninstall keeps the Orca receipt records for jarvis`, Pester `-Hooks -Uninstall keeps the Orca receipt records for jarvis` | GREEN |
 
 ### 플러그인
 

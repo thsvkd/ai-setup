@@ -109,9 +109,9 @@ teardown() {
 # Orca 는 jarvis 가 관리한다. 예전 진입점은 안내만 내고 홈을 그대로 둔 채 exit 1 로 끝난다.
 # install.sh 는 레포를 받기 전에 멈추므로 네트워크를 타지 않는다(없는 레포를 가리켜 둔다).
 @test "setup.sh and install.sh Orca options point to jarvis and change nothing (covers: AI-66)" {
-    pointer="Orca is now managed by jarvis; ai-setup no longer installs or updates it. Use: python3 -m jarvis module orca plan --json"
+    pointer="Orca is now managed by jarvis; ai-setup no longer installs, updates or removes it. From a jarvis checkout run: python3 -m jarvis module orca plan --json (uninstall: module orca uninstall --json --dry-run)."
     before="$(find "$HOME" | sort)"
-    for args in "--tools orca" "--tools=orca" "--tools orca --uninstall" "--orca-desktop" "--stages tools --orca-desktop" "--hooks --tools orca"; do
+    for args in "--tools orca" "--tools=orca" "--tools orca --uninstall" "--orca-desktop" "--stages tools --orca-desktop" "--hooks --tools orca" "--help --tools orca"; do
         # shellcheck disable=SC2086
         run bash "$REPO_ROOT/scripts/setup.sh" $args
         [ "$status" -eq 1 ] || { echo "setup.sh $args -> $status"; return 1; }
@@ -201,6 +201,19 @@ teardown() {
     [ ! -f "$HOME/.claude/hooks/danger_guard.py" ]
     run python3 -c 'import json,sys; print(sorted(json.load(open(sys.argv[1],encoding="utf-8-sig"))))' "$HOME/.claude/.claude-code-setup.json"
     [ "$output" = "['harness_installs']" ]
+}
+
+# jarvis 의 Orca 모듈이 같은 영수증 키를 읽고 제거한다. 영수증을 다시 쓰는 워커가 그 키를 지우면 안 된다.
+@test "setup.sh --uninstall keeps the Orca receipt records for jarvis (covers: AI-67)" {
+    bash "$REPO_ROOT/scripts/setup.sh" --hooks
+    receipt="$HOME/.claude/.claude-code-setup.json"
+    orca='{"tool_installs": {"orca": {"method": "deb", "version": "1.4.242", "skills_added": ["orca-cli"]}, "orca_server": {"service_manager": "systemd-user", "state": "configured"}}, "tool_attempts": {"orca": {"state": "done"}}}'
+    python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); assert d.get("hook_files"), d; d.update(json.loads(sys.argv[2])); json.dump(d,open(p,"w"))' "$receipt" "$orca"
+    run bash "$REPO_ROOT/scripts/setup.sh" --uninstall
+    [ "$status" -eq 0 ]
+    [ ! -f "$HOME/.claude/hooks/danger_guard.py" ]
+    run python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); o=json.loads(sys.argv[2]); print(all(d.get(k)==v for k,v in o.items()), "hook_files" in d)' "$receipt" "$orca"
+    [ "$output" = "True False" ]
 }
 
 @test "setup_hooks.sh --uninstall keeps other sections of the receipt" {

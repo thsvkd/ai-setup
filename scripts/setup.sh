@@ -108,7 +108,14 @@ INCLUDE_MODS=
 INCLUDE_OMC=
 
 # Orca 관리는 jarvis 로 옮겨 갔다. 예전 진입점은 아무것도 바꾸지 않고 이 안내만 낸다.
-ORCA_MOVED="Orca is now managed by jarvis; ai-setup no longer installs or updates it. Use: python3 -m jarvis module orca plan --json"
+# PowerShell 처럼 --help 보다 먼저 본다.
+ORCA_MOVED="Orca is now managed by jarvis; ai-setup no longer installs, updates or removes it. From a jarvis checkout run: python3 -m jarvis module orca plan --json (uninstall: module orca uninstall --json --dry-run)."
+
+for arg in "$@"; do
+    case "$arg" in
+        --tools|--tools=*|--orca-desktop) echo "$ORCA_MOVED" >&2; exit 1 ;;
+    esac
+done
 
 HAD_ARGS=0
 ARG_COUNT=$#
@@ -117,7 +124,6 @@ while [[ $# -gt 0 ]]; do
         --hooks) RUN_HOOKS=1; HAD_ARGS=1; shift ;;
         --agentsmd) RUN_AGENTSMD=1; HAD_ARGS=1; shift ;;
         --skills) RUN_SKILLS=1; HAD_ARGS=1; shift ;;
-        --tools|--tools=*|--orca-desktop) echo "$ORCA_MOVED" >&2; exit 1 ;;
         --keybinds) RUN_KEYBINDS=1; HAD_ARGS=1; shift ;;
         --omc) RUN_OMC=1; HAD_ARGS=1; shift ;;
         --output-style) RUN_OUTPUT_STYLE=1; HAD_ARGS=1; shift ;;

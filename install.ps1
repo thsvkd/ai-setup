@@ -147,7 +147,7 @@ function Invoke-Install {
 
     # Orca 관리는 jarvis 로 옮겨 갔다. 레포를 받기 전에 안내만 내고 끝낸다.
     if ($toolsGiven -or $orcaDesktop) {
-        Write-Host "Orca is now managed by jarvis; ai-setup no longer installs or updates it. Use: python3 -m jarvis module orca plan --json" -ForegroundColor Red
+        Write-Host "Orca is now managed by jarvis; ai-setup no longer installs, updates or removes it. From a jarvis checkout run: py -3 -m jarvis module orca plan --json (uninstall: module orca uninstall --json --dry-run)." -ForegroundColor Red
         if ($PSCommandPath) { exit 1 }
         $global:LASTEXITCODE = 1
         return

@@ -335,7 +335,7 @@ def test_an_install_newer_than_the_latest_release_counts_as_up_to_date(monkeypat
     assert "latest is" not in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("args", [["orca"], ["--only", "orca"], ["--check", "--only", "claude,orca"]])
+@pytest.mark.parametrize("args", [["orca"], ["Orca"], ["--only", "ORCA"], ["--check", "--only", "claude,orca"]])
 def test_update_ai_orca_points_to_jarvis_and_updates_nothing(tmp_path, args):
     """covers: AI-66 — Orca 는 jarvis 가 관리한다. 안내만 내고 exit 1 로 끝나며 아무것도 부르지 않는다."""
     bin_dir = tmp_path / "bin"
@@ -345,8 +345,9 @@ def test_update_ai_orca_points_to_jarvis_and_updates_nothing(tmp_path, args):
     home = tmp_path / "home"
     result = run_update(home, [bin_dir], log, *args)
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "Orca is now managed by jarvis; ai-setup no longer installs or updates it. " \
-        "Use: python3 -m jarvis module orca plan --json" in result.stderr
+    assert "Orca is now managed by jarvis; ai-setup no longer installs, updates or removes it. " \
+        "From a jarvis checkout run: python3 -m jarvis module orca plan --json " \
+        "(uninstall: module orca uninstall --json --dry-run)." in result.stderr
     assert calls(log) == []
     assert list(home.iterdir()) == []
 

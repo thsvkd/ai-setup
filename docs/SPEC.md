@@ -27,7 +27,7 @@
 | `setup --plugins` / `-Plugins` | `plugins.json` + 온보딩 선택 | `claude plugin marketplace add` + `claude plugin install --scope user`. 우리가 추가한 플러그인만 영수증 `plugins` 에, 마켓플레이스만 `marketplaces` 에 기록. 이미 user 범위로 설치된 플러그인은 설치·기록하지 않음 | `claude` 가 없으면 단계를 건너뛰고 경고 |
 | `setup --skills` / `-Skills` (확장) | 번들 스킬 + `sources.json` | 번들은 기존대로. 외부 스킬은 `npx skills add <repo>#<ref> --skill <s> -g -a <agents> -y`. 영수증 `skills_external` | `npx` 가 없으면 외부 스킬만 건너뛰고 경고. lock 파일을 파싱할 수 없거나 version < 3 이면 외부 스킬 단계를 중단 |
 | `setup --stages` 의 mcp 단계 | 선택된 하네스 | user scope 로 `codegraph serve --mcp` 를 등록한다. 패키지 액션보다 앞이면 안 된다. `codegraph install` 과 `codegraph upgrade` 는 쓰지 않는다 | 같음 |
-| `--uninstall` (확장) | 위 범위 플래그 | 영수증에 기록된 플러그인·마켓플레이스·외부 스킬·MCP 등록·하네스·도구만 제거(D1). 마켓플레이스는 플러그인을 지운 뒤 지우고, 다른 플러그인이나 다른 범위의 설치가 아직 쓰면 남긴다. 하네스·도구는 카탈로그의 `uninstall` 명령으로 패키지·바이너리만 지우고 설정·인증 디렉터리는 남긴다(D5) | 영수증에 없는 것은 건드리지 않음 |
+| `--uninstall` (확장) | 위 범위 플래그(`--tools` 는 제거 범위가 아니라 거부다) | 영수증에 기록된 플러그인·마켓플레이스·외부 스킬·MCP 등록·하네스·도구만 제거(D1). 마켓플레이스는 플러그인을 지운 뒤 지우고, 다른 플러그인이나 다른 범위의 설치가 아직 쓰면 남긴다. 하네스·도구는 카탈로그의 `uninstall` 명령으로 패키지·바이너리만 지우고 설정·인증 디렉터리는 남긴다(D5) | 영수증에 없는 것은 건드리지 않음 |
 | `update-ai` (`scripts/update-ai.sh`, `Update-Ai.ps1`) | `--check`, `--only a,b`, `--allow-interrupt`, `--help` | 설치된 하네스·도구·플러그인 업데이트, 결과 표 출력. 실행 중 세션이 있어도 올린다(아래 실시간 업데이트) | 하나라도 실패하면 exit 1. `--check` 는 아무것도 바꾸지 않는다 |
 
 단계 순서: base, harness, plugins, skills, codegraph, mcp, newline, claude_special, tools, hooks, agentsmd.
@@ -51,12 +51,12 @@
 ### Orca (jarvis 이관)
 
 - Orca 패키지·서버·스킬의 설치·업데이트·제거는 jarvis 가 맡는다(jarvis 결정 D11·D16, ORCA-12). ai-setup 은 Orca 를 설치·갱신·제거하지 않는다.
-- 예전 진입점 `setup.sh`·`install.sh` 의 `--tools`·`--tools=`·`--orca-desktop`, `setup.ps1`·`install.ps1` 의 `-Tools`·`--tools`·`--orca-desktop`, `stages.py --orca-desktop`, `update-ai orca`(`--only` 에 orca 가 들어간 경우 포함)는 아무것도 쓰지 않고 `Orca is now managed by jarvis; ai-setup no longer installs or updates it. Use: python3 -m jarvis module orca plan --json` 을 출력한 뒤 exit 1 로 끝난다. `install.*` 은 레포를 내려받기 전에 멈춘다.
+- 예전 진입점 `setup.sh`·`install.sh` 의 `--tools`·`--tools=`·`--orca-desktop`, `setup.ps1`·`install.ps1` 의 `-Tools`·`--tools`·`--orca-desktop`, `stages.py --orca-desktop`, `update-ai orca`(`--only` 에 orca 가 들어간 경우 포함)는 아무것도 쓰지 않고 `Orca is now managed by jarvis; ai-setup no longer installs, updates or removes it. From a jarvis checkout run: python3 -m jarvis module orca plan --json (uninstall: module orca uninstall --json --dry-run).` 을 출력한 뒤(Windows 진입점은 `python3` 대신 `py -3`) exit 1 로 끝난다. `install.*` 은 레포를 내려받기 전에 멈춘다.
 - 카탈로그에 orca 항목이 없으므로 대상을 주지 않은 update-ai 와 doctor 는 Orca 를 보지 않는다.
 - tools 단계와 `--stages all --uninstall` 은 Orca 액션을 내지 않는다. 영수증의 `tool_installs.orca`·`tool_installs.orca_server` 는 jarvis 의 Orca 모듈이 같은 키를 읽고 제거하므로 그대로 둔다.
 
-- `res/catalog.json` 항목: `id`, `kind`(`harness`/`tool`), `skills`(선택, 도구와 함께 설치할 `sources.json` 형식 항목), `detect`(실행 파일 이름과 버전 인자), `install`·`uninstall`(플랫폼별 명령 목록, 설치 방식별로 짝을 이룬다), `update`, `plugin_update`(선택), `requires`(예: `node>=20`), `sudo`(bool).
-  - `packages`: 설치 방식별 패키지 이름(`npm`, `winget`, `brew`, `brew_cask`, `deb`). update-ai 는 찾은 실행 파일이 실제로 그 방식으로 깔린 것일 때만 그 방식으로 올린다(npm 은 `node_modules/<pkg>` 안에 있을 때, winget 은 `WinGet` 경로, brew 는 brew prefix 아래). 패키지 목록 조회는 기본 `update` 명령이 없는 도구의 마지막 확인에만 쓴다.
+- `res/catalog.json` 항목: `id`, `kind`(`harness`/`tool`), `detect`(실행 파일 이름과 버전 인자), `install`·`uninstall`(플랫폼별 명령 목록, 설치 방식별로 짝을 이룬다), `update`, `plugin_update`(선택), `requires`(예: `node>=20`), `sudo`(bool).
+  - `packages`: 설치 방식별 패키지 이름(`npm`, `winget`, `brew`, `brew_cask`). update-ai 는 찾은 실행 파일이 실제로 그 방식으로 깔린 것일 때만 그 방식으로 올린다(npm 은 `node_modules/<pkg>` 안에 있을 때, winget 은 `WinGet` 경로, brew 는 brew prefix 아래). 패키지 목록 조회는 기본 `update` 명령이 없는 도구의 마지막 확인에만 쓴다.
   - `install` 의 `npm-release` 방식: npm 외의 공식 설치 방식이 없는 대상(gemini·codegraph 전 플랫폼, opencode·copilot 의 Windows)은 `python3 res/tools/npm_release.py install|uninstall <id>` 로 설치·제거한다. 카탈로그 명령은 저장소 루트에서 실행하고, 맨 앞의 `python3`/`python` 은 지금 인터프리터로 바꾼다. copilot 의 Linux·macOS 는 공식 native(`gh.io/copilot-install`, 갱신 `copilot update`)다. 제거는 예전 영수증(npm -g 설치)을 위해 같은 패키지의 npm -g 사본도 지운다. npm-release 의 uninstall 도 배치가 없으면 같은 방식으로 예전 npm -g 사본을 지우고, Windows 에서는 카탈로그의 winget 패키지 사본(예전 copilot)도 지운다. 실패하면 exit 1 로 영수증을 남긴다.
   - `detect.sessions`(선택): 실행 중인 세션 판정 보정. 제자리 교체 방식의 사용 중 판정과 `--allow-interrupt` 단계에만 쓴다. `match` 는 실행 파일 이름이 다른 세션(qemu 로 도는 grok)을, `ignore` 는 세션이 아닌 상주 프로세스(데몬·데스크톱 앱: `herdr server`, `serve --mcp`, codex app-server 데몬, Claude Desktop)를 명령줄 부분 문자열로 적는다.
 - npm-release 배치(`res/tools/npm_release.py`):
