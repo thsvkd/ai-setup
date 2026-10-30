@@ -65,8 +65,6 @@ Usage: .\setup.ps1 [options]
   -Harness L    harnesses to install instructions for (comma-separated: claude,codex,grok,opencode,agy,gemini,copilot,all)
                 choosing claude also installs CLAUDE.md. Default is all.
   -Skills       install bundled skills only (~/.claude/skills)
-  -Tools orca   install the official Orca package and its bundled skills only
-                may be combined with -DryRun or -Uninstall
   -Keybinds     install newline keybindings only (VS Code/Cursor/Claude/Codex)
   -Newline VAL  newline key (shift-enter | ctrl-enter). Default shift-enter
   -Omc          install the oh-my-claudecode plugin + show cache TTL in the HUD
@@ -88,9 +86,6 @@ Usage: .\setup.ps1 [options]
   --jarvis-role gateway|core
                 with --stages, clone and register Jarvis for that role
   --herdr       with --stages, include herdr (off unless chosen)
-  --orca-desktop
-                with -Tools orca or --stages, also open the paired Orca desktop app
-                (points the Orca shortcuts at the desktop profile). Off by default
   --ss-caps     with --stages, grant the Jarvis ss capability
   -NoOnboard    run the old default install without interactive onboarding
   -Doctor       read-only health report: installed harnesses/tools and versions, duplicate installs,
@@ -142,12 +137,7 @@ for ($i = 0; $i -lt $Rest.Count; $i++) {
         '^--dry-run$'            { $DryRun = $true }
         '^--no-onboard$'         { $NoOnboard = $true }
         '^--doctor$'             { $Doctor = $true }
-        '^--tools=(.*)$'         { $Tools = $Matches[1]; $toolsGiven = $true }
-        '^--tools$' {
-            $toolsGiven = $true
-            $Tools = if ($i + 1 -lt $Rest.Count) { $Rest[++$i] } else { "" }
-            if (-not $Tools) { Write-Host "--tools requires orca."; exit 1 }
-        }
+        '^--tools(=.*)?$'        { $toolsGiven = $true }
         '^--newline=(.*)$'       { $Newline = $Matches[1]; $newlineGiven = $true }
         '^--harness=(.*)$'       { $Harness = @($Matches[1]); $harnessGiven = $true }
         '^--harness$' {
@@ -178,6 +168,12 @@ for ($i = 0; $i -lt $Rest.Count; $i++) {
     }
 }
 
+# Orca 관리는 jarvis 로 옮겨 갔다. 예전 진입점은 아무것도 바꾸지 않고 이 안내만 낸다.
+if ($toolsGiven -or $orcaDesktop) {
+    Write-Host "Orca is now managed by jarvis; ai-setup no longer installs or updates it. Use: python3 -m jarvis module orca plan --json" -ForegroundColor Red
+    exit 1
+}
+
 if ($Help) {
     Show-Usage
     exit 0
@@ -191,7 +187,6 @@ if ($unknownArgs.Count -gt 0) {
 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-if ($toolsGiven -and -not $Tools) { Write-Host "--tools requires orca." -ForegroundColor Red; exit 1 }
 
 # 온보딩이 채우는 값들. 비어 있으면 워커가 각자의 기본값을 쓴다.
 $defaultMode = ""
@@ -217,10 +212,6 @@ if ($jarvisRole -and $jarvisRole -notin @("gateway", "core")) {
 }
 if (($jarvisRole -or $herdrFlag -or $ssCaps) -and -not $stageRun) {
     Write-Host "--jarvis-role, --herdr, and --ss-caps require --stages." -ForegroundColor Red
-    exit 1
-}
-if ($orcaDesktop -and -not $stageRun -and -not $Tools) {
-    Write-Host "--orca-desktop requires -Tools orca or --stages." -ForegroundColor Red
     exit 1
 }
 
@@ -267,21 +258,6 @@ if ($Doctor) {
     $homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
     # -B: 바이트코드 캐시도 쓰지 않는다(doctor 는 읽기 전용).
     & $py.Exe @($py.Args) -B -X utf8 (Join-Path $RepoRoot "res\doctor\doctor.py") --home $homeDir
-    exit $LASTEXITCODE
-}
-
-if ($Tools) {
-    if ($Tools -ne "orca" -or $Hooks -or $AgentsMd -or $Keybinds -or $Skills -or $Omc -or $OutputStyle -or $Mods -or $Harness.Count -or $Newline) {
-        Write-Host "-Tools currently accepts orca alone, with -DryRun or -Uninstall." -ForegroundColor Red
-        exit 1
-    }
-    $py = Resolve-PythonForOnboard
-    if (-not $py) { Write-Host "Python 3.8+ is required." -ForegroundColor Red; exit 2 }
-    $toolArgs = @()
-    if ($DryRun) { $toolArgs += "--dry-run" }
-    if ($Uninstall) { $toolArgs += "--uninstall" }
-    if ($orcaDesktop) { $toolArgs += "--desktop-app" }
-    & $py.Exe @($py.Args) -B -X utf8 (Join-Path $RepoRoot "res\tools\orca.py") @toolArgs
     exit $LASTEXITCODE
 }
 
@@ -390,7 +366,6 @@ function Invoke-StagePlan {
     }
     if ($jarvisRole) { $planArgs += @("--jarvis-role", $jarvisRole) }
     if ($herdrFlag) { $planArgs += "--herdr" }
-    if ($orcaDesktop) { $planArgs += "--orca-desktop" }
     if ($ssCaps) { $planArgs += "--ss-caps" }
     if ($dryRun) { $planArgs += "--dry-run" }
     if ($Uninstall) { $planArgs += "--uninstall" }
@@ -409,7 +384,6 @@ function Invoke-StagePlan {
 }
 
 if ($stageRun) {
-    if ($Tools) { Write-Host "--tools cannot be combined with --stages." -ForegroundColor Red; exit 1 }
     Invoke-StagePlan
 }
 

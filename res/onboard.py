@@ -93,7 +93,7 @@ CATEGORIES = (
     ("codegraph", "CodeGraph", "package, then MCP on the selected harnesses"),
     ("newline", "Newline key", "the key that inserts a newline"),
     ("claude_special", "Claude extras", "output style, mods, OMC HUD wrap"),
-    ("tools", "Tools", "Orca, Tailscale, Jarvis, herdr"),
+    ("tools", "Tools", "Tailscale, Jarvis, herdr"),
     ("hooks", "Guard hooks", "with the permission mode"),
     ("agentsmd", "AGENTS.md", "in the current directory"),
 )
@@ -274,7 +274,7 @@ def _edit_claude_special(tui, state, project_dir):
 
 
 def _edit_tools(tui, state, project_dir):
-    if not _include(tui, state, "tools", "Include tool install (Orca, Tailscale, Jarvis)?"):
+    if not _include(tui, state, "tools", "Include tool install (Tailscale, Jarvis)?"):
         return False
     if "tools" not in state["stages"]:
         return True

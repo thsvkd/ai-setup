@@ -106,6 +106,25 @@ teardown() {
     [[ "$output" == *"bootstrap"* ]]
 }
 
+# Orca 는 jarvis 가 관리한다. 예전 진입점은 안내만 내고 홈을 그대로 둔 채 exit 1 로 끝난다.
+# install.sh 는 레포를 받기 전에 멈추므로 네트워크를 타지 않는다(없는 레포를 가리켜 둔다).
+@test "setup.sh and install.sh Orca options point to jarvis and change nothing (covers: AI-66)" {
+    pointer="Orca is now managed by jarvis; ai-setup no longer installs or updates it. Use: python3 -m jarvis module orca plan --json"
+    before="$(find "$HOME" | sort)"
+    for args in "--tools orca" "--tools=orca" "--tools orca --uninstall" "--orca-desktop" "--stages tools --orca-desktop" "--hooks --tools orca"; do
+        # shellcheck disable=SC2086
+        run bash "$REPO_ROOT/scripts/setup.sh" $args
+        [ "$status" -eq 1 ] || { echo "setup.sh $args -> $status"; return 1; }
+        [[ "$output" == *"$pointer"* ]] || { echo "setup.sh $args: $output"; return 1; }
+        # shellcheck disable=SC2086
+        CLAUDE_SETUP_REPO="thsvkd/does-not-exist" run sh "$REPO_ROOT/install.sh" $args
+        [ "$status" -eq 1 ] || { echo "install.sh $args -> $status"; return 1; }
+        [[ "$output" == *"$pointer"* ]] || { echo "install.sh $args: $output"; return 1; }
+        [[ "$output" != *"downloading"* ]]
+    done
+    [ "$(find "$HOME" | sort)" = "$before" ]
+}
+
 # 아래는 dry-run 이 아닌 '실제 설치' 경로다. bash 3.2 (macOS 기본) 는 set -u 에서 빈 배열의
 # "${arr[@]}" 확장을 unbound variable 로 취급하는데, --dry-run 일 때는 배열이 비어있지 않아
 # 그 버그가 드러나지 않는다. 실제 설치를 밟는 테스트가 없으면 macOS 전체가 깨진 채로 통과한다.

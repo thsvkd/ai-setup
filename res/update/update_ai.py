@@ -8,9 +8,9 @@
 - --check 는 현재·최신 버전만 읽는다. 업데이트 명령과 잠금을 만들지 않는다.
 - 실행 중인 세션이 있어도 올린다. 버전별 배치(native 버전 디렉터리, npm-release, brew)는 세션이 쓰는
   파일을 지우거나 바꾸지 않기 때문이다. 세션을 실제로 끊을 수 있는 단계(이전 설치 npm -g·winget,
-  Orca deb, codex 관리형 데몬 교체)만 세션이 돌 때 --allow-interrupt 를 요구하고, 없으면 보류(실패)로 남긴다.
+  codex 관리형 데몬 교체)만 세션이 돌 때 --allow-interrupt 를 요구하고, 없으면 보류(실패)로 남긴다.
 - 하나가 실패해도 나머지를 계속하고, 결과 표를 찍은 뒤 exit 1 로 끝난다.
-- sudo 가 필요한 단계는 명령 전체를 보여 주고, 표준 입력이 TTY 가 아니면 건너뛴다(D3).
+- Orca 는 jarvis 가 관리한다. `update-ai orca` 는 안내만 내고 exit 1 로 끝난다.
 
 exit: 0 = 모두 성공, 1 = 하나 이상 실패(또는 다른 실행이 잠금을 쥠), 2 = 인자 오류.
 """
@@ -22,24 +22,21 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
-import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "res" / "doctor"))
 sys.path.insert(0, str(ROOT / "res" / "tools"))
+sys.path.insert(0, str(ROOT / "res"))
 from doctor import kill_tree, locations, platform_key  # noqa: E402
-import orca as orca_release  # noqa: E402
-import orca_server  # noqa: E402
 import npm_release  # noqa: E402
+from stages import ORCA_MOVED  # noqa: E402
 
 CATALOG = ROOT / "res" / "catalog.json"
 # 세션이 쓰는 파일을 그 자리에서 바꾸거나 세션을 끝내는 설치 방식. 세션이 돌면 --allow-interrupt 없이는 손대지 않는다.
-# user-setup: Windows Orca 설치기는 설치 폴더에서 도는 데스크톱 앱을 끝낸다(ai-setup 서버 복사본은 세션이 아니다).
-INTERRUPTING = ("npm", "winget", "deb", "user-setup")
+INTERRUPTING = ("npm", "winget", "deb")
 STEP_TIMEOUT = 900
 VERSION_RE = re.compile(r"\d+\.\d+\.\d+[-.\w]*")
 # winget 은 올릴 것이 없으면 0x8A15002B 로 끝난다. 실패가 아니다.
@@ -106,7 +103,7 @@ def method_for(entry, path):
 
     먼저 '찾은 실행 파일이 그 패키지 관리자의 것인가'로 고른다. 같은 도구가 다른 방식으로도
     깔려 있을 수 있어서(win 의 네이티브 claude + winget claude) 패키지 목록만 보면 엉뚱한 사본을 올린다.
-    패키지 목록은 기본 update 명령이 없는 도구(Orca 등)의 마지막 확인에만 쓴다.
+    패키지 목록은 기본 update 명령이 없는 도구의 마지막 확인에만 쓴다.
     """
     packages = entry.get("packages") or {}
     plat = platform_key()
@@ -116,11 +113,6 @@ def method_for(entry, path):
         npm = npm_for(path, packages["npm"])
         if npm:
             return "npm", npm
-    if plat == "windows" and entry["id"] == "orca":
-        # winget 이 설치기에 --updated 를 넘긴다는 보장이 없다(없으면 Orca 터미널 호스트를 지운다). 공식 설치본은 여기서 고른다.
-        root, _ = orca_release.install_paths(orca_release.package_plan("win32", "AMD64"))
-        if os.path.normcase(os.path.abspath(path)).startswith(os.path.normcase(str(root)) + os.sep):
-            return "user-setup", str(root)
     if plat == "windows" and packages.get("winget") and "\\winget\\" in path.lower():
         return "winget", packages["winget"]
     if plat == "macos" and shutil.which("brew"):
@@ -172,17 +164,7 @@ def latest_of(entry, path, method, value):
                 return json.loads(out.stdout).get("latestVersion") or ""
             except ValueError:
                 return ""
-    if method in ("deb", "user-setup") and entry["id"] == "orca":
-        return orca_latest_tag().lstrip("v")
     return ""
-
-
-def orca_latest_tag():
-    try:
-        with urllib.request.urlopen("https://api.github.com/repos/stablyai/orca/releases/latest", timeout=20) as response:
-            return json.loads(response.read().decode("utf-8")).get("tag_name") or ""
-    except (OSError, ValueError):
-        return ""
 
 
 # ── 실행 중인 세션 ─────────────────────────────────────────────────────
@@ -214,7 +196,7 @@ def runs_target(args, entry):
     """이 명령줄이 이 대상의 세션인가.
 
     카탈로그의 sessions.ignore(데몬·데스크톱 앱 등 세션이 아닌 것)와 sessions.match(이름이 다른
-    실행 파일: /opt/Orca/orca-ide, qemu 로 도는 grok)를 먼저 본다. 그다음 명령줄 앞 다섯 단어에서
+    실행 파일: qemu 로 도는 grok)를 먼저 본다. 그다음 명령줄 앞 다섯 단어에서
     실행 파일 이름을 찾는다. node 로 도는 CLI 는 프로세스 이름이 node 라서 이름으로는 못 찾는다.
     명령줄 전체를 보면 그 이름을 글자로 품은 셸 명령(update-ai.sh claude 등)도 잡히므로,
     첫 단어(argv0)이거나 경로가 붙은 단어만 본다.
@@ -332,173 +314,6 @@ def run_step(label, argv, ok_codes=(0,), env=None):
         say("      -> {} step failed (rc={})".format(label, code))
         return False
     return True
-
-
-def run_sudo_step(label, argv):
-    """sudo 가 필요한 명령. 실행 전에 전체를 보여 주고, TTY 가 아니면 건너뛴다(D3). 결과: ok·failed·skipped."""
-    say("  {:<14}  needs sudo: sudo {}".format(label, " ".join(argv)))
-    if not sys.stdin.isatty():
-        say("      -> skipped: not an interactive terminal, so sudo cannot ask for a password")
-        return "skipped: needs sudo in a terminal"
-    try:
-        return "ok" if subprocess.call(["sudo"] + argv) == 0 else "failed"
-    except OSError:
-        return "failed"
-
-
-def update_orca_deb(path):
-    """공식 매니페스트의 최신 .deb 로 올린다. 크기·SHA-512 를 통과한 파일만 설치한다. 결과: ok·failed·skipped."""
-    out = run_quiet(["dpkg", "--print-architecture"])
-    arch = out.stdout.strip() if out and out.returncode == 0 else ""
-    try:
-        plan = orca_release.package_plan("linux", {"amd64": "x86_64"}.get(arch, arch))
-        version, meta = orca_release.fetch_manifest(plan)
-    except (OSError, ValueError, RuntimeError):
-        say("  {:<14}  cannot read the latest release from GitHub".format("package"))
-        return "failed"
-    installed = version_of(path)
-    if is_current(installed, version):
-        say("  {:<14}  orca-ide {} is already the latest".format("package", installed))
-        result = "ok"
-    else:
-        scratch = tempfile.mkdtemp(prefix="update-ai-orca-")
-        try:
-            say("  {:<14}  download {}".format("package", meta["name"]))
-            try:
-                target = orca_release.download(version, meta, Path(scratch))
-            except (OSError, RuntimeError) as error:
-                say("      download failed: {}".format(error if isinstance(error, RuntimeError) else type(error).__name__))
-                return "failed"
-            result = run_sudo_step("package", ["apt-get", "install", "-y", str(target)])
-        finally:
-            shutil.rmtree(scratch, ignore_errors=True)
-    server = orca_server_record("systemd-user")
-    if result == "ok" and server and server.get("state") == "configured" and server.get("cli") and \
-            orca_server.runtime_is_active(server["server_profile"]):
-        # PATH 의 orca 는 데스크톱 프로필의 shim 일 수 있다. 서버가 쓰는 deb 의 CLI 로 설치본 판을 읽는다.
-        return "ok" if restart_orca_server_unit(server, version_of(server["cli"])) else "failed"
-    return result
-
-
-def restart_orca_server_unit(server, version):
-    """deb 는 /opt/Orca 를 제자리에서 바꾸고 서버를 다시 띄우지 않는다. 설치본과 판이 다르면 터미널이 없을 때만 다시 띄운다.
-
-    Linux 에는 스스로 옮겨 가는 러너가 없으므로, 이미 최신인 재실행도 이전 판에 남은 서버를 여기서 옮긴다.
-    터미널이 있으면 끊지 않고 이전 판을 유지한다고 알린다(True). 재시작이나 버전 확인이 실패하면 False.
-    """
-    running = orca_server_version(server)
-    if not version or not running:
-        say("  {:<14}  cannot read the {} version; the Orca server was not restarted".format(
-            "server", "installed" if not version else "running"))
-        return True
-    if running == version:
-        return True
-    terminals = orca_server.live_terminal_count(server.get("cli"), server["server_profile"])
-    if terminals != 0:
-        say("  {:<14}  the Orca server keeps the previous version until it restarts ({}); "
-            "run update-ai orca --allow-interrupt again once it has none".format(
-                "server", orca_server.terminal_count_problem(terminals)))
-        return True
-    # try-restart: 유닛이 멈춰 있으면(같은 프로필의 다른 서버) 띄우지 않는다.
-    if not run_step("server", ["systemctl", "--user", "try-restart", Path(server["service_path"]).name]):
-        return False
-    deadline = time.monotonic() + ORCA_SERVER_SWITCH_SECONDS
-    while True:
-        running = orca_server_version(server)
-        if running == version:
-            say("  {:<14}  the Orca server now runs {}".format("server", version))
-            return True
-        if time.monotonic() >= deadline:
-            say("  {:<14}  the Orca server runs {} after the restart (expected {})".format(
-                "server", running or "nothing readable", version))
-            return False
-        time.sleep(5)
-
-
-def orca_server_version(server):
-    """ai-setup 서버가 지금 실행 중인 Orca 버전. 읽지 못하면 빈 문자열."""
-    env = dict(os.environ, ORCA_USER_DATA_PATH=str(server["server_profile"]))
-    out = run_quiet([server["cli"], "status", "--json"], env=env)
-    try:
-        return json.loads(out.stdout)["result"]["runtime"]["appVersion"] or ""
-    except (AttributeError, ValueError, KeyError, TypeError):
-        return ""
-
-
-ORCA_SERVER_SWITCH_SECONDS = 300
-
-
-def orca_server_record(manager="task-scheduler"):
-    receipt = orca_release.read_receipt(orca_release.home_dir() / ".claude/.claude-code-setup.json")
-    record = (receipt.get("tool_installs") or {}).get("orca_server")
-    return record if isinstance(record, dict) and record.get("service_manager") == manager else None
-
-
-def update_orca_windows():
-    """공식 설치기를 앱 내 업데이트와 같은 `/S --updated` 로 실행한다. 결과: ok·failed.
-
-    --updated 가 없으면 이전 버전의 언인스톨러가 '제거'로 돌아 Orca 터미널 호스트를 끝내고 지운다.
-    ai-setup 서버는 설치 폴더 밖 복사본에서 돌아 설치기가 건드리지 않으며, 터미널이 없을 때 새 판으로 옮긴다.
-    """
-    plan = orca_release.package_plan("win32", "AMD64")
-    root, _ = orca_release.install_paths(plan)
-    server = orca_server_record()
-    try:
-        version, meta = orca_release.fetch_manifest(plan)
-        installed = orca_release.installed_version(plan)
-    except (OSError, ValueError, KeyError, RuntimeError):
-        say("  {:<14}  cannot read the latest release or the installed version".format("package"))
-        return "failed"
-    if is_current(installed, version):
-        say("  {:<14}  Orca {} is already the latest".format("package", installed))
-        return "ok"
-    if server and orca_server.runtime_is_active(server["server_profile"]) and not (
-            orca_server.running_runner_state(server["service_root"]) or {}).get("app"):
-        say("  {:<14}  the ai-setup Orca server runs from the install directory; the installer cannot close it".format("blocked"))
-        say("  {:<14}  run setup --tools orca first (it moves the server once its terminals are closed)".format(""))
-        return "failed"
-    scratch = tempfile.mkdtemp(prefix="update-ai-orca-")
-    try:
-        say("  {:<14}  download {}".format("package", meta["name"]))
-        try:
-            target = orca_release.download(version, meta, Path(scratch))
-        except (OSError, RuntimeError) as error:
-            say("      download failed: {}".format(error if isinstance(error, RuntimeError) else type(error).__name__))
-            return "failed"
-        if not run_step("package", [str(target), "/S", "--updated"]):
-            return "failed"
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
-    try:
-        installed = orca_release.installed_version(plan)
-    except (OSError, ValueError, KeyError, RuntimeError):
-        installed = ""
-    if installed != version:
-        say("  {:<14}  the installer finished but Orca is {} (expected {})".format("package", installed or "unreadable", version))
-        return "failed"
-    say("  {:<14}  reopen the Orca desktop app if it was running".format("desktop"))
-    if server:
-        wait_for_orca_server_switch(server, root)
-    return "ok"
-
-
-def wait_for_orca_server_switch(server, root):
-    """러너가 새 설치본의 복사본으로 옮겨 가는지 지켜본다. 터미널이 있으면 기다리지 않고 알린다."""
-    identity = orca_server.app_identity(root)
-    deadline = time.monotonic() + ORCA_SERVER_SWITCH_SECONDS
-    while True:
-        state = orca_server.running_runner_state(server["service_root"]) or {}
-        if identity and Path(state.get("app") or "").name == identity:
-            say("  {:<14}  the Orca server now runs the new version".format("server"))
-            return True
-        terminals = orca_server.live_terminal_count(orca_server.server_query_cli(server), server["server_profile"])
-        if terminals != 0 or time.monotonic() >= deadline:
-            reason = (orca_server.terminal_count_problem(terminals) if terminals != 0
-                      else "it did not switch within {} seconds".format(ORCA_SERVER_SWITCH_SECONDS))
-            say("  {:<14}  the Orca server keeps the previous version for now ({}); "
-                "it switches by itself once it has no live terminals".format("server", reason))
-            return False
-        time.sleep(5)
 
 
 def claude_user_plugins(path):
@@ -633,10 +448,6 @@ def update_target(entry, path, method, value, allow_interrupt=False):
         # 기본값이면 brew 가 올린 직후 이전 버전(Cellar·Caskroom)을 지워 실행 중인 세션의 파일이 사라진다.
         outcome = run_step("package", ["brew", "upgrade"] + (["--cask"] if method == "brew_cask" else []) + [value],
                            env=dict(os.environ, HOMEBREW_NO_INSTALL_CLEANUP="1"))
-    elif method == "deb" and entry["id"] == "orca":
-        outcome = update_orca_deb(path)
-    elif method == "user-setup" and entry["id"] == "orca":
-        outcome = update_orca_windows()
     elif method == "default":
         outcome = run_step("self-update", [path] + list(value[1:]))
     else:
@@ -672,7 +483,7 @@ def main(argv=None):
     parser.add_argument("--only", action="append", default=[], metavar="A,B", help="update only these targets")
     parser.add_argument("--allow-interrupt", action="store_true",
                         help="also run steps that can break running sessions (old npm -g/winget installs, "
-                             "Orca .deb, restarting the codex daemon)")
+                             "restarting the codex daemon)")
     parser.add_argument("targets", nargs="*", help="same as --only")
     args = parser.parse_args(argv)
 
@@ -683,6 +494,9 @@ def main(argv=None):
         return 2
     ids = [e["id"] for e in catalog]
     only = [t for item in args.only + args.targets for t in item.split(",") if t]
+    if "orca" in only:
+        print(ORCA_MOVED, file=sys.stderr)
+        return 1
     unknown = [t for t in only if t not in ids]
     if unknown:
         print("unknown target: {} (choose from: {})".format(", ".join(unknown), ",".join(ids)), file=sys.stderr)

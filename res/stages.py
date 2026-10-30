@@ -15,6 +15,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+# Orca 관리는 jarvis 로 옮겨 갔다(jarvis 결정 D11·D16, ORCA-12). 예전 진입점은 이 안내만 내고 exit 1 로 끝난다.
+ORCA_MOVED = (
+    "Orca is now managed by jarvis; ai-setup no longer installs or updates it. "
+    "Use: python3 -m jarvis module orca plan --json"
+)
+
 STAGE_ORDER = (
     "base",
     "harness",
@@ -161,7 +167,6 @@ def _selection(selection) -> dict:
         "harnesses": list(harnesses),
         "jarvis_role": source.get("jarvis_role"),
         "herdr": bool(source.get("herdr")),
-        "orca_desktop": bool(source.get("orca_desktop")),
         "ss_caps": bool(source.get("ss_caps")),
         "dry_run": bool(source.get("dry_run")),
         "uninstall": bool(source.get("uninstall")),
@@ -573,15 +578,6 @@ def _jarvis(selection, world) -> list[Action]:
 
 def _tools(selection, world) -> list[Action]:
     actions = []
-    actions.extend(
-        _package_action(
-            world,
-            "orca",
-            "Orca present, not claimed",
-            "install Orca package and orca-bundled skills",
-            ("python3", _orca_script(), *(("--desktop-app",) if selection["orca_desktop"] else ())),
-        )
-    )
     detail, argv = _tailscale_install(world["platform"])
     actions.extend(
         _package_action(world, "tailscale", "Tailscale present, not claimed", detail, argv)
@@ -836,16 +832,6 @@ def _uninstall_tools(world) -> list[Action]:
                 ("del:bins:tailscale", "del:receipt_tools:tailscale"),
             )
         )
-    if "orca" in world["receipt_tools"]:
-        actions.append(
-            Action(
-                "tools",
-                "remove Orca package and orca-bundled skills recorded by this setup",
-                True,
-                ("python3", _orca_script(), "--uninstall"),
-                ("del:bins:orca", "del:receipt_tools:orca"),
-            )
-        )
     return actions
 
 
@@ -975,7 +961,7 @@ def probe_world(project_dir: str | None = None) -> dict:
     markets = receipt.get("marketplaces") if isinstance(receipt.get("marketplaces"), dict) else {}
     installed = (_read_json(home / ".claude" / "plugins" / "installed_plugins.json") or {}).get("plugins")
     project = Path(project_dir or os.getcwd())
-    names = list(HARNESS_LABELS) + ["codegraph", "orca", "tailscale", "herdr", "jarvis"]
+    names = list(HARNESS_LABELS) + ["codegraph", "tailscale", "herdr", "jarvis"]
     marketplaces = _read_json(home / ".claude" / "plugins" / "known_marketplaces.json") or {}
     return {
         "bins": _which_bins(names),
@@ -1041,11 +1027,6 @@ _BANNED_COMMANDS = (
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
-
-
-def _orca_script() -> str:
-    # 프로젝트 폴더에서 실행되므로 저장소 기준 절대 경로여야 한다.
-    return str(_repo_root() / "res" / "tools" / "orca.py")
 
 
 def _script(name: str) -> list[str]:
@@ -1343,7 +1324,6 @@ def _cli(argv) -> dict:
         "harnesses": None,
         "jarvis_role": None,
         "herdr": False,
-        "orca_desktop": False,
         "ss_caps": False,
         "dry_run": False,
         "uninstall": False,
@@ -1380,9 +1360,6 @@ def _cli(argv) -> dict:
             i += 2
         elif arg == "--herdr":
             opts["herdr"] = True
-            i += 1
-        elif arg == "--orca-desktop":
-            opts["orca_desktop"] = True
             i += 1
         elif arg == "--ss-caps":
             opts["ss_caps"] = True
@@ -1459,6 +1436,9 @@ def _ensure_user_bin_on_path() -> None:
 
 
 def main(argv) -> int:
+    if "--orca-desktop" in argv:
+        print(ORCA_MOVED, file=sys.stderr)
+        return 1
     _ensure_user_bin_on_path()
     opts = _cli(argv)
     if opts is None:
@@ -1474,7 +1454,6 @@ def main(argv) -> int:
         "stages": stages,
         "jarvis_role": None if opts["jarvis_role"] in (None, "none") else opts["jarvis_role"],
         "herdr": opts["herdr"],
-        "orca_desktop": opts["orca_desktop"],
         "ss_caps": opts["ss_caps"],
         "dry_run": opts["dry_run"],
         "uninstall": opts["uninstall"],

@@ -35,17 +35,12 @@ Usage: bash setup.sh [options]
   --jarvis-role gateway|core
                 with --stages, clone and register Jarvis for that role
   --herdr       with --stages, include herdr (off unless chosen)
-  --orca-desktop
-                with --tools orca or --stages, also open the paired Orca desktop app
-                (Windows: point the Orca shortcuts at the desktop profile). Off by default
   --ss-caps     with --stages, grant the Jarvis ss capability
   --hooks       install global guard hooks + permissions only (~/.claude)
   --agentsmd    install project instructions into the current folder only
   --harness L   harnesses to install instructions for (comma-separated: claude,codex,grok,opencode,agy,gemini,copilot,all)
                 choosing claude also installs CLAUDE.md. Default is all.
   --skills      install bundled skills only (~/.claude/skills)
-  --tools orca  install the official Orca package and its bundled skills only
-                may be combined with --dry-run or --uninstall
   --keybinds    install newline keybindings only (VS Code/Cursor/Claude/Codex/tmux)
   --newline VAL newline key (shift-enter | ctrl-enter). Default shift-enter
   --omc         install the oh-my-claudecode plugin + show cache TTL in the HUD
@@ -95,7 +90,6 @@ DRY_RUN=0
 UNINSTALL=0
 NO_ONBOARD=0
 RUN_DOCTOR=0
-TOOLS=""
 # 온보딩이 채우는 값들. 비어 있으면 워커가 각자의 기본값을 쓴다.
 DEFAULT_MODE=""
 FORCE_AGENTSMD=0
@@ -106,13 +100,15 @@ STAGES=""
 STAGE_RUN=0
 JARVIS_ROLE=""
 HERDR_FLAG=0
-ORCA_DESKTOP=0
 SS_CAPS=0
 SKIP_INSTALL=0
 # 온보딩 답이 있을 때만 채운다. 비어 있으면 --stages 는 특별 설정을 기본으로 계획한다.
 INCLUDE_OUTPUT_STYLE=
 INCLUDE_MODS=
 INCLUDE_OMC=
+
+# Orca 관리는 jarvis 로 옮겨 갔다. 예전 진입점은 아무것도 바꾸지 않고 이 안내만 낸다.
+ORCA_MOVED="Orca is now managed by jarvis; ai-setup no longer installs or updates it. Use: python3 -m jarvis module orca plan --json"
 
 HAD_ARGS=0
 ARG_COUNT=$#
@@ -121,13 +117,7 @@ while [[ $# -gt 0 ]]; do
         --hooks) RUN_HOOKS=1; HAD_ARGS=1; shift ;;
         --agentsmd) RUN_AGENTSMD=1; HAD_ARGS=1; shift ;;
         --skills) RUN_SKILLS=1; HAD_ARGS=1; shift ;;
-        --tools)
-            if [[ -z "${2:-}" ]]; then echo "--tools requires orca." >&2; exit 1; fi
-            TOOLS="$2"; HAD_ARGS=1; shift 2 ;;
-        --tools=*)
-            TOOLS="${1#*=}"
-            if [[ -z "$TOOLS" ]]; then echo "--tools requires orca." >&2; exit 1; fi
-            HAD_ARGS=1; shift ;;
+        --tools|--tools=*|--orca-desktop) echo "$ORCA_MOVED" >&2; exit 1 ;;
         --keybinds) RUN_KEYBINDS=1; HAD_ARGS=1; shift ;;
         --omc) RUN_OMC=1; HAD_ARGS=1; shift ;;
         --output-style) RUN_OUTPUT_STYLE=1; HAD_ARGS=1; shift ;;
@@ -159,7 +149,6 @@ while [[ $# -gt 0 ]]; do
             JARVIS_ROLE="$2"; HAD_ARGS=1; shift 2 ;;
         --jarvis-role=*) JARVIS_ROLE="${1#*=}"; HAD_ARGS=1; shift ;;
         --herdr) HERDR_FLAG=1; HAD_ARGS=1; shift ;;
-        --orca-desktop) ORCA_DESKTOP=1; HAD_ARGS=1; shift ;;
         --ss-caps) SS_CAPS=1; HAD_ARGS=1; shift ;;
         --help|-h) print_usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; echo ""; print_usage >&2; exit 1 ;;
@@ -178,10 +167,6 @@ if [[ -n "$JARVIS_ROLE" ]]; then
 fi
 if [[ ( -n "$JARVIS_ROLE" || "$HERDR_FLAG" -eq 1 || "$SS_CAPS" -eq 1 ) && "$STAGE_RUN" -ne 1 ]]; then
     echo "--jarvis-role, --herdr, and --ss-caps require --stages." >&2
-    exit 1
-fi
-if [[ "$ORCA_DESKTOP" -eq 1 && "$STAGE_RUN" -ne 1 && -z "$TOOLS" ]]; then
-    echo "--orca-desktop requires --tools orca or --stages." >&2
     exit 1
 fi
 
@@ -294,24 +279,6 @@ if [[ "$RUN_DOCTOR" -eq 1 ]]; then
     status="${PIPESTATUS[0]}"
     set -e
     exit "$status"
-fi
-
-# 도구만 설치할 때 기본 훅·AGENTS.md 설치로 흘러가지 않게 별도로 끝낸다.
-if [[ -n "$TOOLS" && "$STAGE_RUN" -eq 1 ]]; then
-    echo "--tools cannot be combined with --stages." >&2
-    exit 1
-fi
-if [[ -n "$TOOLS" ]]; then
-    if [[ "$TOOLS" != "orca" || "$RUN_HOOKS$RUN_AGENTSMD$RUN_KEYBINDS$RUN_SKILLS$RUN_OMC$RUN_OUTPUT_STYLE$RUN_MODS" != "0000000" || -n "$HARNESSES$NEWLINE_CHORD" ]]; then
-        echo "--tools currently accepts orca alone, with --dry-run or --uninstall." >&2
-        exit 1
-    fi
-    PY="$(resolve_python_command)" || { echo "Python 3.8+ is required." >&2; exit 2; }
-    tool_args=()
-    [[ "$DRY_RUN" -eq 1 ]] && tool_args+=(--dry-run)
-    [[ "$UNINSTALL" -eq 1 ]] && tool_args+=(--uninstall)
-    [[ "$ORCA_DESKTOP" -eq 1 ]] && tool_args+=(--desktop-app)
-    exec "$PY" -B -X utf8 "$REPO_ROOT/res/tools/orca.py" ${tool_args[@]+"${tool_args[@]}"}
 fi
 
 # 인자가 하나도 없을 때만 온보딩을 띄운다.
@@ -429,7 +396,6 @@ run_stage_plan() {
     [[ -n "$HARNESSES" ]] && args+=(--harness "$HARNESSES")
     [[ -n "$JARVIS_ROLE" ]] && args+=(--jarvis-role "$JARVIS_ROLE")
     [[ "$HERDR_FLAG" -eq 1 ]] && args+=(--herdr)
-    [[ "$ORCA_DESKTOP" -eq 1 ]] && args+=(--orca-desktop)
     [[ "$SS_CAPS" -eq 1 ]] && args+=(--ss-caps)
     [[ "$DRY_RUN" -eq 1 ]] && args+=(--dry-run)
     [[ "$UNINSTALL" -eq 1 ]] && args+=(--uninstall)
@@ -441,7 +407,7 @@ run_stage_plan() {
     [[ -n "$INCLUDE_OMC" ]] && args+=(--include-omc "$INCLUDE_OMC")
     set +e
     # curl | sh 로 실행되면 stdin 은 스크립트 본문 파이프다. 그대로 물려주면 sudo 가 필요한 단계(Linux 의
-    # Orca deb 등)가 대화형 터미널이 없다며 실패하고 뒤 단계가 실행되지 않는다. 온보딩처럼 제어 터미널을
+    # base 패키지 등)가 대화형 터미널이 없다며 실패하고 뒤 단계가 실행되지 않는다. 온보딩처럼 제어 터미널을
     # 직접 연결하고, 터미널이 없으면(CI) 그대로 둔다.
     if [[ ! -t 0 && "$DRY_RUN" -eq 0 ]] && (: </dev/tty) 2>/dev/null; then
         "$py" -B -X utf8 "$REPO_ROOT/res/stages.py" "${args[@]}" </dev/tty

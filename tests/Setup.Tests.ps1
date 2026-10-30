@@ -142,6 +142,20 @@ Describe "setup.ps1 dispatcher" {
         $r.ExitCode | Should -Be 2
     }
 
+    # Orca 는 jarvis 가 관리한다. 예전 진입점은 안내만 내고 프로필을 그대로 둔 채 exit 1 로 끝난다.
+    It "-Tools orca, --tools orca and --orca-desktop point to jarvis and change nothing (covers: AI-66)" {
+        $pointer = [regex]::Escape("Orca is now managed by jarvis; ai-setup no longer installs or updates it. Use: python3 -m jarvis module orca plan --json")
+        $r = Invoke-Script $script:Setup @("-Tools", "orca")
+        $r.ExitCode | Should -Be 1 -Because $r.Output
+        $r.Output | Should -Match $pointer
+        foreach ($a in @("--tools orca", "--tools=orca", "-Tools orca -Uninstall", "--orca-desktop", "--stages tools --orca-desktop")) {
+            $r = Invoke-ScriptInline $script:Setup $a
+            $r.ExitCode | Should -Be 1 -Because $a
+            $r.Output | Should -Match $pointer -Because $a
+        }
+        Test-Path (Join-Path $env:USERPROFILE ".claude") | Should -Be $false
+    }
+
     # 조용히 무시하면 오타(--keybind)가 '전체 설치' 로 둔갑한다.
     It "an unknown option exits 1 and shows the usage too" {
         $r = Invoke-ScriptInline $script:Setup "--keybind"
@@ -182,6 +196,26 @@ Describe "install.ps1 bootstrap" {
             $r = Invoke-ScriptInline (Join-Path $script:RepoRoot "install.ps1") $a
             $r.ExitCode | Should -Not -Be 0
             $r.Output | Should -Match "(?m)Unknown option: --bogus\r?$" -Because $a
+        }
+    }
+
+    # 레포를 받기 전에 멈추므로 네트워크를 타지 않는다(없는 레포를 가리켜 둔다).
+    It "-Tools orca and --orca-desktop point to jarvis before downloading (covers: AI-66)" {
+        $pointer = [regex]::Escape("Orca is now managed by jarvis; ai-setup no longer installs or updates it. Use: python3 -m jarvis module orca plan --json")
+        $oldRepo = $env:CLAUDE_SETUP_REPO
+        $env:CLAUDE_SETUP_REPO = "thsvkd/does-not-exist"
+        try {
+            foreach ($a in @("-Tools orca", "--tools orca", "--orca-desktop")) {
+                $r = Invoke-ScriptInline (Join-Path $script:RepoRoot "install.ps1") $a
+                $r.ExitCode | Should -Be 1 -Because $a
+                $r.Output | Should -Match $pointer -Because $a
+                $r.Output | Should -Not -Match "downloading" -Because $a
+            }
+            $r = Invoke-Script (Join-Path $script:RepoRoot "install.ps1") @("-Tools", "orca")
+            $r.ExitCode | Should -Be 1 -Because $r.Output
+            $r.Output | Should -Match $pointer
+        } finally {
+            $env:CLAUDE_SETUP_REPO = $oldRepo
         }
     }
 

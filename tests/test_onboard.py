@@ -965,7 +965,7 @@ def test_without_force_existing_agentsmd_is_untouched(tmp_path):
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX pty")
 def test_piped_install_runs_stages_with_the_terminal_as_stdin(tmp_path):
     """curl | sh 에서는 stdin 이 스크립트 본문 파이프다. 단계 실행이 그 파이프를 물려받으면 sudo 가 필요한
-    단계(Linux Orca deb)가 대화형 터미널이 없다며 실패하고, 뒤의 hooks·agentsmd 단계가 실행되지 않는다."""
+    단계(Linux base 패키지)가 대화형 터미널이 없다며 실패하고, 뒤의 hooks·agentsmd 단계가 실행되지 않는다."""
     fake = tmp_path / "bin"
     fake.mkdir()
     real = shutil.which("python3")

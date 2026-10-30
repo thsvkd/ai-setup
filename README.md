@@ -10,7 +10,7 @@ Claude Code·Codex 같은 AI 코딩 에이전트의 작업 환경을 명령 한 
 - 💾 **git 작업 자동 백업**: Claude Code가 `git reset --hard`·`git clean` 같은 명령을 실행하기 전에, 커밋하지 않은 변경을 스냅샷으로 남긴다.
 - ⛔ **되돌릴 수 없는 것만 차단**: 루트·홈 디렉터리 전체 삭제와 디스크 포맷만 막고, 그 밖의 작업은 막지 않는다.
 - ⏎ **줄바꿈 키 통일**: Claude Code·Codex·Grok CLI에서 Shift+Enter(또는 Ctrl+Enter)를 줄바꿈 키로 맞춘다.
-- 🧩 **에이전트·플러그인·도구 설치**: Claude Code와 Codex, Claude Code 플러그인, CodeGraph, Orca 등을 고른 만큼 설치한다.
+- 🧩 **에이전트·플러그인·도구 설치**: Claude Code와 Codex, Claude Code 플러그인, CodeGraph 등을 고른 만큼 설치한다.
 - 📄 **AGENTS.md**: 현재 프로젝트에 에이전트가 따를 작업 규칙 템플릿 [`res/AGENTS.md`](res/AGENTS.md)를 복사한다. 작성자의 규칙을 한국어로 쓴 것으로, 변경 원칙, 승인이 필요한 작업, "식별자와 문자열은 영어로, 한국어는 주석에만" 같은 코드 규칙, `docs/PRD.md`·`docs/SPEC.md` 등을 가리키는 문서 구조가 들어 있다. 그 문서들은 함께 만들지 않으므로(틀은 [`res/docs/`](res/docs)에 있다) 필요하면 직접 복사하고, `<채워 넣기>` 칸과 함께 프로젝트에 맞게 고쳐 쓴다.
 
 **한계**
@@ -33,7 +33,7 @@ Claude Code·Codex 같은 AI 코딩 에이전트의 작업 환경을 명령 한 
 >
 > **사용량과 비용에 영향을 주는 기본값이 있다.** `model`·`effortLevel`·`language`가 비어 있으면 각각 `opus`·`xhigh`·`korean`으로 채운다(이미 값이 있으면 건드리지 않는다). claude_special 단계가 설치하는 mod `korean-reply-rewrite`는 한국어로 물었는데 영어로 답한 응답을 Haiku로 번역해 대화 기록에 저장하므로, 그만큼 호출이 늘고 기록에 남는 응답이 바뀐다.
 >
-> **sudo와 pip를 쓴다.** Linux에서 git이 없으면 패키지 관리자로 설치하고(sudo), 휴지통 도구 `trash-cli`는 pip로 설치하고(필요하면 `--break-system-packages`를 붙인다), 그래도 실패하면 터미널에서 실행한 경우에만 `sudo apt-get`으로 설치한다. Orca는 sudo로 deb 패키지를 설치하고, Tailscale은 공식 설치 스크립트로 설치하므로 Linux에서는 Tailscale 패키지 저장소도 추가된다.
+> **sudo와 pip를 쓴다.** Linux에서 git이 없으면 패키지 관리자로 설치하고(sudo), 휴지통 도구 `trash-cli`는 pip로 설치하고(필요하면 `--break-system-packages`를 붙인다), 그래도 실패하면 터미널에서 실행한 경우에만 `sudo apt-get`으로 설치한다. Tailscale은 공식 설치 스크립트로 설치하므로 Linux에서는 Tailscale 패키지 저장소도 추가된다.
 
 인자 없이 실행하면 **단계형 설치**가 시작된다. 아래 11개 단계를 차례로 보여 주며, 모든 단계가 기본으로 켜져 있다. 이미 설치된 프로그램은 다시 설치하지 않는다. 새 장비에서 기본값 그대로 설치하면 다음이 설치된다.
 
@@ -47,14 +47,13 @@ Claude Code·Codex 같은 AI 코딩 에이전트의 작업 환경을 명령 한 
 | mcp | Claude Code와 Codex에 CodeGraph MCP 서버를 등록한다 | |
 | newline | 줄바꿈 키를 설정한다(기본 Shift+Enter) | |
 | claude_special | 출력 스타일을 fluent-korean으로 지정하고, Claude Code mod 3개를 설치하며, OMC HUD를 쓰고 있으면 캐시 표시 래퍼를 붙인다 | |
-| tools | 여러 에이전트를 데스크톱·모바일·원격에서 함께 다루는 도구 Orca와 Tailscale을 설치한다. Tailscale에 로그인되어 있으면 Orca 상시 실행 서버도 설정한다 | Linux에서는 **sudo**가 필요하다. Orca는 Linux에서 **Debian·Ubuntu만** 지원하므로 다른 배포판에서는 이 단계를 끈다. Orca 서버는 **6768 포트**를 연다 |
+| tools | 기기들을 사설 네트워크로 묶는 Tailscale을 설치한다. Orca는 jarvis가 관리한다([Orca](#orca는-jarvis가-관리한다)) | Linux에서는 **sudo**가 필요하다 |
 | hooks | 가드 훅을 설치하고 권한 규칙과 권한 모드를 설정한다. 비어 있는 `model`·`effortLevel`·`language`도 이 단계에서 채운다 | 위 경고를 참고한다 |
 | agentsmd | 현재 폴더에 `AGENTS.md`(와 `CLAUDE.md`)를 만든다. 내용은 위 [AGENTS.md](#무엇을-해-주나) 설명을 참고한다 | 이미 있으면 온보딩에서 덮어쓸지 묻고, 기본은 그대로 둔다 |
 
-- Orca 서버는 모든 네트워크 인터페이스의 6768 포트에서 연결을 받고, 페어링 토큰으로만 보호된다. 그래서 설치기는 Tailscale 주소를 찾을 수 있을 때만 서버를 설정한다. 자세한 내용은 [Orca](#orca)에 있다.
 - Tailscale은 설치만 하며, 로그인(`tailscale up`)은 하지 않는다.
 - Jarvis(작성자의 [홈 서버 모니터링 대시보드](https://github.com/thsvkd/jarvis))와 herdr은 직접 골랐을 때만 설치한다.
-- 단계 하나가 실패하면 **거기서 멈추고** 뒤 단계는 실행하지 않는다. tools 단계는 hooks 단계보다 앞에 있으므로, 예를 들어 Orca 설치가 실패하면 가드 훅도 설치되지 않는다. 원인을 고치거나 실패한 단계를 끈 뒤, 남은 단계만 `--stages hooks,agentsmd`처럼 지정해 이어서 실행한다.
+- 단계 하나가 실패하면 **거기서 멈추고** 뒤 단계는 실행하지 않는다. tools 단계는 hooks 단계보다 앞에 있으므로, 예를 들어 Tailscale 설치가 실패하면 가드 훅도 설치되지 않는다. 원인을 고치거나 실패한 단계를 끈 뒤, 남은 단계만 `--stages hooks,agentsmd`처럼 지정해 이어서 실행한다.
 - 각 용어의 뜻은 [용어](#용어)에 정리해 두었다.
 
 ---
@@ -67,7 +66,7 @@ Claude Code·Codex 같은 AI 코딩 에이전트의 작업 환경을 명령 한 
 | --- | --- |
 | 공통 | Python 3.9 이상(설치기와 훅이 Python으로 동작하므로 미리 설치해 둔다), 인터넷 연결(GitHub·npm 등에서 내려받는다). GitHub 로그인은 필요 없다 |
 | macOS | `bash`·`curl`·`tar`(기본 포함), Homebrew(git·Tailscale 설치에 쓴다. 없으면 tools 단계가 실패하므로 그 단계를 끈다). 새 Mac에서는 `xcode-select --install`로 Command Line Tools를 먼저 설치해야 `python3`가 생긴다 |
-| Linux | `bash`, `curl` 또는 `wget`, `tar`, `sudo`(git·`trash-cli`·Orca·Tailscale 설치에 쓴다) |
+| Linux | `bash`, `curl` 또는 `wget`, `tar`, `sudo`(git·`trash-cli`·Tailscale 설치에 쓴다) |
 | Windows | PowerShell 5.1 이상, winget(Git·Node·Tailscale 설치에 쓴다). Python은 python.org 설치본을 쓴다(Microsoft Store의 `python.exe` 바로가기로는 실행되지 않는다) |
 
 **1. 미리보기**: 아무것도 바꾸지 않고, 기본 설치가 실행할 작업 목록만 출력한다. 이 목록은 단계별 작업 이름만 보여 주므로, 권한 규칙처럼 `settings.json`에 실제로 들어갈 내용은 `--hooks --dry-run`으로 따로 확인한다. 이미 설치된 프로그램은 `present, not claimed`(이미 있으므로 설치하지 않고 설치 기록에도 넣지 않음)로 표시된다.
@@ -147,20 +146,19 @@ curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | s
 | --- | --- |
 | 단계형 설치(인자 없이 실행, `--stages`) | `--stages <단계 목록> --uninstall` |
 | 개별 옵션 설치(`--hooks`, `--keybinds`, `--no-onboard` 등) | `--uninstall`. `--omc`·`--output-style`로 설치한 플러그인은 남긴다 |
-| `--tools orca` | `--tools orca --uninstall`. 위의 `--uninstall`은 Orca를 건드리지 않는다 |
 
 **1. 먼저 미리보기로 무엇이 빠지는지 확인한다.**
 ```sh
 curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh -s -- --stages all --uninstall --dry-run
 ```
 
-**2. 설정만 되돌린다.** 가드 훅·권한 규칙, 줄바꿈 키, 출력 스타일·mod를 되돌리고, 설치한 프로그램은 남긴다. 가드 훅만 빼려면 목록을 `hooks` 하나로 쓴다. 플러그인·MCP 등록·번들 스킬도 빼려면 목록에 `plugins,mcp,skills`를 더한다. 이렇게 제거해도 **Orca 서버는 계속 6768 포트에서 연결을 받는다**. 서버도 멈추려면 `tools`를 더한다(이때는 Orca·Tailscale 패키지도 지운다).
+**2. 설정만 되돌린다.** 가드 훅·권한 규칙, 줄바꿈 키, 출력 스타일·mod를 되돌리고, 설치한 프로그램은 남긴다. 가드 훅만 빼려면 목록을 `hooks` 하나로 쓴다. 플러그인·MCP 등록·번들 스킬도 빼려면 목록에 `plugins,mcp,skills`를 더한다. Tailscale 패키지도 지우려면 `tools`를 더한다.
 ```sh
 curl -fsSL https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh -s -- --stages hooks,newline,claude_special --uninstall
 ```
 
 > [!WARNING]
-> `--stages all --uninstall`은 이 설치기가 **설치한 프로그램 자체를 지운다**. Claude Code·Codex 같은 하네스, Claude Code 플러그인과 마켓플레이스, CodeGraph와 MCP 등록, Orca·Tailscale 패키지(`sudo apt-get remove` 등)가 여기에 해당한다. 원격에서 Tailscale로 접속한 채 제거하면 그 연결이 끊긴다.
+> `--stages all --uninstall`은 이 설치기가 **설치한 프로그램 자체를 지운다**. Claude Code·Codex 같은 하네스, Claude Code 플러그인과 마켓플레이스, CodeGraph와 MCP 등록, Tailscale 패키지(`sudo apt-get remove` 등)가 여기에 해당한다. 원격에서 Tailscale로 접속한 채 제거하면 그 연결이 끊긴다.
 
 **3. 설치한 프로그램까지 모두 지운다.**
 ```sh
@@ -174,9 +172,13 @@ PowerShell에서는 같은 인자를 scriptblock 형태로 넘긴다. 예: `& ([
 - 설치하기 전부터 있던 프로그램과 설정, 그리고 nvm으로 설치한 Node
 - 프로젝트의 `AGENTS.md`·`CLAUDE.md`(필요하면 직접 지운다)
 - 설치가 새로 만든 키바인딩 파일 중 우리 항목만 빠진 빈 파일(`[]` 등). VS Code·Cursor가 없어도 그 `keybindings.json`을 만들기 때문에, 이 빈 파일이 남을 수 있다
-- Orca의 프로필·페어링·워크스페이스 데이터
+- Orca와 그 설치 기록(`tool_installs.orca`·`tool_installs.orca_server`). 아래처럼 jarvis가 지운다
 
 자세한 규칙은 [제거가 되돌리는 것](#제거가-되돌리는-것)에 있다.
+
+### Orca는 jarvis가 관리한다
+
+`--tools orca`(`-Tools orca`), `--orca-desktop`, `update-ai orca`는 아무것도 바꾸지 않고 안내만 출력한 뒤 종료 코드 1로 끝난다. 설치·업데이트는 jarvis 체크아웃이나 게이트웨이의 현재 버전 폴더에서 실행한다(PATH 래퍼는 없다). `python3 -m jarvis module orca plan --json`으로 계획을 보고, 그 출력의 plan_id로 `python3 -m jarvis module orca apply --json --plan-id <id>`를 실행한다. 예전에 ai-setup이 설치한 Orca는 `python3 -m jarvis module orca uninstall --json --dry-run`으로 먼저 확인하고, 그 dry-run의 plan_id로 `python3 -m jarvis module orca uninstall --json --plan-id <id>`를 실행해 지운다. jarvis는 ai-setup의 Windows S4U 기록을 자기 것으로 보고 예약 작업·러너·서비스 폴더를 예전 ai-setup 제거와 똑같이 지우며, Linux·macOS에서 채택한(`adopted: true`) 유닛만 남긴다.
 
 ---
 
@@ -195,14 +197,12 @@ PowerShell에서는 같은 인자를 scriptblock 형태로 넘긴다. 예: `& ([
 | `--jarvis-role <역할>` | `--jarvis-role <역할>` | `--stages`와 함께 Jarvis를 `gateway` 또는 `core` 역할로 설치 |
 | `--herdr` | `--herdr` | `--stages`와 함께 herdr 설치 |
 | `--ss-caps` | `--ss-caps` | `--stages`와 함께, Jarvis용 `ss` 복사본에 `cap_sys_ptrace`·`cap_dac_read_search` 권한을 준다(sudo). 이 복사본은 모든 파일을 읽을 수 있으므로 필요할 때만 쓴다 |
-| `--orca-desktop` | `--orca-desktop` | `--tools orca`나 `--stages`와 함께, 설치 뒤 페어링된 Orca 데스크톱 앱을 연다 |
 | `--dry-run` | `-DryRun` | 아무것도 바꾸지 않고 변경 계획만 출력 |
 | `--no-onboard` | `-NoOnboard` | 질문 없이 가드 훅·`AGENTS.md`·키바인딩·번들 스킬 설치 |
 | `--hooks` | `-Hooks` | 가드 훅과 권한 규칙만 설치(`~/.claude`) |
 | `--agentsmd` | `-AgentsMd` | 현재 폴더에 `AGENTS.md`만 설치 |
 | `--harness <목록>` | `-Harness <목록>` | 대상 하네스: `claude`·`codex`·`grok`·`opencode`·`agy`·`gemini`·`copilot`. 개별 옵션 설치에서는 `AGENTS.md`를 읽게 할 하네스를 고르며, `all`(기본)은 `claude`·`codex`·`grok`·`opencode`를 뜻한다. 단계형 설치에서는 설치할 하네스를 고르며, 기본은 Claude Code와 Codex다 |
 | `--skills` | `-Skills` | 번들 스킬만 설치(`~/.claude/skills`) |
-| `--tools orca` | `-Tools orca` | Orca 패키지·번들 스킬 설치와 서버 설정만 실행 |
 | `--keybinds` | `-Keybinds` | 줄바꿈 키바인딩만 설치 |
 | `--newline <값>` | `-Newline <값>` | 줄바꿈 키: `shift-enter`(기본) 또는 `ctrl-enter` |
 | `--omc` | `-Omc` | oh-my-claudecode 플러그인 설치와 HUD 캐시 표시 래퍼 |
@@ -269,7 +269,6 @@ PowerShell에서는 `| iex`로 인자를 넘길 수 없으므로 scriptblock으�
 | OMC, HUD | [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode) 플러그인과, 그 플러그인이 Claude Code 화면 아래에 띄우는 상태 표시줄(`statusLine`) |
 | mod | Claude Code의 화면과 동작을 바꾸는 확장. [공식 문서](https://code.claude.com/docs/en/plugins/mods/overview) |
 | CodeGraph, MCP | 코드베이스를 미리 색인해 두는 로컬 지식 그래프 도구와, 그 색인을 에이전트가 쓰게 해 주는 MCP(Model Context Protocol) 서버 |
-| Orca | 여러 코딩 에이전트를 데스크톱·모바일·원격 런타임에서 함께 다루는 도구. [stablyai/orca](https://github.com/stablyai/orca) |
 | Tailscale, tailnet | 기기들을 사설 네트워크로 묶는 VPN과, 그렇게 묶인 내 네트워크 |
 | Jarvis, herdr | 작성자의 홈 서버 모니터링 대시보드와, 코딩 에이전트를 실행하는 런타임 도구([herdr.dev](https://herdr.dev)). 직접 골랐을 때만 설치한다 |
 
@@ -280,30 +279,11 @@ PowerShell에서는 `| iex`로 인자를 넘길 수 없으므로 scriptblock으�
 설치해서 쓰는 데는 여기까지면 충분하다. 아래는 동작 원리와 설계 이유다.
 
 <details>
-<summary><b>Orca</b> — 설치 방식, 서버, 네트워크 노출, 제거</summary>
-
-## Orca
-
-`bash scripts/setup.sh --tools orca --dry-run`으로 설치 계획을 확인하고, 실제 설치에는 `--dry-run`을 뺀다. Windows에서는 `powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -Tools orca -DryRun`을 사용한다. 기존 Orca 설치가 있으면 그대로 두고, 설치 기록에 새로 넣지 않는다.
-
-새로 설치할 때는 Debian/Ubuntu의 공식 deb(`/opt/Orca`), macOS의 공식 `/Applications/Orca.app`, Windows의 공식 사용자 설치본(`%LOCALAPPDATA%\Programs\orca`)을 쓴다. Orca 공식 stable 릴리스 매니페스트(`latest*.yml`)에 적힌 크기와 SHA-512가 일치하는 패키지만 실행한다. Mac 앱은 서명과 Gatekeeper 검사를 거친 뒤 설치한다. Linux의 sudo 설치는 대화형 터미널에서만 실행한다. 번들 스킬은 기존 디렉터리·링크·잠금 파일 항목이 없는 것만 추가한다. 사용자 설정·프로젝트·페어링 데이터는 유지한다.
-
-설치는 기존 Orca 프로필로 상시 실행 서버(Linux systemd 사용자 서비스, macOS LaunchAgent, Windows 예약 작업)를 띄우고, 별도 `orca-desktop` 프로필에 데스크톱 연결을 등록하며, 모바일 페어링 링크를 서비스 디렉터리의 `pairing-codes.txt`에 보관한다. 데스크톱 앱은 `--orca-desktop`을 줄 때만 연다. 이 옵션이 없으면 Windows 바로가기를 바꾸지 않으므로, 평소처럼 연 Orca 앱은 서버와 같은 기본 프로필을 쓴다.
-
-> **네트워크 노출**: `orca serve`는 바인드 주소를 고를 수 없어 모든 인터페이스의 6768 포트에서 연결을 받고, 접속은 페어링 링크의 토큰으로만 보호된다. 그래서 설치기는 Tailscale IPv4 주소를 페어링 주소로 쓸 수 있을 때만 서버를 설정한다. 주소를 찾지 못하면 다른 IP로 대신하지 않고, 서버 설정만 경고와 함께 건너뛴다(나머지 설치는 계속된다). `tailscale up` 뒤 `--tools orca`로 다시 실행하면 서버를 설정한다. 공인 IP가 붙은 서버라면 방화벽으로 6768 포트를 막아 두고, `pairing-codes.txt`는 비밀번호처럼 다룬다.
-
-`--tools orca --uninstall`은 이 설치기가 기록한 패키지·서버 서비스와 새로 추가한 스킬만 제거한다. 실행 중인 ai-setup 서버 서비스는 먼저 멈춘다. ai-setup이 띄우지 않은 서버가 같은 프로필로 돌고 있으면 끊지 않고 제거를 멈춘다. 변경된 스킬은 보존한다. Mac에서는 앱 자체 업데이터를 쓰며, Homebrew cask를 추가로 설치하지 않는다.
-
-공식 자료: [릴리스](https://github.com/stablyai/orca/releases/latest), [번들 스킬 설치](https://www.onorca.dev/docs/cli/reference).
-
-</details>
-
-<details>
 <summary><b>update-ai</b> — 설치된 하네스·도구를 한 번에 최신으로</summary>
 
 ## update-ai
 
-저장소를 clone해 두면, 설치된 하네스(claude, codex, grok, opencode, gemini, agy, copilot)와 도구(Orca, herdr, CodeGraph), 그 플러그인을 한 번에 최신으로 올릴 수 있다. 설치되지 않은 것은 건너뛰고 새로 설치하지 않으며, npm·winget·brew·deb 중 실제로 설치한 방식으로 올린다. npm 외의 공식 설치 방식이 없는 gemini·CodeGraph(와 Windows의 opencode·copilot)는 버전마다 디렉터리를 따로 두는 npm-release 배치(`res/tools/npm_release.py`)로 깔고 올린다. CodeGraph의 `codegraph upgrade`는 호출하지 않는다.
+저장소를 clone해 두면, 설치된 하네스(claude, codex, grok, opencode, gemini, agy, copilot)와 도구(herdr, CodeGraph), 그 플러그인을 한 번에 최신으로 올릴 수 있다. 설치되지 않은 것은 건너뛰고 새로 설치하지 않으며, npm·winget·brew 중 실제로 설치한 방식으로 올린다. npm 외의 공식 설치 방식이 없는 gemini·CodeGraph(와 Windows의 opencode·copilot)는 버전마다 디렉터리를 따로 두는 npm-release 배치(`res/tools/npm_release.py`)로 깔고 올린다. CodeGraph의 `codegraph upgrade`는 호출하지 않는다.
 
 ```sh
 git clone https://github.com/thsvkd/ai-setup.git && cd ai-setup
@@ -316,7 +296,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Update-Ai.ps1 -Check
 powershell -ExecutionPolicy Bypass -File .\scripts\Update-Ai.ps1 -Only claude,codex
 ```
 
-실행 중인 세션이 있어도 올린다. 새 버전은 다른 디렉터리에 깔리고 진입점만 바뀌므로, 이미 떠 있는 세션은 재시작할 때까지 이전 버전으로 계속 돈다. 파일을 제자리에서 바꾸는 예전 설치(npm -g, winget, Orca deb), 데스크톱 앱을 닫는 Windows Orca 설치기, codex 데몬 교체만 세션이 돌면 보류로 남기며, 세션을 끊어도 되면 `--allow-interrupt`(PowerShell `-AllowInterrupt`)를 준다. 하나가 실패해도 나머지를 계속하고, 마지막에 종료 코드 1로 끝난다.
+실행 중인 세션이 있어도 올린다. 새 버전은 다른 디렉터리에 깔리고 진입점만 바뀌므로, 이미 떠 있는 세션은 재시작할 때까지 이전 버전으로 계속 돈다. 파일을 제자리에서 바꾸는 예전 설치(npm -g, winget)와 codex 데몬 교체만 세션이 돌면 보류로 남기며, 세션을 끊어도 되면 `--allow-interrupt`(PowerShell `-AllowInterrupt`)를 준다. 하나가 실패해도 나머지를 계속하고, 마지막에 종료 코드 1로 끝난다.
 
 </details>
 
@@ -614,7 +594,7 @@ res/
   omc/                      # OMC HUD 캐시 표시 래퍼
   output_style/apply.py     # outputStyle 지정 / 제거
   mods/                     # 번들 Claude Code mod 와 설치기
-  tools/                    # Orca 설치·서버 설정
+  tools/npm_release.py      # npm-release 배치 (버전별 디렉터리)
   update/update_ai.py       # update-ai 구현
   doctor/doctor.py          # --doctor 읽기 전용 점검
 scripts/

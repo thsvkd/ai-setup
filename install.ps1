@@ -113,11 +113,7 @@ function Invoke-Install {
             '^--omc$'                { $Omc = $true }
             '^--output-style$'       { $OutputStyle = $true }
             '^--mods$'               { $Mods = $true }
-            '^--tools=(.*)$'         { $Tools = $Matches[1]; $toolsGiven = $true }
-            '^--tools$' {
-                $toolsGiven = $true
-                $Tools = if ($i + 1 -lt $restTokens.Count) { [string]$restTokens[++$i] } else { "" }
-            }
+            '^--tools(=.*)?$'        { $toolsGiven = $true }
             '^--uninstall$'          { $Uninstall = $true }
             '^--dry-run$'            { $DryRun = $true }
             '^--no-onboard$'         { $NoOnboard = $true }
@@ -149,11 +145,16 @@ function Invoke-Install {
         }
     }
 
-    if ($toolsGiven -and -not $Tools) { throw "--tools requires orca." }
+    # Orca 관리는 jarvis 로 옮겨 갔다. 레포를 받기 전에 안내만 내고 끝낸다.
+    if ($toolsGiven -or $orcaDesktop) {
+        Write-Host "Orca is now managed by jarvis; ai-setup no longer installs or updates it. Use: python3 -m jarvis module orca plan --json" -ForegroundColor Red
+        if ($PSCommandPath) { exit 1 }
+        $global:LASTEXITCODE = 1
+        return
+    }
     if ($stageRun -and -not $stagesValue) { throw "--stages requires all or a comma-separated list." }
     if ($jarvisRole -and $jarvisRole -notin @("gateway", "core")) { throw "--jarvis-role must be gateway or core." }
     if (($jarvisRole -or $herdrFlag -or $ssCaps) -and -not $stageRun) { throw "--jarvis-role, --herdr, and --ss-caps require --stages." }
-    if ($toolsGiven -and $stageRun) { throw "--tools cannot be combined with --stages." }
 
     if ($Help) {
         Write-Host @"
@@ -171,7 +172,7 @@ Usage:
   & ([scriptblock]::Create((irm .../install.ps1))) --stages all --dry-run
 
 The same long options as install.sh (--hooks / --agentsmd / --harness L / --skills / --keybinds / --omc / --output-style / --mods / --newline VAL /
---stages L / --jarvis-role gateway|core / --herdr / --ss-caps / --orca-desktop /
+--stages L / --jarvis-role gateway|core / --herdr / --ss-caps /
 --uninstall / --dry-run / --no-onboard / --doctor / --help) are accepted too.
 
 Run without flags on a TTY to walk the stages. Skip, or no console, installs nothing.
@@ -221,7 +222,6 @@ Environment variables:
         # $PSBoundParameters 가 아니라 변수에서 읽는다 — 위 긴 표기(--dry-run) 해석 결과는
         # $PSBoundParameters 에 남지 않는다.
         $fwd = @{}
-        if ($toolsGiven) { $fwd['Tools'] = $Tools }
         foreach ($k in 'Hooks', 'AgentsMd', 'Uninstall', 'DryRun', 'NoOnboard', 'Keybinds', 'Skills', 'Omc', 'OutputStyle', 'Mods', 'Doctor') {
             if (Get-Variable -Name $k -ValueOnly) { $fwd[$k] = $true }
         }
@@ -236,7 +236,6 @@ Environment variables:
         if ($jarvisRole) { $extra += @('--jarvis-role', $jarvisRole) }
         if ($herdrFlag) { $extra += '--herdr' }
         if ($ssCaps) { $extra += '--ss-caps' }
-        if ($orcaDesktop) { $extra += '--orca-desktop' }
         # irm | iex 는 메모리에서 돌지만 setup.ps1 은 내려받은 파일이라, Windows 기본 실행 정책
         # (Restricted)에서 막힌다. 이 프로세스에만 Bypass 를 걸고 끝나면 원래 값으로 돌린다.
         # Linux·macOS 의 pwsh 는 실행 정책이 없고 Set-ExecutionPolicy 가 예외를 낸다.

@@ -1,7 +1,7 @@
 """선택에서 설치 액션 목록을 만드는 순수 함수 계약.
 
 covers: stage order, CodeGraph before MCP, no graft/Trail command,
-default harnesses, skipped stages, Orca skills, OMC HUD statusLine.
+default harnesses, skipped stages, OMC HUD statusLine.
 """
 import importlib.util
 import json
@@ -171,9 +171,6 @@ def test_generic_skills_are_bundled_names_without_orca_skills():
     assert "design-lab" in detail
     assert "tailnet-report" in detail
     assert "orca" not in detail
-    orca = [action for action in actions if action.stage == "tools" and "orca" in action.detail.lower()]
-    assert len(orca) == 1
-    assert "skill" in orca[0].detail.lower()
 
 
 def test_skills_stage_writes_nothing_without_claude():
@@ -758,18 +755,6 @@ def test_root_owned_global_npm_gets_a_user_node_even_when_the_version_is_enough(
     assert [a for a in stages.plan_actions(_full(stages=["base", "codegraph"]), writable) if a.stage == "base"] == []
 
 
-def test_orca_action_runs_the_repo_script_from_any_project_folder(monkeypatch, tmp_path):
-    """setup 은 프로젝트 폴더에서 돈다. Orca 스크립트 경로가 상대 경로면 그 폴더에서 찾다 실패한다."""
-    home = _home(monkeypatch, tmp_path)  # execute 는 영수증을 쓴다. 실제 홈을 건드리면 안 된다.
-    recorded = _record_runs(monkeypatch)
-    actions = [a for a in stages.plan_actions(_full(stages=["tools"]), _empty()) if "Orca" in a.detail]
-    monkeypatch.chdir(tmp_path)
-    assert stages.execute(actions, _full(stages=["tools"])) == 0
-    assert (home / ".claude" / ".claude-code-setup.json").is_file()
-    assert recorded[0][0] == sys.executable
-    assert Path(recorded[0][1]).is_file()
-
-
 def test_jarvis_installs_psutil_first_when_the_system_python_lacks_it():
     """Jarvis 유닛은 /usr/bin/python3 로 돈다. psutil 이 없으면 유닛이 시작하자마자 죽는다."""
     selection = _full(stages=["tools"], jarvis_role="gateway")
@@ -935,7 +920,7 @@ def test_setcap_execute_uses_the_ss_copy_capabilities(monkeypatch, tmp_path):
     group = "invoker-group"
     monkeypatch.setenv("AI_SETUP_EVIDENCE", str(evidence))
     monkeypatch.setenv("AI_SETUP_GROUP", group)
-    for name in ("git", "loginctl", "systemctl", "orca", "tailscale"):
+    for name in ("git", "loginctl", "systemctl", "tailscale"):
         _exe(bindir, name, "exit 0\n")
     _exe(
         bindir,
@@ -1667,10 +1652,41 @@ def test_windows_native_uninstall_removes_the_binaries_it_names(tmp_path):
     assert all(path.is_file() for path in kept)
 
 
-def test_orca_desktop_app_is_opt_in():
-    """D4: Orca 서버와 페어링은 기본, 데스크톱 GUI 는 --orca-desktop 을 줄 때만이다."""
-    plain = _blob(stages.plan_actions(_full(stages=["tools"]), _empty()))
-    desktop = _blob(stages.plan_actions(_full(stages=["tools"], orca_desktop=True), _empty()))
-    assert "orca.py" in plain and "--desktop-app" not in plain
-    assert "orca.py --desktop-app" in desktop
-    assert stages._cli(["--stages", "tools", "--orca-desktop"])["orca_desktop"] is True
+def test_orca_desktop_points_to_jarvis_and_changes_nothing(monkeypatch, tmp_path, capsys):
+    """covers: AI-66 — Orca 는 jarvis 가 관리한다. 계획을 세우기 전에 안내만 내고 exit 1 로 끝난다."""
+    home = _home(monkeypatch, tmp_path)
+    monkeypatch.setattr(stages, "probe_world", lambda *a, **k: pytest.fail("planned after --orca-desktop"))
+    recorded = _record_runs(monkeypatch)
+    assert stages.main(["--plan", "--stages", "tools", "--orca-desktop", "--project-dir", str(tmp_path)]) == 1
+    assert stages.ORCA_MOVED in capsys.readouterr().err
+    assert "python3 -m jarvis module orca plan --json" in stages.ORCA_MOVED
+    assert recorded == []
+    assert list(home.iterdir()) == []
+
+
+@pytest.mark.parametrize("args, recorded_before", [
+    (["--stages", "tools"], False),
+    (["--stages", "tools"], True),
+    (["--stages", "all", "--uninstall"], True),
+])
+def test_tools_and_full_uninstall_leave_orca_and_its_receipt_records_to_jarvis(
+        monkeypatch, tmp_path, args, recorded_before):
+    """covers: AI-67 — jarvis 의 Orca 모듈이 같은 영수증 키를 읽고 제거하므로 ai-setup 은 손대지 않는다."""
+    home = _home(monkeypatch, tmp_path)
+    claude = home / ".claude"
+    claude.mkdir()
+    orca_records = {
+        "orca": {"method": "deb", "package": "orca-ide"},
+        "orca_server": {"service_manager": "systemd-user", "state": "configured"},
+    } if recorded_before else {}
+    receipt_path = claude / ".claude-code-setup.json"
+    receipt_path.write_text(json.dumps({"tool_installs": dict(orca_records, tailscale=True)}), encoding="utf-8")
+    # 호스트에 Orca 가 깔려 있어도 결과가 같아야 한다. 예전 tools 단계는 orca 가 PATH 에 없으면 설치했다.
+    monkeypatch.setattr(stages, "_which_bins", lambda names: [])
+    recorded = _record_runs(monkeypatch)
+    project = tmp_path / "proj"
+    project.mkdir()
+    assert stages.main(["--plan", *args, "--harness", "claude", "--project-dir", str(project)]) == 0
+    assert not [argv for argv in recorded if "orca" in " ".join(argv).lower()]
+    tools = json.loads(receipt_path.read_text(encoding="utf-8"))["tool_installs"]
+    assert {key: value for key, value in tools.items() if key.startswith("orca")} == orca_records

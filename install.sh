@@ -36,7 +36,6 @@ Usage:
   curl -fsSL .../install.sh | sh -s -- --dry-run  # preview without changing anything
   curl -fsSL .../install.sh | sh -s -- --no-onboard # full install without onboarding
   curl -fsSL .../install.sh | sh -s -- --skills   # bundled skills only
-  curl -fsSL .../install.sh | sh -s -- --tools orca --dry-run # preview official Orca install
   curl -fsSL .../install.sh | sh -s -- --keybinds # newline keybinding only
   curl -fsSL .../install.sh | sh -s -- --omc      # oh-my-claudecode + cache TTL HUD
   curl -fsSL .../install.sh | sh -s -- --output-style # fluent-korean output style
@@ -49,7 +48,7 @@ Usage:
 Run without arguments to get an onboarding that picks the install scope and permission mode (auto/bypassPermissions).
 It works even when piped (stdin is the script body) by opening the controlling terminal directly;
 without a terminal (CI, etc.) nothing is installed. --no-onboard keeps the old default install.
-Other options (--orca-desktop, --jarvis-role, --herdr, --ss-caps, ...) are passed to scripts/setup.sh as is.
+Other options (--jarvis-role, --herdr, --ss-caps, ...) are passed to scripts/setup.sh as is.
 
 Environment variables:
   CLAUDE_SETUP_REPO=owner/repo   target repo (default thsvkd/ai-setup)
@@ -90,6 +89,10 @@ main() {
     for a in "$@"; do
         case "$a" in
             -h|--help) print_help; exit 0 ;;
+            # Orca 관리는 jarvis 로 옮겨 갔다. 레포를 받기 전에 안내만 내고 끝낸다.
+            --tools|--tools=*|--orca-desktop)
+                echo "Orca is now managed by jarvis; ai-setup no longer installs or updates it. Use: python3 -m jarvis module orca plan --json" >&2
+                exit 1 ;;
         esac
     done
 
