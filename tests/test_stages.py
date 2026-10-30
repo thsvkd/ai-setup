@@ -1659,11 +1659,13 @@ def test_orca_desktop_points_to_jarvis_and_changes_nothing(monkeypatch, tmp_path
     recorded = _record_runs(monkeypatch)
     assert stages.main(["--plan", "--stages", "tools", "--orca-desktop", "--project-dir", str(tmp_path)]) == 1
     assert stages.ORCA_MOVED in capsys.readouterr().err
-    assert stages.ORCA_MOVED == (
+    assert stages.orca_moved(windows=False) == (
         "Orca is now managed by jarvis; ai-setup no longer installs, updates or removes it. "
         "From a jarvis checkout run: python3 -m jarvis module orca plan --json "
         "(uninstall: module orca uninstall --json --dry-run)."
     )
+    # Windows 의 python3 은 Store alias 일 수 있다: setup.ps1·install.ps1 과 같이 py -3 을 안내한다
+    assert "run: py -3 -m jarvis module orca plan --json" in stages.orca_moved(windows=True)
     assert recorded == []
     assert list(home.iterdir()) == []
 

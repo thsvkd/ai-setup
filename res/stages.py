@@ -16,11 +16,16 @@ from pathlib import Path
 
 
 # Orca 관리는 jarvis 로 옮겨 갔다(jarvis 결정 D11·D16, ORCA-12). 예전 진입점은 이 안내만 내고 exit 1 로 끝난다.
-ORCA_MOVED = (
-    "Orca is now managed by jarvis; ai-setup no longer installs, updates or removes it. "
-    "From a jarvis checkout run: python3 -m jarvis module orca plan --json "
-    "(uninstall: module orca uninstall --json --dry-run)."
-)
+# Windows 의 python3 은 Store alias 일 수 있어 py -3 을 안내한다.
+def orca_moved(windows: bool = os.name == "nt") -> str:
+    return (
+        "Orca is now managed by jarvis; ai-setup no longer installs, updates or removes it. "
+        f"From a jarvis checkout run: {'py -3' if windows else 'python3'} -m jarvis module orca plan --json "
+        "(uninstall: module orca uninstall --json --dry-run)."
+    )
+
+
+ORCA_MOVED = orca_moved()
 
 STAGE_ORDER = (
     "base",
