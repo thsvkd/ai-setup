@@ -387,8 +387,9 @@ def codex_daemon_sync(path, allow_interrupt):
         say("  {:<14}  the running daemon ({}) was not replaced; run again with --allow-interrupt".format("daemon", server))
         return [], ["daemon-deferred"]
     was_running = status == "running"
-    if not run_step("daemon", [path, "app-server", "daemon", "update", "--yes"]):
-        return ["daemon"], []
+    # codex 0.166 은 고정된 데몬에 --from-cli 없는 update 를 인자 오류(rc=2)로 거부한다.
+    # 그래서 실패해도 멈추지 않고, 아래 버전 대조가 --from-cli 고정으로 넘어갈지 판정한다.
+    run_step("daemon", [path, "app-server", "daemon", "update", "--yes"])
     if ((codex_daemon_state(path) or {}).get("managedCodexVersion") or "") != cli:
         if not run_step("daemon-pin", [path, "app-server", "daemon", "update", "--from-cli", "--yes"]):
             return ["daemon-pin"], []

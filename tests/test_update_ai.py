@@ -398,6 +398,8 @@ elif args == "update":
 elif args == "app-server daemon version":
     print(json.dumps({"cliVersion": state["cli"], "managedCodexVersion": state["managed"],
                       "appServerVersion": state["srv"], "status": state["status"]}))
+elif args == "app-server daemon update --yes" and state.get("pin_only"):
+    sys.exit(2)
 elif args == "app-server daemon update --from-cli --yes":
     state["managed"] = state["cli"]
     if state["status"] == "running":
@@ -440,6 +442,14 @@ def test_pinned_daemon_is_moved_to_the_new_cli(tmp_path):
     result, done, state = run_codex(tmp_path, "--allow-interrupt")
     assert result.returncode == 0, result.stdout
     assert done.index("codex app-server daemon update --yes") < done.index("codex app-server daemon update --from-cli --yes"), done
+    assert state["managed"] == "2.0.0"
+
+
+def test_daemon_is_pinned_when_the_plain_update_is_rejected(tmp_path):
+    # codex 0.166 은 고정된 데몬에 --from-cli 없는 update 를 rc=2 로 거부한다.
+    result, done, state = run_codex(tmp_path, "--allow-interrupt", pin_only=True)
+    assert result.returncode == 0, result.stdout
+    assert "codex app-server daemon update --from-cli --yes" in done, done
     assert state["managed"] == "2.0.0"
 
 
