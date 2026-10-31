@@ -48,7 +48,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 # PS 7.4+ 는 네이티브 명령의 0이 아닌 종료 코드를 종료 오류로 승격시킬 수 있다 ($true 가 기본인
-# 빌드/프로필이 있음). 하위 setup.ps1/setup_hooks.ps1 은 실패를 $LASTEXITCODE 로 직접 판정하므로
+# 빌드/프로필이 있음). 하위 setup.ps1 은 실패를 $LASTEXITCODE 로 직접 판정하므로
 # 이 부트스트랩에서도 명시적으로 끈다 (자식 프로세스로 실행되는 setup.ps1 에는 전파되지 않지만,
 # 이 프로세스 안에서 직접 실행하는 Invoke-WebRequest 등에는 영향을 준다).
 $PSNativeCommandUseErrorActionPreference = $false
@@ -159,6 +159,13 @@ function Invoke-Install {
         $global:LASTEXITCODE = 1
         return
     }
+    # 훅도 jarvis 로 옮겨 갔다. 같은 방식으로 안내만 내고 끝낸다.
+    if ($Hooks) {
+        Write-Host "Hooks are now managed by jarvis; ai-setup no longer installs or removes them. From a jarvis checkout run: py -3 -m jarvis module hooks plan --json (uninstall: module hooks uninstall --json --dry-run)." -ForegroundColor Red
+        if ($PSCommandPath) { exit 1 }
+        $global:LASTEXITCODE = 1
+        return
+    }
     if ($stageRun -and -not $stagesValue) { throw "--stages requires all or a comma-separated list." }
     if ($jarvisRole -and $jarvisRole -notin @("gateway", "core")) { throw "--jarvis-role must be gateway or core." }
     if (($jarvisRole -or $herdrFlag -or $ssCaps) -and -not $stageRun) { throw "--jarvis-role, --herdr, and --ss-caps require --stages." }
@@ -169,7 +176,6 @@ ai-setup remote install bootstrap (Windows)
 
 Usage:
   irm .../install.ps1 | iex                                              # interactive onboarding → install what you pick
-  & ([scriptblock]::Create((irm .../install.ps1))) -Hooks                 # global guards/permissions only
   & ([scriptblock]::Create((irm .../install.ps1))) -AgentsMd             # AGENTS.md in the current folder
   & ([scriptblock]::Create((irm .../install.ps1))) -AgentsMd -Harness codex  # choose the harness
   & ([scriptblock]::Create((irm .../install.ps1))) -Skills               # bundled skills only
@@ -177,7 +183,7 @@ Usage:
   & ([scriptblock]::Create((irm .../install.ps1))) -NoOnboard            # old default install without onboarding
   & ([scriptblock]::Create((irm .../install.ps1))) --stages all --dry-run
 
-The same long options as install.sh (--hooks / --agentsmd / --harness L / --skills / --keybinds / --omc / --output-style / --mods / --newline VAL /
+The same long options as install.sh (--agentsmd / --harness L / --skills / --keybinds / --omc / --output-style / --mods / --newline VAL /
 --stages L / --jarvis-role gateway|core / --herdr / --ss-caps /
 --uninstall / --dry-run / --no-onboard / --help) are accepted too.
 

@@ -9,7 +9,6 @@
 #   curl --proto '=https' --tlsv1.2 -fsSL \
 #     https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.sh | sh
 #   curl ... | sh -s -- --dry-run     # 미리보기
-#   curl ... | sh -s -- --hooks       # 전역 가드/권한만
 #
 # 인자 없이 실행하면 setup.sh 가 대화형 온보딩을 띄운다. 이 스크립트는 stdin 이 파이프인
 # 채로 setup.sh 를 부르지만(위 curl | sh), 온보딩이 /dev/tty 를 직접 열기 때문에 정상
@@ -31,7 +30,6 @@ ai-setup remote install bootstrap
 
 Usage:
   curl -fsSL .../install.sh | sh                 # interactive onboarding → install what you pick
-  curl -fsSL .../install.sh | sh -s -- --hooks    # global guards/permissions only
   curl -fsSL .../install.sh | sh -s -- --agentsmd # AGENTS.md in the current folder only
   curl -fsSL .../install.sh | sh -s -- --dry-run  # preview without changing anything
   curl -fsSL .../install.sh | sh -s -- --no-onboard # full install without onboarding
@@ -44,7 +42,7 @@ Usage:
   curl -fsSL .../install.sh | sh -s -- --stages all --dry-run # preview the staged installer
   curl -fsSL .../install.sh | sh -s -- --help     # this help
 
-Run without arguments to get an onboarding that picks the install scope and permission mode (auto/bypassPermissions).
+Run without arguments to get an onboarding that picks what to install.
 It works even when piped (stdin is the script body) by opening the controlling terminal directly;
 without a terminal (CI, etc.) nothing is installed. --no-onboard keeps the old default install.
 Other options (--jarvis-role, --herdr, --ss-caps, ...) are passed to scripts/setup.sh as is.
@@ -85,7 +83,7 @@ explain_download_failure() {
 }
 
 main() {
-    # Orca·doctor 는 jarvis 로 옮겨 갔다. 레포를 받기 전에, PowerShell 처럼 --help 보다 먼저 안내만 내고 끝낸다.
+    # Orca·doctor·훅은 jarvis 로 옮겨 갔다. 레포를 받기 전에, PowerShell 처럼 --help 보다 먼저 안내만 내고 끝낸다.
     for a in "$@"; do
         case "$a" in
             --tools|--tools=*|--orca-desktop)
@@ -93,6 +91,13 @@ main() {
                 exit 1 ;;
             --doctor)
                 echo "Doctor is now run by jarvis; ai-setup no longer runs it. From a jarvis checkout run: python3 -m jarvis module doctor status --json." >&2
+                exit 1 ;;
+        esac
+    done
+    for a in "$@"; do
+        case "$a" in
+            --hooks)
+                echo "Hooks are now managed by jarvis; ai-setup no longer installs or removes them. From a jarvis checkout run: python3 -m jarvis module hooks plan --json (uninstall: module hooks uninstall --json --dry-run)." >&2
                 exit 1 ;;
         esac
     done

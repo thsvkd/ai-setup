@@ -2,7 +2,7 @@
 #
 # 전체 테스트 스위트 실행 (macOS/Linux)
 #
-#   이 저장소는 서로 다른 러너 세 개로 테스트한다 — pytest(훅 정책·git 실측·병합 엔진·셋업
+#   이 저장소는 서로 다른 러너 세 개로 테스트한다 — pytest(단계식 설치기·워커·셋업
 #   스크립트), bats(bash 셋업 스크립트), Pester(PowerShell 셋업 스크립트). 러너마다 설치
 #   여부가 달라서, 하나가 없다고 전체가 멈추거나 반대로 "없어서 안 돌았는데 통과처럼 보이는"
 #   일이 없도록 통과/실패/건너뜀을 구분해 마지막에 한 번에 보고한다.
@@ -44,7 +44,7 @@ Remaining non-option arguments are passed to pytest as is (e.g. -k, -x, --lf).
 Environment variables:
   CLAUDE_TEST_PYTHON   interpreter path for pytest (skips auto-detection when set)
 
-The pytest interpreter needs pytest and send2trash, plus tomli on Python < 3.11
+The pytest interpreter needs pytest, plus tomli on Python < 3.11
 (macOS ships python3 3.9).
 EOF
 }
@@ -93,7 +93,7 @@ resolve_pytest_python() {
     return 1
 }
 
-# --- pytest: 이 저장소의 핵심 스위트 (훅 정책 + git 실측 + 병합 엔진 + 셋업 스크립트) ---
+# --- pytest: 이 저장소의 핵심 스위트 (단계식 설치기 + 워커 + 셋업 스크립트) ---
 run_pytest_suite() {
     local py
     if [[ -n "${CLAUDE_TEST_PYTHON:-}" ]]; then
@@ -154,7 +154,7 @@ else
         command -v "$candidate" &>/dev/null && { PWSH="$candidate"; break; }
     done
     if [[ -z "$PWSH" ]]; then
-        echo "pwsh/powershell not found, skipping. — the Windows hook PowerShell path is only verified by running this suite."
+        echo "pwsh/powershell not found, skipping. — the Windows PowerShell path is only verified by running this suite."
         record "Pester (tests/*.Tests.ps1)" "skip" "pwsh not installed"
     else
         # Invoke-Pester 는 테스트가 실패해도 종료 코드 0 을 낸다 (Pester 5 는 -EnableExit 도 없다).

@@ -35,6 +35,20 @@ def doctor_moved(windows: bool = os.name == "nt") -> str:
         f"From a jarvis checkout run: {'py -3' if windows else 'python3'} -m jarvis module doctor status --json."
     )
 
+
+# 훅(가드 훅·권한 병합·rm 셰임)도 jarvis 로 옮겨 갔다(jarvis HOOKS-1~4). --hooks·-Hooks·--stages hooks 는
+# 이 안내만 내고 exit 1 로 끝난다. 영수증의 훅 기록(hook_files·권한 기록)은 jarvis 훅 모듈이 이어 읽는다.
+def hooks_moved(windows: bool = os.name == "nt") -> str:
+    return (
+        "Hooks are now managed by jarvis; ai-setup no longer installs or removes them. "
+        f"From a jarvis checkout run: {'py -3' if windows else 'python3'} -m jarvis module hooks plan --json "
+        "(uninstall: module hooks uninstall --json --dry-run)."
+    )
+
+
+HOOKS_MOVED = hooks_moved()
+
+
 STAGE_ORDER = (
     "base",
     "harness",
@@ -45,7 +59,6 @@ STAGE_ORDER = (
     "newline",
     "claude_special",
     "tools",
-    "hooks",
     "agentsmd",
 )
 
@@ -114,7 +127,6 @@ _FLAG_KEYS = (
     "output_style",
     "mods",
     "omc_hud",
-    "hooks",
     "agentsmd",
     "agentsmd_written",
     "ss_caps_done",
@@ -185,10 +197,8 @@ def _selection(selection) -> dict:
         "dry_run": bool(source.get("dry_run")),
         "uninstall": bool(source.get("uninstall")),
         "newline": source.get("newline") or "shift-enter",
-        "permission_mode": source.get("permission_mode") or "auto",
         # 명시한 값만 기록된 값을 바꾼다. 기본값으로 재실행해 사용자가 고른 값을 되돌리지 않는다.
         "newline_given": bool(source.get("newline")),
-        "permission_mode_given": bool(source.get("permission_mode")),
         "overwrite_agentsmd": bool(source.get("overwrite_agentsmd")),
         # 키가 없으면 예전 --stages all 과 같이 세 특별 설정을 모두 계획한다.
         # 온보딩이 No 를 넘긴 경우에만 False 다.
@@ -207,7 +217,6 @@ def _world(world) -> dict:
     snap["node_major"] = None if node is None else int(node)
     snap["statusline"] = source.get("statusline") or ""
     snap["newline_chord"] = source.get("newline_chord") or ""
-    snap["permission_mode"] = source.get("permission_mode") or ""
     snap["platform"] = source.get("platform") or "linux"
     return snap
 
@@ -610,21 +619,6 @@ def _tools(selection, world) -> list[Action]:
     return actions
 
 
-def _hooks(selection, world) -> list[Action]:
-    mode = selection["permission_mode"]
-    if world["hooks"] and not (selection["permission_mode_given"] and world["permission_mode"] != mode):
-        return []
-    return [
-        Action(
-            "hooks",
-            f"install guard hooks with permission mode {mode}",
-            True,
-            ("hooks", mode),
-            ("flag:hooks", f"set:permission_mode:{mode}"),
-        )
-    ]
-
-
 def _agentsmd(selection, world) -> list[Action]:
     labels = [HARNESS_LABELS.get(harness, harness) for harness in selection["harnesses"]]
     listed = ", ".join(labels)
@@ -653,7 +647,6 @@ _BUILDERS = {
     "newline": _newline,
     "claude_special": _claude_special,
     "tools": _tools,
-    "hooks": _hooks,
     "agentsmd": _agentsmd,
 }
 
@@ -665,16 +658,6 @@ def _uninstall(selection, world) -> list[Action]:
     # 기록만 지운다. 남기면 다음 설치가 AGENTS.md 단계를 영영 건너뛴다.
     if "agentsmd" in selected and world["agentsmd"]:
         actions.append(Action("agentsmd", "forget the AGENTS.md record (the file is kept)", True, (), ("clear:agentsmd",)))
-    if "hooks" in selected and world["hooks"]:
-        actions.append(
-            Action(
-                "hooks",
-                "remove guard hooks recorded by this setup",
-                True,
-                ("hooks", "--uninstall"),
-                ("clear:hooks",),
-            )
-        )
     if "claude_special" in selected:
         if world["omc_hud"]:
             actions.append(
@@ -962,8 +945,6 @@ def probe_world(project_dir: str | None = None) -> dict:
         command = status["command"]
     tool_installs = receipt.get("tool_installs") if isinstance(receipt.get("tool_installs"), dict) else {}
     keybinds = receipt.get("keybinds") if isinstance(receipt.get("keybinds"), dict) else {}
-    permissions = settings.get("permissions") if isinstance(settings.get("permissions"), dict) else {}
-    mode = permissions.get("defaultMode")
     harness_installs = receipt.get("harness_installs") if isinstance(receipt.get("harness_installs"), dict) else {}
     plugins = receipt.get("plugins") if isinstance(receipt.get("plugins"), dict) else {}
     skills = receipt.get("skills") if isinstance(receipt.get("skills"), dict) else {}
@@ -1000,12 +981,9 @@ def probe_world(project_dir: str | None = None) -> dict:
         "agentsmd_exists": (project / "AGENTS.md").is_file(),
         "newline_done": bool(receipt.get("keybinds")),
         "newline_chord": keybinds.get("newline_chord") if isinstance(keybinds.get("newline_chord"), str) else "",
-        "permission_mode": mode if isinstance(mode, str) else "",
         "output_style": bool(receipt.get("output_style")),
         "mods": bool(receipt.get("mods")),
         "omc_hud": bool(receipt.get("omc_hud")),
-        # 예전 훅 설치(merge_and_diff)의 영수증에는 hooks 키가 없고 hook_files 가 있다.
-        "hooks": bool(receipt.get("hooks") or receipt.get("hook_files")),
         "agentsmd": bool(receipt.get("agentsmd")),
     }
 
@@ -1030,7 +1008,6 @@ _RECEIPT_FLAGS = {
     "output_style": "output_style",
     "mods": "mods",
     "omc_hud": "omc_hud",
-    "hooks": "hooks",
     "agentsmd": "agentsmd",
 }
 _BANNED_COMMANDS = (
@@ -1051,9 +1028,9 @@ def _script(name: str) -> list[str]:
 
 
 def _worker(name: str, *args: str) -> list[str]:
-    """워커 스크립트 호출. Windows 에서는 --default-mode 같은 플래그를 -DefaultMode 로 바꿔 넘긴다.
+    """워커 스크립트 호출. Windows 에서는 --newline 같은 플래그를 -Newline 으로 바꿔 넘긴다.
 
-    PowerShell 은 --default-mode 를 -DefaultMode 에 묶지 못하고 조용히 버린다(고른 권한 모드가 사라진다).
+    PowerShell 은 예전 훅 워커의 --default-mode 를 -DefaultMode 에 묶지 못하고 조용히 버렸다(고른 값이 사라졌다).
     다른 플래그도 셸 버전마다 바인딩이 다를 수 있으므로 모두 PowerShell 고유 이름으로 넘긴다.
     """
     if os.name == "nt":
@@ -1297,9 +1274,6 @@ def execute(actions, selection, project_dir=None) -> int:
                 status = _merge_opencode(remove="remove" in action.argv)
             elif action.stage in done:
                 continue
-            elif action.stage == "hooks":
-                done.add("hooks")
-                status = _run(_worker("setup_hooks", *(remove or ["--default-mode", chosen["permission_mode"]])))
             elif action.stage == "newline":
                 done.add("newline")
                 status = _run(_worker("setup_keybinds", *(remove or ["--newline", chosen["newline"]])))
@@ -1342,7 +1316,6 @@ def _cli(argv) -> dict:
         "dry_run": False,
         "uninstall": False,
         "newline": None,
-        "permission_mode": None,
         "overwrite_agentsmd": False,
         "project_dir": None,
         "include_output_style": None,
@@ -1365,9 +1338,6 @@ def _cli(argv) -> dict:
             i += 2
         elif arg == "--newline" and i + 1 < len(argv):
             opts["newline"] = argv[i + 1]
-            i += 2
-        elif arg == "--permission-mode" and i + 1 < len(argv):
-            opts["permission_mode"] = argv[i + 1]
             i += 2
         elif arg == "--project-dir" and i + 1 < len(argv):
             opts["project_dir"] = argv[i + 1]
@@ -1464,6 +1434,9 @@ def main(argv) -> int:
         print("--jarvis-role must be gateway or core", file=sys.stderr)
         return 2
     stages = list(STAGE_ORDER) if opts["stages"] == "all" else [part for part in opts["stages"].split(",") if part]
+    if "hooks" in stages:
+        print(HOOKS_MOVED, file=sys.stderr)
+        return 1
     selection = {
         "stages": stages,
         "jarvis_role": None if opts["jarvis_role"] in (None, "none") else opts["jarvis_role"],
@@ -1482,8 +1455,6 @@ def main(argv) -> int:
         return 1
     if opts["newline"]:
         selection["newline"] = opts["newline"]
-    if opts["permission_mode"]:
-        selection["permission_mode"] = opts["permission_mode"]
     for name in ("include_output_style", "include_mods", "include_omc"):
         raw = opts[name]
         if raw is None:

@@ -25,8 +25,8 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent / "hooks"))
-from merge_and_diff import backup_file, write_json  # noqa: E402
+sys.path.insert(0, str(HERE.parent / "tools"))
+from json_files import backup_file, write_json  # noqa: E402
 
 MANIFEST_NAME = ".claude-code-setup.json"
 TTL_SCRIPT = "omc-hud-ttl.mjs"

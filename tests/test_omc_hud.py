@@ -382,12 +382,17 @@ def test_setup_omc_dry_run_does_not_run_claude(tmp_path, home):
 
 
 @posix_only
-def test_removing_hooks_first_keeps_omc_manifest_so_refresh_interval_is_restored_later(tmp_path, home):
+def test_hooks_uninstall_points_to_jarvis_and_keeps_the_omc_manifest(tmp_path, home):
+    """covers: AI-69 — --uninstall --hooks 는 안내만 내고 아무것도 쓰지 않는다. 뒤의 --uninstall --omc 가 그대로 되돌린다."""
     bin_dir, _ = stub_claude(tmp_path, installed=True)
     write_settings(home, {"statusLine": {"type": "command", "command": OMC_CMD}})
     assert run_setup(["--omc"], home, bin_dir).returncode == 0
+    manifest = home / ".claude" / ".claude-code-setup.json"
+    before = (manifest.read_bytes(), (home / ".claude" / "settings.json").read_bytes())
     proc = run_setup(["--uninstall", "--hooks"], home, bin_dir)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "python3 -m jarvis module hooks plan --json" in proc.stderr
+    assert (manifest.read_bytes(), (home / ".claude" / "settings.json").read_bytes()) == before
     proc = run_setup(["--uninstall", "--omc"], home, bin_dir)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert settings(home)["statusLine"] == {"type": "command", "command": OMC_CMD}

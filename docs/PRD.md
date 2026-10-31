@@ -1,6 +1,6 @@
 # PRD
 
-> 범위: 2026-10-13 에 승인한 ai-setup 편입 범위만 다룬다. 기존 기능(가드 훅, AGENTS.md, 키바인딩, 번들 스킬, OMC HUD, outputStyle, mods)은 아직 이 문서에 없다.
+> 범위: 2026-10-13 에 승인한 ai-setup 편입 범위만 다룬다. 기존 기능(AGENTS.md, 키바인딩, 번들 스킬, OMC HUD, outputStyle, mods)은 아직 이 문서에 없다. 가드 훅은 jarvis 로 옮겨 갔다(R11).
 > 근거: `.omc/research/2026-10-13-ai-setup-survey/` (장비 3대 조사와 1차 자료 확인, 로컬 전용이라 커밋하지 않는다).
 
 ## 문제
@@ -29,6 +29,7 @@ AI 하네스와 그 주변 도구의 설정이 장비마다 손으로 관리되�
 - 시크릿 값을 저장·이동·출력하지 않는다.
 - Orca 패키지·서버·스킬의 설치·업데이트·제거는 jarvis 가 맡는다(jarvis 결정 D11·D16, ORCA-12). R9 참고.
 - 하네스·도구 점검(doctor)은 jarvis 가 맡는다(jarvis 결정 D11, DOCTOR-1~7). R1 참고.
+- 가드 훅과 그 설치·권한 병합·제거는 jarvis 훅 모듈이 맡는다(jarvis HOOKS-1~4). R11 참고.
 
 ## 사용자와 시나리오
 
@@ -51,6 +52,7 @@ AI 하네스와 그 주변 도구의 설정이 장비마다 손으로 관리되�
 | R8  | 모든 쓰기 단계는 dry-run 과 uninstall 대칭을 지키고, 이 레포가 추가한 것만 영수증에 기록해 그것만 되돌린다. | 필수 |
 | R9  | Orca 는 jarvis 가 관리한다. `--tools orca`(`-Tools orca`)·`--orca-desktop`·`update-ai orca` 는 아무것도 바꾸지 않고 jarvis 를 안내한 뒤 exit 1 로 끝난다. tools 단계와 `--stages all --uninstall` 은 Orca 를 건드리지 않고, 영수증의 `tool_installs.orca`·`tool_installs.orca_server` 는 jarvis 의 Orca 모듈이 읽고 제거하도록 남긴다. | 필수 |
 | R10 | `--prune-skills`: `~/.agents/skills` 에서 lock 에 없는 실제 디렉터리를 하나씩 확인받아 휴지통으로 옮긴다. 기본 실행에는 포함되지 않는다. | 필수 |
+| R11 | 훅은 jarvis 가 관리한다(jarvis `module hooks`, HOOKS-1~4). `--hooks`(`-Hooks`)·`--stages` 의 hooks 는 아무것도 바꾸지 않고 jarvis 를 안내한 뒤 exit 1 로 끝난다. 전체 실행과 전체 제거는 훅을 건드리지 않고, 영수증의 훅 기록(`hook_files`·권한 기록)은 jarvis 훅 모듈이 이어 관리하도록 남긴다. | 필수 |
 
 ## 성공 지표
 
@@ -63,7 +65,7 @@ AI 하네스와 그 주변 도구의 설정이 장비마다 손으로 관리되�
 - D1 (Q1). uninstall 은 완전 대칭이다. 이 레포가 설치해 영수증에 기록한 하네스·도구도 제거한다. 원래 있던 것은 제거하지 않는다.
 - D2 (Q2). update-ai 는 Python 한 벌로 구현하고, `update-ai.sh`·`Update-Ai.ps1` 은 얇은 래퍼로 둔다.
 - D3 (Q6). sudo 가 필요한 단계는 허용한다. 실행 전에 명령을 보여 주고 sudo 프롬프트로 승인받으며, 대화형이 아니면 건너뛴다.
-- D4 (Q8, 2026-10-23 개정). 인자 없이 TTY 에서 실행하면 단계를 순서대로 걷고, 각 단계는 기본 예다. 하네스 기본은 Claude Code 와 Codex 이고 grok·agy·opencode·gemini·copilot 은 목록에만 있다. Skip 하거나 산책을 마치면 카테고리 허브가 열리고, 영수증이 있는 머신은 허브부터 연다(2026-10-23 추가). 허브의 Apply 만 설치하고, Quit 이거나 TTY 가 없으면 아무것도 설치하지 않는다. 마우스 조작은 이번 범위 밖이다. `--no-onboard` 는 예전 기본 설치(훅, AGENTS.md, 키바인드, 번들 스킬)를 유지한다.
+- D4 (Q8, 2026-10-23 개정). 인자 없이 TTY 에서 실행하면 단계를 순서대로 걷고, 각 단계는 기본 예다. 하네스 기본은 Claude Code 와 Codex 이고 grok·agy·opencode·gemini·copilot 은 목록에만 있다. Skip 하거나 산책을 마치면 카테고리 허브가 열리고, 영수증이 있는 머신은 허브부터 연다(2026-10-23 추가). 허브의 Apply 만 설치하고, Quit 이거나 TTY 가 없으면 아무것도 설치하지 않는다. 마우스 조작은 이번 범위 밖이다. `--no-onboard` 는 예전 기본 설치(AGENTS.md, 키바인드, 번들 스킬)를 유지한다. 훅은 2026-11-01 jarvis 로 옮겨 빠졌다(R11).
 - D5 (Q9). 하네스·도구를 제거할 때 설정·인증 디렉터리(`~/.claude`, `~/.codex` 등)는 남긴다. 패키지·바이너리만 제거한다.
 - D8 (Q3). 플러그인 단계를 켰을 때 기본으로 선택되는 목록은 oh-my-claudecode, fluent-korean, ponytail, codex, commit-commands, context7, typescript-lsp, pyright-lsp 이다.
 - D7 (Q7). lock 밖에 남은 스킬은 doctor(지금은 jarvis)가 보고만 한다. 정리는 사용자가 명시적으로 고르는 별도 옵션(`--prune-skills`)으로만 제공한다.

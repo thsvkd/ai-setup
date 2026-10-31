@@ -11,11 +11,9 @@ scripts/setup.sh (와 setup.ps1) 가 **인자 없이** 호출됐을 때만 실�
                                1 일 때는 다른 키를 쓰지 않는다.
   STAGES=base,harness,...      켠 단계, stages.STAGE_ORDER 순서. 비어 있으면 SKIP=1 로 쓴다
   HARNESSES=claude,codex,...   선택한 하네스
-  DEFAULT_MODE=auto|bypassPermissions
-                               hooks 단계가 켜졌을 때만 기록. 재실행에서 메뉴가 보여 줄 수 없는
-                               기록값(acceptEdits·plan·없음)을 바꾸지 않았으면 기록하지 않는다
   NEWLINE_CHORD=shift-enter|ctrl-enter
-                               줄바꿈 키 (newline 단계가 켜졌을 때만 기록, 위와 같은 재실행 규칙)
+                               줄바꿈 키 (newline 단계가 켜졌을 때만 기록). 재실행에서 기록값을
+                               바꾸지 않았으면 기록하지 않는다
   JARVIS_ROLE=none|gateway|core
   HERDR=0|1
   OMC=0|1                      이미 OMC HUD 인 statusLine 의 캐시 래퍼
@@ -58,7 +56,6 @@ EXIT_NON_INTERACTIVE = 2
 EXIT_CANCELLED = 130
 
 SCOPE_ALL = "all"
-SCOPE_HOOKS = "hooks"
 SCOPE_AGENTSMD = "agentsmd"
 
 # Which harnesses the instruction files can be installed for, and what each one
@@ -81,10 +78,10 @@ DEFAULT_HARNESSES = ("claude", "codex")
 # 단계 실행 순서. stages.STAGE_ORDER 와 같아야 한다 — STAGES 답을 이 순서로 쓴다.
 STAGE_ORDER = (
     "base", "harness", "plugins", "skills", "codegraph", "mcp",
-    "newline", "claude_special", "tools", "hooks", "agentsmd",
+    "newline", "claude_special", "tools", "agentsmd",
 )
 
-# 허브의 카테고리. 내부 단계는 11개지만 codegraph 와 mcp 는 한 화면에서 고른다.
+# 허브의 카테고리. 내부 단계는 10개지만 codegraph 와 mcp 는 한 화면에서 고른다.
 CATEGORIES = (
     ("base", "Base", "git, Python, Node if a later item needs it"),
     ("harness", "Harnesses", "which harnesses, and whether to install missing ones"),
@@ -94,7 +91,6 @@ CATEGORIES = (
     ("newline", "Newline key", "the key that inserts a newline"),
     ("claude_special", "Claude extras", "output style, mods, OMC HUD wrap"),
     ("tools", "Tools", "Tailscale, Jarvis, herdr"),
-    ("hooks", "Guard hooks", "with the permission mode"),
     ("agentsmd", "AGENTS.md", "in the current directory"),
 )
 
@@ -189,7 +185,6 @@ def default_state():
         "omc": True,
         "jarvis_role": "none",
         "herdr": False,
-        "mode": "auto",
         "overwrite": False,
     }
 
@@ -295,30 +290,6 @@ def _edit_tools(tui, state, project_dir):
     return True
 
 
-def _edit_hooks(tui, state, project_dir):
-    if not _include(tui, state, "hooks", "Include guard hooks?"):
-        return False
-    if "hooks" not in state["stages"]:
-        return True
-    options = [
-        ("auto", "auto", "safe actions auto-approved, only risky ones ask · recommended"),
-        ("bypassPermissions", "bypassPermissions",
-         "skip all permission prompts, guard hooks still run"),
-    ]
-    mode = tui.select("Which permission mode?", options,
-                      initial=[o[0] for o in options].index(state["mode"]))
-    if _stopped(mode):
-        return False
-    state["mode"] = mode
-    if mode == "bypassPermissions":
-        tui.warn([
-            "bypassPermissions skips all of Claude Code's permission prompts.",
-            "This repo's guard hooks (rm to trash, git backup, etc.) still run,",
-            "but commands the hooks do not judge run without confirmation.",
-        ])
-    return True
-
-
 def _edit_agentsmd(tui, state, project_dir):
     if not _include(tui, state, "agentsmd", "Include AGENTS.md in the current directory?"):
         return False
@@ -345,7 +316,6 @@ EDITORS = {
     "newline": _edit_newline,
     "claude_special": _edit_claude_special,
     "tools": _edit_tools,
-    "hooks": _edit_hooks,
     "agentsmd": _edit_agentsmd,
 }
 
@@ -372,8 +342,6 @@ def _summary(state, category):
         return ", ".join(parts) or "on · nothing chosen"
     if category == "tools":
         return "Jarvis: %s%s" % (state["jarvis_role"], " · herdr" if state["herdr"] else "")
-    if category == "hooks":
-        return state["mode"]
     return "on"
 
 
@@ -406,12 +374,9 @@ def _answers(state, plan):
     for key in ("omc", "output_style", "mods"):
         answers[key.upper()] = "1" if special and state[key] else "0"
     answers["OVERWRITE_AGENTSMD"] = "1" if state["overwrite"] and "agentsmd" in state["stages"] else "0"
-    # 메뉴가 보여 줄 수 없는 기록값(acceptEdits·plan·없음) 자리에서는 시작값이 기본값이다. 그 기본값을 그대로 넘기면
-    # setup 이 명시한 값으로 전달해 기록값을 되돌리므로, 바꾸지 않았으면 넘기지 않는다. 메뉴가 보여 준 기록값은 넘긴다.
-    # 훅이 이미 깔렸으면 같은 값이라 계획이 없고, 아직 안 깔렸으면 그 값으로 깔아야 한다.
+    # 기록값이 없는 자리에서는 시작값이 기본값이다. 그 기본값을 그대로 넘기면 setup 이 명시한 값으로
+    # 전달해 기록값을 되돌리므로, 바꾸지 않았으면 넘기지 않는다. 메뉴가 보여 준 기록값은 넘긴다.
     unchanged = state.get("unchanged", {})
-    if "hooks" in state["stages"] and unchanged.get("mode") != state["mode"]:
-        answers["DEFAULT_MODE"] = state["mode"]
     if "newline" in state["stages"] and unchanged.get("chord") != state["chord"]:
         answers["NEWLINE_CHORD"] = state["chord"]
     return answers
@@ -449,16 +414,12 @@ def _read_json(path):
 
 
 def recorded_choices():
-    """이전 설치가 남긴 권한 모드·줄바꿈 키. 메뉴가 이 값에서 시작해야 그대로 둔 Apply 가 사용자의 값을 되돌리지 않는다."""
+    """이전 설치가 남긴 줄바꿈 키. 메뉴가 이 값에서 시작해야 그대로 둔 Apply 가 사용자의 값을 되돌리지 않는다."""
     keybinds = _read_json(os.path.join(_claude_dir(), ".claude-code-setup.json")).get("keybinds")
-    permissions = _read_json(os.path.join(_claude_dir(), "settings.json")).get("permissions")
     chord = keybinds.get("newline_chord") if isinstance(keybinds, dict) else None
-    mode = permissions.get("defaultMode") if isinstance(permissions, dict) else None
     choices = {}
     if chord in ("shift-enter", "ctrl-enter"):
         choices["chord"] = chord
-    if mode in ("auto", "bypassPermissions"):    # _edit_hooks 가 고를 수 있는 값만
-        choices["mode"] = mode
     return choices
 
 
@@ -483,7 +444,7 @@ def ask_all(tui, project_dir, first_run=True):
     recorded = recorded_choices()
     state.update(recorded)
     if not first_run:
-        state["unchanged"] = {key: state[key] for key in ("mode", "chord") if key not in recorded}
+        state["unchanged"] = {key: state[key] for key in ("chord",) if key not in recorded}
         return _hub(tui, state, project_dir, 0)
 
     start = tui.select(

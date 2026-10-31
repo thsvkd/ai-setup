@@ -30,7 +30,6 @@ STAGE_ORDER = (
     "newline",
     "claude_special",
     "tools",
-    "hooks",
     "agentsmd",
 )
 PLUGINS = (
@@ -75,7 +74,6 @@ def _full(**overrides):
         "dry_run": False,
         "uninstall": False,
         "newline": "shift-enter",
-        "permission_mode": "auto",
         "overwrite_agentsmd": False,
     }
     selection.update(overrides)
@@ -102,7 +100,6 @@ def _empty(**overrides):
         "output_style": False,
         "mods": False,
         "omc_hud": False,
-        "hooks": False,
         "agentsmd": False,
     }
     world.update(overrides)
@@ -251,36 +248,28 @@ def test_overwriting_agentsmd_is_planned_once():
     assert not any(action.writes for action in second)
 
 
-def test_explicit_newline_or_mode_change_is_planned_but_defaults_keep_the_recorded_value():
-    world = _empty(newline_done=True, newline_chord="ctrl-enter", hooks=True, permission_mode="bypassPermissions")
-    picked = ["newline", "hooks"]
-    defaults = stages.plan_actions(_full(stages=picked, newline=None, permission_mode=None), world)
+def test_explicit_newline_change_is_planned_but_the_default_keeps_the_recorded_value():
+    world = _empty(newline_done=True, newline_chord="ctrl-enter")
+    picked = ["newline"]
+    defaults = stages.plan_actions(_full(stages=picked, newline=None), world)
     assert not any(action.writes for action in defaults)
-    same = stages.plan_actions(_full(stages=picked, newline="ctrl-enter", permission_mode="bypassPermissions"), world)
+    same = stages.plan_actions(_full(stages=picked, newline="ctrl-enter"), world)
     assert not any(action.writes for action in same)
-    changed = stages.plan_actions(_full(stages=picked, newline="shift-enter", permission_mode="auto"), world)
-    assert sorted(action.stage for action in changed if action.writes) == ["hooks", "newline"]
-    again = stages.plan_actions(_full(stages=picked, newline="shift-enter", permission_mode="auto"),
-                                stages.world_after(world, changed))
+    changed = stages.plan_actions(_full(stages=picked, newline="shift-enter"), world)
+    assert [action.stage for action in changed if action.writes] == ["newline"]
+    again = stages.plan_actions(_full(stages=picked, newline="shift-enter"), stages.world_after(world, changed))
     assert not any(action.writes for action in again)
 
 
-def test_probe_reads_hooks_from_the_old_manifest_and_the_recorded_choices(monkeypatch, tmp_path):
-    """예전 설치의 훅 영수증에는 hooks 키가 없고 hook_files 가 있다. 이것을 못 보면 --uninstall 이 훅을 남긴다."""
+def test_probe_reads_the_recorded_newline_chord(monkeypatch, tmp_path):
     home = _home(monkeypatch, tmp_path)
     (home / ".claude").mkdir()
     (home / ".claude" / ".claude-code-setup.json").write_text(json.dumps({
-        "version": 1, "hooks_dir": "~/.claude/hooks", "hook_files": ["danger_guard.py"],
         "keybinds": {"newline_chord": "ctrl-enter"},
     }), encoding="utf-8")
-    (home / ".claude" / "settings.json").write_text(
-        json.dumps({"permissions": {"defaultMode": "bypassPermissions"}}), encoding="utf-8")
     world = stages.probe_world(str(tmp_path))
-    assert world["hooks"] is True
+    assert world["newline_done"] is True
     assert world["newline_chord"] == "ctrl-enter"
-    assert world["permission_mode"] == "bypassPermissions"
-    removal = stages.plan_actions(_full(stages=["hooks"], uninstall=True), world)
-    assert [action.argv for action in removal] == [("hooks", "--uninstall")]
 
 
 def test_jarvis_herdr_and_setcap_follow_explicit_choice():
@@ -311,7 +300,6 @@ def test_uninstall_removes_only_recorded_units_and_packages():
         bins=["tailscale", "codegraph"],
         mcp_registered=["claude"],
         receipt_harnesses=["claude"],
-        hooks=True,
         agentsmd=True,
     )
     actions = stages.plan_actions(_full(uninstall=True), owned)
@@ -378,16 +366,14 @@ def test_existing_harness_is_not_reinstalled_or_claimed():
     assert "codex" in after["receipt_harnesses"]
 
 
-def test_base_prerequisites_and_hooks_and_agentsmd():
+def test_base_prerequisites_and_agentsmd_without_hooks():
     actions = stages.plan_actions(_full(), _empty())
     base = [action.detail for action in actions if action.stage == "base"]
     base_blob = "\n".join(base)
     assert "git" in base_blob.lower()
     assert "GitHub" not in base_blob
     assert "Python 3.9+" in base_blob
-    hooks = [action for action in actions if action.stage == "hooks"]
-    assert len(hooks) == 1
-    assert "auto" in hooks[0].detail
+    assert not [action for action in actions if action.stage == "hooks"]    # 훅은 jarvis 가 맡는다
     agents = [action for action in actions if action.stage == "agentsmd"]
     assert len(agents) == 1
     assert "Claude Code" in agents[0].detail
@@ -1514,7 +1500,7 @@ def test_stage_uninstall_runs_each_worker_in_uninstall_mode(monkeypatch, tmp_pat
     home = _home(monkeypatch, tmp_path)
     (home / ".claude").mkdir()
     (home / ".claude" / ".claude-code-setup.json").write_text(json.dumps({
-        "hooks": True, "keybinds": {"claude": True}, "agentsmd": True, "skills": {"design-lab": True},
+        "keybinds": {"claude": True}, "agentsmd": True, "skills": {"design-lab": True},
         "output_style": {"set": True}, "mods": {"installed": True}, "omc_hud": {"wrapped": True},
     }), encoding="utf-8")
     (home / ".claude" / ".claude-code-setup-skills.json").write_text(
@@ -1524,30 +1510,28 @@ def test_stage_uninstall_runs_each_worker_in_uninstall_mode(monkeypatch, tmp_pat
     project = tmp_path / "proj"
     project.mkdir()
     (project / "AGENTS.md").write_text("mine\n", encoding="utf-8")
-    status = stages.main(["--plan", "--uninstall", "--stages", "skills,newline,claude_special,hooks,agentsmd",
+    status = stages.main(["--plan", "--uninstall", "--stages", "skills,newline,claude_special,agentsmd",
                           "--harness", "claude", "--project-dir", str(project)])
     assert status == 0
     scripts = [argv for argv in recorded if any(str(part).endswith((".sh", ".ps1")) for part in argv)]
     names = sorted(Path(str(next(p for p in argv if str(p).endswith((".sh", ".ps1"))))).stem for argv in scripts)
-    assert names == ["setup_hooks", "setup_keybinds", "setup_mods", "setup_omc", "setup_output_style", "setup_skills"]
+    assert names == ["setup_keybinds", "setup_mods", "setup_omc", "setup_output_style", "setup_skills"]
     flag = "-Uninstall" if os.name == "nt" else "--uninstall"    # _worker 가 PowerShell 이름으로 바꾼다
     assert all(flag in argv for argv in scripts), scripts
     # AGENTS.md 는 사용자가 고쳐 쓰는 프로젝트 파일이다. 제거 계약이 없으므로 파일은 두고 기록만 지운다.
     receipt = json.loads((home / ".claude" / ".claude-code-setup.json").read_text(encoding="utf-8"))
     assert "agentsmd" not in receipt
-    assert not any(key in receipt for key in ("hooks", "keybinds", "output_style", "mods", "omc_hud"))
+    assert not any(key in receipt for key in ("keybinds", "output_style", "mods", "omc_hud"))
 
 
 def test_windows_workers_get_powershell_parameter_names(monkeypatch):
-    """PowerShell 은 --default-mode 를 -DefaultMode 에 묶지 못한다. Windows 에서는 고유 이름으로 넘긴다."""
+    """PowerShell 은 긴 표기를 파라미터에 묶지 못할 수 있다. Windows 에서는 고유 이름으로 넘긴다."""
     monkeypatch.setattr(stages, "_script", lambda name: [name])
     # os.name 을 nt 로 두는 동안 Path 를 만들면 WindowsPath 가 되어 Linux 에서 실패한다. PATH 갱신은 뺀다.
     monkeypatch.setattr(stages, "_ensure_user_bin_on_path", lambda: None)
     recorded = _record_runs(monkeypatch)
-    selection = {"harnesses": ["claude", "codex"], "permission_mode": "bypassPermissions",
-                 "newline": "ctrl-enter", "overwrite_agentsmd": True}
+    selection = {"harnesses": ["claude", "codex"], "newline": "ctrl-enter", "overwrite_agentsmd": True}
     actions = [
-        stages.Action("hooks", "", True, ("hooks", "bypassPermissions")),
         stages.Action("newline", "", True, ("newline", "ctrl-enter")),
         stages.Action("agentsmd", "", True, ("agentsmd",)),
         stages.Action("skills", "", True, ("install-skills", "--uninstall")),
@@ -1558,8 +1542,7 @@ def test_windows_workers_get_powershell_parameter_names(monkeypatch):
     finally:
         monkeypatch.undo()
     assert status == 0
-    assert recorded[:4] == [
-        ("setup_hooks", "-DefaultMode", "bypassPermissions"),
+    assert recorded[:3] == [
         ("setup_keybinds", "-Newline", "ctrl-enter"),
         ("setup_agentsmd", "-Harness", "claude,codex", "-Force"),
         ("setup_skills", "-Uninstall"),
@@ -1569,23 +1552,9 @@ def test_windows_workers_get_powershell_parameter_names(monkeypatch):
 def test_a_user_value_equal_to_uninstall_does_not_flip_an_install(monkeypatch):
     monkeypatch.setattr(stages, "_script", lambda name: [name])
     recorded = _record_runs(monkeypatch)
-    selection = {"harnesses": ["claude"], "permission_mode": "--uninstall", "newline": "shift-enter"}
-    assert stages.execute([stages.Action("hooks", "", True, ("hooks", "--uninstall-typo", "--uninstall"))], selection) == 0
-    assert "--uninstall" not in recorded[0][1:2]
-
-
-def test_setup_hooks_ps1_binds_the_permission_mode_parameter(tmp_path):
-    shell = shutil.which("powershell") or shutil.which("pwsh")
-    if not shell:
-        pytest.skip("PowerShell is unavailable")
-    text = (ROOT / "scripts" / "setup_hooks.ps1").read_text(encoding="utf-8-sig").replace("\r\n", "\n")
-    start = text.index("param(")
-    end = text.index(")\n", start)
-    probe = tmp_path / "probe.ps1"
-    probe.write_text(text[start:end + 1] + "\nWrite-Output \"MODE=$DefaultMode\"\n", encoding="utf-8")
-    out = subprocess.run([shell, "-NoProfile", "-File", str(probe), "-DefaultMode", "bypassPermissions"],
-                         capture_output=True, text=True, timeout=60).stdout
-    assert "MODE=bypassPermissions" in out
+    selection = {"harnesses": ["claude"], "newline": "--uninstall"}
+    assert stages.execute([stages.Action("newline", "", True, ("newline", "--uninstall-typo", "--uninstall"))], selection) == 0
+    assert recorded[0] == ("setup_keybinds", "--newline", "--uninstall")
 
 
 def test_harness_all_expands_to_every_harness_instead_of_crashing():
@@ -1705,3 +1674,76 @@ def test_tools_and_full_uninstall_leave_orca_and_its_receipt_records_to_jarvis(
     assert not [argv for argv in recorded if "orca" in " ".join(argv).lower()]
     tools = json.loads(receipt_path.read_text(encoding="utf-8"))["tool_installs"]
     assert {key: value for key, value in tools.items() if key.startswith("orca")} == orca_records
+
+
+def test_hooks_pointer_names_the_jarvis_hooks_module():
+    """covers: AI-69 — 훅은 jarvis 로 옮겨 갔다. setup·install 스크립트의 --hooks·-Hooks 안내가 이 문구를 쓴다."""
+    assert stages.hooks_moved(windows=False) == (
+        "Hooks are now managed by jarvis; ai-setup no longer installs or removes them. "
+        "From a jarvis checkout run: python3 -m jarvis module hooks plan --json "
+        "(uninstall: module hooks uninstall --json --dry-run)."
+    )
+    assert "run: py -3 -m jarvis module hooks plan --json" in stages.hooks_moved(windows=True)
+    assert "hooks" not in stages.STAGE_ORDER
+
+
+@pytest.mark.parametrize("args", [
+    ["--stages", "hooks"],
+    ["--stages", "newline,hooks", "--dry-run"],
+    ["--stages", "hooks", "--uninstall"],
+])
+def test_hooks_stage_points_to_jarvis_and_writes_nothing(monkeypatch, tmp_path, capsys, args):
+    """covers: AI-69 — 계획을 세우기 전에 안내만 내고 exit 1 로 끝난다. 영수증의 훅 기록은 그대로다."""
+    home = _home(monkeypatch, tmp_path)
+    claude = home / ".claude"
+    claude.mkdir()
+    receipt = claude / ".claude-code-setup.json"
+    receipt.write_text(json.dumps({"hooks": True, "hook_files": ["danger_guard.py"]}), encoding="utf-8")
+    before = sorted(path.relative_to(home) for path in home.rglob("*"))
+    monkeypatch.setattr(stages, "probe_world", lambda *a, **k: pytest.fail("planned after --stages hooks"))
+    recorded = _record_runs(monkeypatch)
+    monkeypatch.setenv("PATH", os.environ["PATH"])    # main 이 ~/.local/bin 을 앞에 붙인다. 테스트 뒤 되돌린다.
+    assert stages.main(["--plan", *args, "--project-dir", str(tmp_path)]) == 1
+    assert stages.HOOKS_MOVED in capsys.readouterr().err
+    assert recorded == []
+    assert sorted(path.relative_to(home) for path in home.rglob("*")) == before
+    assert json.loads(receipt.read_text(encoding="utf-8")) == {"hooks": True, "hook_files": ["danger_guard.py"]}
+
+
+@pytest.mark.parametrize("args", [
+    ["--stages", "all"],
+    ["--stages", "all", "--uninstall"],
+])
+def test_full_run_and_full_uninstall_leave_hooks_and_their_receipt_records_to_jarvis(
+        monkeypatch, tmp_path, capsys, args):
+    """covers: AI-69 — 전체 단계는 hooks 단계 없이 돌고, jarvis 훅 모듈이 이어 읽는 영수증 기록을 남긴다."""
+    home = _home(monkeypatch, tmp_path)
+    claude = home / ".claude"
+    (claude / "hooks").mkdir(parents=True)
+    guard = claude / "hooks" / "danger_guard.py"
+    guard.write_text("# installed hook\n", encoding="utf-8")
+    hook_records = {
+        "version": 1,
+        "hooks_dir": "~/.claude/hooks",
+        "hook_files": ["danger_guard.py", "shims/rm"],
+        "added_allow": ["Bash"],
+        "default_mode_before": "acceptEdits",
+        "default_mode_after": "auto",
+        "default_mode_changed": True,
+        "hooks": True,
+    }
+    receipt_path = claude / ".claude-code-setup.json"
+    receipt_path.write_text(json.dumps(hook_records), encoding="utf-8")
+    monkeypatch.setattr(stages, "_which_bins", lambda names: [])
+    monkeypatch.setenv("PATH", os.environ["PATH"])    # main 이 ~/.local/bin 을 앞에 붙인다. 테스트 뒤 되돌린다.
+    recorded = _record_runs(monkeypatch)
+    project = tmp_path / "proj"
+    project.mkdir()
+    assert stages.main(["--plan", *args, "--harness", "claude", "--project-dir", str(project)]) == 0
+    plan = capsys.readouterr().out
+    assert "hooks" not in plan.split()
+    assert "guard hooks" not in plan
+    assert not [argv for argv in recorded if any("setup_hooks" in str(part) for part in argv)]
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert {key: receipt.get(key) for key in hook_records} == hook_records
+    assert guard.read_text(encoding="utf-8") == "# installed hook\n"

@@ -4,12 +4,11 @@
 #
 #   인자 없이 실행하면 대화형 온보딩(res/onboard.py)이 단계 산책을 띄운다. 산책 뒤나 Skip 은
 #   카테고리 허브로 가고, 허브의 Apply 만 설치한다. Quit 이나 터미널 없음은 아무것도 설치하지 않는다. 플래그를 주면 온보딩을 건너뛴다.
-#   --no-onboard 는 예전 기본 설치(훅+AGENTS.md+키바인드+스킬)를 유지한다.
+#   --no-onboard 는 예전 기본 설치(AGENTS.md+키바인드+스킬)를 유지한다. 훅은 jarvis 가 맡는다.
 #   --stages 는 순수 액션 목록(res/stages.py)을 따른다.
 #
 # 사용법:
 #   bash setup.sh                       # 온보딩 → 선택대로 실행
-#   bash setup.sh --hooks                # 훅/권한만 (온보딩 없음)
 #   bash setup.sh --agentsmd             # AGENTS.md만 (온보딩 없음)
 #   bash setup.sh --keybinds             # 줄바꿈 키바인딩만 (온보딩 없음)
 #   bash setup.sh --omc                  # oh-my-claudecode + 캐시 TTL HUD 만 (온보딩 없음)
@@ -35,7 +34,6 @@ Usage: bash setup.sh [options]
                 with --stages, clone and register Jarvis for that role
   --herdr       with --stages, include herdr (off unless chosen)
   --ss-caps     with --stages, grant the Jarvis ss capability
-  --hooks       install global guard hooks + permissions only (~/.claude)
   --agentsmd    install project instructions into the current folder only
   --harness L   harnesses to install instructions for (comma-separated: claude,codex,grok,opencode,agy,gemini,copilot,all)
                 choosing claude also installs CLAUDE.md. Default is all.
@@ -52,10 +50,10 @@ Usage: bash setup.sh [options]
                 · cache-ttl-status: shows the remaining prompt-cache time in a status line below the prompt
                 · korean-reply-rewrite: after a Korean prompt, stores English replies in Korean so later replies stay Korean
                 (not included in the default install without a scope)
-  --uninstall   remove guard hooks + managed keybindings/skills + cache TTL HUD + outputStyle + mod settings
-                plus the permissions this setup added (your own entries and the OMC/fluent-korean plugins are kept).
+  --uninstall   remove managed keybindings/skills + cache TTL HUD + outputStyle + mod settings
+                (your own entries and the OMC/fluent-korean plugins are kept). Guard hooks are left to jarvis.
                 For a staged install (no options or --stages) name the stages, e.g.
-                --stages hooks,newline,claude_special --uninstall (settings only).
+                --stages newline,claude_special --uninstall (settings only).
                 --stages all --uninstall also removes the programs this setup installed.
   --dry-run     print the change plan only, without changing anything
   --no-onboard  run with defaults without interactive onboarding
@@ -64,18 +62,16 @@ Usage: bash setup.sh [options]
 What onboarding lets you choose:
   · Walk the stages, or Skip straight to the category menu (hub)
   · a machine that already has a receipt opens the hub directly
-  · each stage, on by default: base, harness, plugins, skills, codegraph, mcp, newline, claude_special, tools, hooks, agentsmd
+  · each stage, on by default: base, harness, plugins, skills, codegraph, mcp, newline, claude_special, tools, agentsmd
   · harnesses (default Claude Code and Codex)
   · newline key (Shift+Enter / Ctrl+Enter)
   · Claude specials when Claude Code is selected
   · Jarvis role (default: do not install) and herdr (default off)
-  · permission mode (auto / bypassPermissions)
   · whether to overwrite an existing AGENTS.md (asked only when the file exists)
   · in the hub: Apply, Preview the plan (--dry-run), or Quit
 EOF
 }
 
-RUN_HOOKS=0
 RUN_AGENTSMD=0
 RUN_KEYBINDS=0
 RUN_SKILLS=0
@@ -86,7 +82,6 @@ DRY_RUN=0
 UNINSTALL=0
 NO_ONBOARD=0
 # 온보딩이 채우는 값들. 비어 있으면 워커가 각자의 기본값을 쓴다.
-DEFAULT_MODE=""
 FORCE_AGENTSMD=0
 HARNESSES=""
 NEWLINE_CHORD=""
@@ -107,6 +102,8 @@ INCLUDE_OMC=
 ORCA_MOVED="Orca is now managed by jarvis; ai-setup no longer installs, updates or removes it. From a jarvis checkout run: python3 -m jarvis module orca plan --json (uninstall: module orca uninstall --json --dry-run)."
 # doctor 도 jarvis 로 옮겨 갔다(res/stages.py 의 doctor_moved 와 같은 문구).
 DOCTOR_MOVED="Doctor is now run by jarvis; ai-setup no longer runs it. From a jarvis checkout run: python3 -m jarvis module doctor status --json."
+# 훅도 jarvis 로 옮겨 갔다(res/stages.py 의 hooks_moved 와 같은 문구). --stages hooks 는 stages.py 가 같은 안내로 막는다.
+HOOKS_MOVED="Hooks are now managed by jarvis; ai-setup no longer installs or removes them. From a jarvis checkout run: python3 -m jarvis module hooks plan --json (uninstall: module hooks uninstall --json --dry-run)."
 
 for arg in "$@"; do
     case "$arg" in
@@ -114,11 +111,15 @@ for arg in "$@"; do
         --doctor) echo "$DOCTOR_MOVED" >&2; exit 1 ;;
     esac
 done
+for arg in "$@"; do
+    case "$arg" in
+        --hooks) echo "$HOOKS_MOVED" >&2; exit 1 ;;
+    esac
+done
 
 HAD_ARGS=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --hooks) RUN_HOOKS=1; HAD_ARGS=1; shift ;;
         --agentsmd) RUN_AGENTSMD=1; HAD_ARGS=1; shift ;;
         --skills) RUN_SKILLS=1; HAD_ARGS=1; shift ;;
         --keybinds) RUN_KEYBINDS=1; HAD_ARGS=1; shift ;;
@@ -311,13 +312,9 @@ run_onboarding() {
         case "$key" in
             SCOPE)
                 case "$value" in
-                    all) RUN_HOOKS=1; RUN_AGENTSMD=1; RUN_KEYBINDS=1; RUN_SKILLS=1 ;;
-                    hooks) RUN_HOOKS=1 ;;
+                    all) RUN_AGENTSMD=1; RUN_KEYBINDS=1; RUN_SKILLS=1 ;;
+                    hooks) echo "$HOOKS_MOVED" >&2; exit 1 ;;
                     agentsmd) RUN_AGENTSMD=1 ;;
-                esac ;;
-            DEFAULT_MODE)
-                case "$value" in
-                    auto|bypassPermissions|default|acceptEdits|plan) DEFAULT_MODE="$value" ;;
                 esac ;;
             NEWLINE_CHORD)
                 case "$value" in
@@ -384,7 +381,6 @@ run_stage_plan() {
     [[ "$DRY_RUN" -eq 1 ]] && args+=(--dry-run)
     [[ "$UNINSTALL" -eq 1 ]] && args+=(--uninstall)
     [[ -n "$NEWLINE_CHORD" ]] && args+=(--newline "$NEWLINE_CHORD")
-    [[ -n "$DEFAULT_MODE" ]] && args+=(--permission-mode "$DEFAULT_MODE")
     [[ "$FORCE_AGENTSMD" -eq 1 ]] && args+=(--overwrite-agentsmd)
     [[ -n "$INCLUDE_OUTPUT_STYLE" ]] && args+=(--include-output-style "$INCLUDE_OUTPUT_STYLE")
     [[ -n "$INCLUDE_MODS" ]] && args+=(--include-mods "$INCLUDE_MODS")
@@ -415,9 +411,6 @@ fi
 DRY_FLAG=()
 [[ "$DRY_RUN" -eq 1 ]] && DRY_FLAG=(--dry-run)
 
-MODE_FLAG=()
-[[ -n "$DEFAULT_MODE" ]] && MODE_FLAG=(--default-mode "$DEFAULT_MODE")
-
 FORCE_FLAG=()
 [[ "$FORCE_AGENTSMD" -eq 1 ]] && FORCE_FLAG=(--force)
 
@@ -445,37 +438,29 @@ ui_close() {
 printf '\n%s  %s\n' "$(ui_paint 90 "$G_START")" "$(ui_paint 1 "ai-setup")"
 trap ui_close EXIT
 
-# uninstall: --keybinds --uninstall 은 키바인드만. 아니면 훅 다음 키바인드.
-# exec 하면 키바인드 uninstall 이 실행되지 않는다.
+# uninstall: --keybinds --uninstall 은 키바인드만. 범위가 없으면 아래 워커 전부.
+# 훅은 jarvis 가 맡으므로 지우지 않고, 영수증의 훅 기록(hook_files·권한 기록)도 jarvis 를 위해 남긴다.
 if [[ "$UNINSTALL" -eq 1 ]]; then
-    # 제거도 설치와 같은 범위 규칙을 따른다. 범위를 지정했으면 그것만 지운다 —
-    # --hooks --uninstall 이 키바인딩까지 지우면 "--hooks 는 키바인딩을 건드리지
-    # 않는다"(핵심 결정 4)를 제거 쪽에서만 어기는 것이 된다.
+    # 제거도 설치와 같은 범위 규칙을 따른다. 범위를 지정했으면 그것만 지운다.
     UN_KEYBINDS="$RUN_KEYBINDS"
-    UN_HOOKS="$RUN_HOOKS"
     UN_SKILLS="$RUN_SKILLS"
     UN_OMC="$RUN_OMC"
     UN_OUTPUT_STYLE="$RUN_OUTPUT_STYLE"
     UN_MODS="$RUN_MODS"
-    if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 && "$RUN_KEYBINDS" -eq 0 && "$RUN_SKILLS" -eq 0 && "$RUN_OMC" -eq 0 && "$RUN_OUTPUT_STYLE" -eq 0 && "$RUN_MODS" -eq 0 ]]; then
+    if [[ "$RUN_AGENTSMD" -eq 0 && "$RUN_KEYBINDS" -eq 0 && "$RUN_SKILLS" -eq 0 && "$RUN_OMC" -eq 0 && "$RUN_OUTPUT_STYLE" -eq 0 && "$RUN_MODS" -eq 0 ]]; then
         UN_KEYBINDS=1
-        UN_HOOKS=1
         UN_SKILLS=1
         UN_OMC=1
         UN_OUTPUT_STYLE=1
         UN_MODS=1
     fi
-    # 키바인드를 '먼저' 지운다. 훅 uninstall 이 매니페스트를 손보는데, 키바인드 제거는
-    # 그 영수증(tmux_added 등)이 있어야 '우리가 넣은 것' 과 사용자 것을 구분할 수 있다.
     # set -e 아래라 한쪽이 실패해도 나머지가 돌도록 종료 코드를 받아 둔다.
     kb_exit=0
-    hooks_exit=0
     skills_exit=0
     if [[ "$UN_SKILLS" -eq 1 ]]; then
         bash "$SCRIPT_DIR/setup_skills.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} | ui_format || skills_exit=$?
     fi
-    # mod·출력 스타일·캐시 TTL HUD 영수증도 매니페스트에 있으므로 훅 uninstall 보다 먼저 되돌린다.
-    # 이 셋은 설치(OMC → 출력 스타일 → mod)의 역순으로 되돌린다 — settings.json 을 처음 만든
+    # mod·출력 스타일·캐시 TTL HUD 는 설치(OMC → 출력 스타일 → mod)의 역순으로 되돌린다 — settings.json 을 처음 만든
     # 워커가 마지막에 와야, 다른 워커의 키가 다 빠진 뒤 빈 파일을 지울 수 있다.
     mods_exit=0
     if [[ "$UN_MODS" -eq 1 ]]; then
@@ -492,10 +477,6 @@ if [[ "$UNINSTALL" -eq 1 ]]; then
     if [[ "$UN_KEYBINDS" -eq 1 ]]; then
         bash "$SCRIPT_DIR/setup_keybinds.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} | ui_format || kb_exit=$?
     fi
-    if [[ "$UN_HOOKS" -eq 1 ]]; then
-        bash "$SCRIPT_DIR/setup_hooks.sh" --uninstall ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} | ui_format || hooks_exit=$?
-    fi
-    [[ "$hooks_exit" -ne 0 ]] && exit "$hooks_exit"
     [[ "$skills_exit" -ne 0 ]] && exit "$skills_exit"
     [[ "$omc_exit" -ne 0 ]] && exit "$omc_exit"
     [[ "$style_exit" -ne 0 ]] && exit "$style_exit"
@@ -503,19 +484,14 @@ if [[ "$UNINSTALL" -eq 1 ]]; then
     exit "$kb_exit"
 fi
 
-# 범위 플래그가 하나도 없으면 전체 설치 (훅 + AGENTS.md + 키바인드 + 스킬).
-# --hooks 만 / --agentsmd 만 / --keybinds 만 / --omc 만이면 그 범위만.
+# 범위 플래그가 하나도 없으면 전체 설치 (AGENTS.md + 키바인드 + 스킬). 훅은 jarvis 가 맡는다.
+# --agentsmd 만 / --keybinds 만 / --omc 만이면 그 범위만.
 # OMC·fluent-korean 은 서드파티 플러그인이라, mod 는 최신 Claude Code 에서만 동작해서 기본 전체
 # 설치에 끼우지 않는다 — 명시적으로 고른 경우에만.
-if [[ "$RUN_HOOKS" -eq 0 && "$RUN_AGENTSMD" -eq 0 && "$RUN_KEYBINDS" -eq 0 && "$RUN_SKILLS" -eq 0 && "$RUN_OMC" -eq 0 && "$RUN_OUTPUT_STYLE" -eq 0 && "$RUN_MODS" -eq 0 ]]; then
-    RUN_HOOKS=1
+if [[ "$RUN_AGENTSMD" -eq 0 && "$RUN_KEYBINDS" -eq 0 && "$RUN_SKILLS" -eq 0 && "$RUN_OMC" -eq 0 && "$RUN_OUTPUT_STYLE" -eq 0 && "$RUN_MODS" -eq 0 ]]; then
     RUN_AGENTSMD=1
     RUN_KEYBINDS=1
     RUN_SKILLS=1
-fi
-
-if [[ "$RUN_HOOKS" -eq 1 ]]; then
-    bash "$SCRIPT_DIR/setup_hooks.sh" ${DRY_FLAG[@]+"${DRY_FLAG[@]}"} ${MODE_FLAG[@]+"${MODE_FLAG[@]}"} | ui_format
 fi
 
 if [[ "$RUN_AGENTSMD" -eq 1 ]]; then

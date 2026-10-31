@@ -14,6 +14,14 @@ AI-1~AI-6 은 jarvis DOCTOR-1~6 으로 옮김.
 | -- | ------ | ------ | ---- |
 | AI-68 | WHEN `--doctor`(`-Doctor`)를 실행하면 THE SYSTEM SHALL 점검을 실행하지 않고 홈에 아무것도 쓰지 않으며, doctor 는 jarvis 가 맡는다고 안내한 뒤 종료 코드 1 로 끝난다 | `tests/test_stages.py::test_doctor_pointer_names_the_jarvis_doctor_module`, bats `setup.sh and install.sh --doctor point to jarvis and write nothing`, Pester `-Doctor and --doctor point to jarvis and write nothing`, Pester `-Doctor and --doctor point to jarvis before downloading` | GREEN (Pester 는 Linux pwsh; Windows PowerShell 5.1 미검증) |
 
+### 훅
+
+가드 훅(`danger_guard`·rm 셰임·휴지통 헬퍼)·settings 병합·훅 설치 흐름의 수용 케이스는 jarvis HOOKS-1~4 로 옮김. 그 테스트(`test_danger_guard`·`test_merge_and_diff`·`test_rm_shim`·`test_hook_compat`·`test_git_snapshot`·`RmShim.Tests.ps1`)도 jarvis 로 옮겼다.
+
+| ID | 케이스 | 테스트 | 상태 |
+| -- | ------ | ------ | ---- |
+| AI-69 | WHEN `--hooks`(`-Hooks`)를 다른 옵션(`--uninstall` 포함)과 함께 또는 홀로 실행하거나 `--stages` 에 hooks 를 넣으면 THE SYSTEM SHALL 훅 파일·settings·영수증을 바꾸지 않고 훅은 jarvis 가 관리한다고 안내한 뒤 종료 코드 1 로 끝나고, 전체 실행(`--no-onboard`, `--stages all`)과 전체 제거(`--uninstall`, `--stages all --uninstall`)는 훅을 설치·제거하지 않고 훅 파일과 영수증의 훅 기록(`hook_files`·권한 기록)을 그대로 둔다(jarvis 훅 모듈이 같은 키를 읽고 이어 관리한다, HOOKS-1~4) | `tests/test_stages.py::test_hooks_pointer_names_the_jarvis_hooks_module`, `tests/test_stages.py::test_hooks_stage_points_to_jarvis_and_writes_nothing`, `tests/test_stages.py::test_full_run_and_full_uninstall_leave_hooks_and_their_receipt_records_to_jarvis`, `tests/test_setup_scripts.py::test_setup_uninstall_leaves_the_hooks_and_their_receipt_records_to_jarvis`, `tests/test_setup_scripts.py::test_install_sh_stages_hooks_points_to_jarvis_after_download`, `tests/test_omc_hud.py::test_hooks_uninstall_points_to_jarvis_and_keeps_the_omc_manifest`, `tests/test_keybinds.py` 의 covers AI-69 6건, `tests/test_onboard.py::test_hub_rows_show_each_category_selection`, bats `setup.sh and install.sh --hooks point to jarvis and write nothing`, bats `setup.sh --uninstall keeps the hooks, their receipt records and the Orca records for jarvis`, Pester `-Hooks and --hooks point to jarvis and write nothing`, Pester `-Hooks and --hooks point to jarvis before downloading`, Pester `-Uninstall keeps the hooks, their receipt records and the Orca records for jarvis`, Pester `-Uninstall -Hooks points to jarvis and keeps the omc_hud manifest, …`·`… output_style manifest, …` | GREEN (Pester 는 Linux pwsh; Windows PowerShell 5.1 미검증) |
+
 ### update-ai
 
 | ID | 케이스 | 테스트 | 상태 |
@@ -46,7 +54,7 @@ AI-1~AI-6 은 jarvis DOCTOR-1~6 으로 옮김.
 | AI-36 | WHEN 인자 없이 비대화형으로 실행하면 THE SYSTEM SHALL 새 단계를 하나도 실행하지 않는다 | | 미착수 |
 | AI-65 | WHEN `update-ai` 가 확인한 설치본이 최신 릴리스와 같거나 더 새로우면 THE SYSTEM SHALL `--check` 와 갱신 뒤 검사 모두에서 최신으로 판정한다 | `tests/test_update_ai.py::test_an_install_newer_than_the_latest_release_counts_as_up_to_date` | GREEN (단위) |
 | AI-66 | WHEN `--tools orca`(`-Tools orca`), `--orca-desktop` 또는 `update-ai orca` 를 실행하면 THE SYSTEM SHALL Orca 패키지·서버·스킬·영수증 기록을 바꾸지 않고 Orca 는 jarvis 가 관리한다고 안내한 뒤 종료 코드 1 로 끝난다 (ORCA-12) | `tests/test_stages.py::test_orca_desktop_points_to_jarvis_and_changes_nothing`, `tests/test_update_ai.py::test_update_ai_orca_points_to_jarvis_and_updates_nothing`, `tests/test_update_ai.py::test_plain_update_ai_does_not_list_orca`, bats `setup.sh and install.sh Orca options point to jarvis and change nothing`, Pester `-Tools orca, --tools orca and --orca-desktop point to jarvis and change nothing`, Pester `-Tools orca and --orca-desktop point to jarvis before downloading` | GREEN |
-| AI-67 | WHEN tools 단계나 `--stages all --uninstall` 을 실행하면 THE SYSTEM SHALL Orca 를 설치·제거하지 않고 영수증의 `tool_installs.orca`·`tool_installs.orca_server` 를 그대로 둔다(jarvis 의 Orca 모듈이 같은 키를 읽고 제거한다) | `tests/test_stages.py::test_tools_and_full_uninstall_leave_orca_and_its_receipt_records_to_jarvis`, bats `setup.sh --uninstall keeps the Orca receipt records for jarvis`, Pester `-Hooks -Uninstall keeps the Orca receipt records for jarvis` | GREEN |
+| AI-67 | WHEN tools 단계나 `--stages all --uninstall` 을 실행하면 THE SYSTEM SHALL Orca 를 설치·제거하지 않고 영수증의 `tool_installs.orca`·`tool_installs.orca_server` 를 그대로 둔다(jarvis 의 Orca 모듈이 같은 키를 읽고 제거한다) | `tests/test_stages.py::test_tools_and_full_uninstall_leave_orca_and_its_receipt_records_to_jarvis`, bats `setup.sh --uninstall keeps the hooks, their receipt records and the Orca records for jarvis`, Pester `-Uninstall keeps the hooks, their receipt records and the Orca records for jarvis` | GREEN |
 
 ### 플러그인
 

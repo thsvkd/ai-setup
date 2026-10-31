@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """줄바꿈 키바인딩을 VS Code / Cursor / Claude / Codex / WT / tmux 에 외과적으로 설치한다.
 
-훅 병합(merge_and_diff.py)과 같은 철학: 합집합, 없을 때만 추가, 관리 항목만 되돌림.
+훅 병합(jarvis 훅 모듈의 merge_and_diff.py)과 같은 철학: 합집합, 없을 때만 추가, 관리 항목만 되돌림.
 settings.json 은 건드리지 않는다.
 """
 from __future__ import annotations
@@ -285,7 +285,7 @@ def load_manifest(home: Path) -> dict:
 
     훅·하네스 설치와 같이 쓰는 파일이다. 없는 것처럼 다루면 나중에 keybinds 만 담아
     덮어써 다른 설치의 기록을 잃는다. 객체가 아닌 JSON 은 기록을 담을 수 없으므로
-    merge_and_diff.py 처럼 빈 영수증으로 본다.
+    jarvis 훅 모듈의 merge_and_diff.py 처럼 빈 영수증으로 본다.
     """
     path = home / ".claude" / MANIFEST_NAME
     if not path.is_file():

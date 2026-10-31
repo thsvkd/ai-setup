@@ -7,7 +7,6 @@
     -NoOnboard 는 예전 기본 설치를 유지한다. --stages 는 res/stages.py 액션 목록을 따른다.
 .USAGE
     powershell -ExecutionPolicy Bypass -File setup.ps1                       # 온보딩 → 선택대로
-    powershell -ExecutionPolicy Bypass -File setup.ps1 -Hooks                # 훅/권한만
     powershell -ExecutionPolicy Bypass -File setup.ps1 -AgentsMd             # AGENTS.md만
     powershell -ExecutionPolicy Bypass -File setup.ps1 -Omc                  # OMC + 캐시 TTL HUD만
     powershell -ExecutionPolicy Bypass -File setup.ps1 -OutputStyle          # fluent-korean 출력 스타일만
@@ -59,7 +58,6 @@ ai-setup — Claude Code user-level setup
 
 Usage: .\setup.ps1 [options]
   (no options)  walk the stages, then the category hub. Only Apply installs; Quit or no console installs nothing
-  -Hooks        install global guard hooks + permissions only (~/.claude)
   -AgentsMd     install project instructions into the current folder only
   -Harness L    harnesses to install instructions for (comma-separated: claude,codex,grok,opencode,agy,gemini,copilot,all)
                 choosing claude also installs CLAUDE.md. Default is all.
@@ -75,10 +73,10 @@ Usage: .\setup.ps1 [options]
                 · cache-ttl-status: shows the remaining prompt-cache time in a status line below the prompt
                 · korean-reply-rewrite: after a Korean prompt, stores English replies in Korean so later replies stay Korean
                 (not included in the default install without a scope)
-  -Uninstall    remove guard hooks + managed keybindings/skills + cache TTL HUD + outputStyle + mod settings
-                plus the permissions this setup added (your own entries and the OMC/fluent-korean plugins are kept).
+  -Uninstall    remove managed keybindings/skills + cache TTL HUD + outputStyle + mod settings
+                (your own entries and the OMC/fluent-korean plugins are kept). Guard hooks are left to jarvis.
                 For a staged install (no options or --stages) name the stages, e.g.
-                --stages hooks,newline,claude_special --uninstall (settings only).
+                --stages newline,claude_special --uninstall (settings only).
                 --stages all --uninstall also removes the programs this setup installed.
   -DryRun       print the change plan only, without changing anything
   --stages L    all or a comma list, in stage order. -DryRun prints the list only
@@ -92,17 +90,16 @@ Usage: .\setup.ps1 [options]
 What onboarding lets you choose:
   · Walk the stages, or Skip straight to the category menu (hub)
   · a machine that already has a receipt opens the hub directly
-  · each stage, on by default: base, harness, plugins, skills, codegraph, mcp, newline, claude_special, tools, hooks, agentsmd
+  · each stage, on by default: base, harness, plugins, skills, codegraph, mcp, newline, claude_special, tools, agentsmd
   · harnesses (default Claude Code and Codex)
   · newline key (Shift+Enter / Ctrl+Enter)
   · Claude specials when Claude Code is selected
   · Jarvis role (default: do not install) and herdr (default off)
-  · permission mode (auto / bypassPermissions)
   · whether to overwrite an existing AGENTS.md (asked only when the file exists)
   · in the hub: Apply, Preview the plan (-DryRun), or Quit
 
 The same long options as setup.sh are accepted too:
-  --hooks  --agentsmd  --harness L  --skills  --keybinds  --omc  --output-style  --mods  --newline VAL  --uninstall  --dry-run
+  --agentsmd  --harness L  --skills  --keybinds  --omc  --output-style  --mods  --newline VAL  --uninstall  --dry-run
   --stages L  --jarvis-role gateway|core  --herdr  --ss-caps
   --no-onboard  --help
 "@
@@ -174,6 +171,12 @@ if ($Doctor) {
     Write-Host "Doctor is now run by jarvis; ai-setup no longer runs it. From a jarvis checkout run: py -3 -m jarvis module doctor status --json." -ForegroundColor Red
     exit 1
 }
+# 훅도 jarvis 로 옮겨 갔다(res/stages.py 의 hooks_moved 와 같은 문구). --stages hooks 는 stages.py 가 같은 안내로 막는다.
+$HooksMoved = "Hooks are now managed by jarvis; ai-setup no longer installs or removes them. From a jarvis checkout run: py -3 -m jarvis module hooks plan --json (uninstall: module hooks uninstall --json --dry-run)."
+if ($Hooks) {
+    Write-Host $HooksMoved -ForegroundColor Red
+    exit 1
+}
 
 if ($Help) {
     Show-Usage
@@ -190,9 +193,7 @@ if ($unknownArgs.Count -gt 0) {
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 
 # 온보딩이 채우는 값들. 비어 있으면 워커가 각자의 기본값을 쓴다.
-$defaultMode = ""
 $forceAgentsMd = $false
-$runHooks = [bool]$Hooks
 $runAgentsMd = [bool]$AgentsMd
 $runKeybinds = [bool]$Keybinds
 $runSkills = [bool]$Skills
@@ -291,18 +292,14 @@ function Invoke-Onboarding {
     }
 }
 
-$hadArgs = $Hooks -or $AgentsMd -or $Keybinds -or $Skills -or $Omc -or $OutputStyle -or $Mods -or $Uninstall -or $DryRun -or $NoOnboard -or $newlineGiven -or $harnessGiven -or $stageRun -or $herdrFlag -or $ssCaps -or [bool]$jarvisRole
+$hadArgs = $AgentsMd -or $Keybinds -or $Skills -or $Omc -or $OutputStyle -or $Mods -or $Uninstall -or $DryRun -or $NoOnboard -or $newlineGiven -or $harnessGiven -or $stageRun -or $herdrFlag -or $ssCaps -or [bool]$jarvisRole
 if (-not $hadArgs) {
     $answers = Invoke-Onboarding
     if ($answers) {
         switch ($answers["SCOPE"]) {
-            "all"      { $runHooks = $true; $runAgentsMd = $true; $runKeybinds = $true; $runSkills = $true }
-            "hooks"    { $runHooks = $true }
+            "all"      { $runAgentsMd = $true; $runKeybinds = $true; $runSkills = $true }
+            "hooks"    { Write-Host $HooksMoved -ForegroundColor Red; exit 1 }
             "agentsmd" { $runAgentsMd = $true }
-        }
-        if ($answers.ContainsKey("DEFAULT_MODE") -and
-            $answers["DEFAULT_MODE"] -in @("auto", "bypassPermissions", "default", "acceptEdits", "plan")) {
-            $defaultMode = $answers["DEFAULT_MODE"]
         }
         if ($answers.ContainsKey("NEWLINE_CHORD") -and
             $answers["NEWLINE_CHORD"] -in @("shift-enter", "ctrl-enter") -and
@@ -356,7 +353,6 @@ function Invoke-StagePlan {
     if ($dryRun) { $planArgs += "--dry-run" }
     if ($Uninstall) { $planArgs += "--uninstall" }
     if ($newlineChord) { $planArgs += @("--newline", $newlineChord) }
-    if ($defaultMode) { $planArgs += @("--permission-mode", $defaultMode) }
     if ($forceAgentsMd) { $planArgs += "--overwrite-agentsmd" }
     if ($null -ne $includeOutputStyle) { $planArgs += @("--include-output-style", $includeOutputStyle) }
     if ($null -ne $includeMods) { $planArgs += @("--include-mods", $includeMods) }
@@ -470,29 +466,23 @@ Write-Host "  ai-setup"
 # 워커가 throw 로 끝나도(셀프테스트 실패 등) 끝줄을 찍고 실패 코드로 나간다.
 try {
 
-# 제거도 설치와 같은 범위 규칙을 따른다. 범위를 지정했으면 그것만 지운다 —
-# -Hooks -Uninstall 이 키바인딩까지 지우면 "-Hooks 는 키바인딩을 건드리지 않는다"
-# (핵심 결정 4)를 제거 쪽에서만 어기는 것이 된다.
+# 제거도 설치와 같은 범위 규칙을 따른다. 범위를 지정했으면 그것만 지운다.
+# 훅은 jarvis 가 맡으므로 지우지 않고, 영수증의 훅 기록(hook_files·권한 기록)도 jarvis 를 위해 남긴다.
 if ($Uninstall) {
-    $hadScope = $Hooks -or $AgentsMd -or $Keybinds -or $Skills -or $Omc -or $OutputStyle -or $Mods
+    $hadScope = $AgentsMd -or $Keybinds -or $Skills -or $Omc -or $OutputStyle -or $Mods
     $unKeybinds = if ($hadScope) { [bool]$Keybinds } else { $true }
-    $unHooks = if ($hadScope) { [bool]$Hooks } else { $true }
     $unSkills = if ($hadScope) { [bool]$Skills } else { $true }
     $unOmc = if ($hadScope) { [bool]$Omc } else { $true }
     $unOutputStyle = if ($hadScope) { [bool]$OutputStyle } else { $true }
     $unMods = if ($hadScope) { [bool]$Mods } else { $true }
 
-    # 키바인드를 '먼저' 지운다. 훅 uninstall 이 매니페스트를 손보는데, 키바인드 제거는
-    # 그 영수증(tmux_added 등)이 있어야 '우리가 넣은 것' 과 사용자 것을 구분할 수 있다.
     $kbExit = 0
-    $hooksExit = 0
     $skillsExit = 0
     if ($unSkills) {
         & (Join-Path $PSScriptRoot "setup_skills.ps1") -Uninstall -DryRun:$dryRun 6>&1 | Format-SetupOutput
         $skillsExit = $LASTEXITCODE
     }
-    # mod·출력 스타일·캐시 TTL HUD 영수증도 매니페스트에 있으므로 훅 uninstall 보다 먼저 되돌린다.
-    # 이 셋은 설치(OMC → 출력 스타일 → mod)의 역순으로 되돌린다 — settings.json 을 처음 만든
+    # mod·출력 스타일·캐시 TTL HUD 는 설치(OMC → 출력 스타일 → mod)의 역순으로 되돌린다 — settings.json 을 처음 만든
     # 워커가 마지막에 와야, 다른 워커의 키가 다 빠진 뒤 빈 파일을 지울 수 있다.
     $modsExit = 0
     if ($unMods) {
@@ -513,11 +503,6 @@ if ($Uninstall) {
         & (Join-Path $PSScriptRoot "setup_keybinds.ps1") -Uninstall -DryRun:$dryRun 6>&1 | Format-SetupOutput
         $kbExit = $LASTEXITCODE
     }
-    if ($unHooks) {
-        & (Join-Path $PSScriptRoot "setup_hooks.ps1") -Uninstall -DryRun:$dryRun 6>&1 | Format-SetupOutput
-        $hooksExit = $LASTEXITCODE
-    }
-    if ($hooksExit -ne 0) { Exit-Setup $hooksExit }
     if ($skillsExit -ne 0) { Exit-Setup $skillsExit }
     if ($omcExit -ne 0) { Exit-Setup $omcExit }
     if ($styleExit -ne 0) { Exit-Setup $styleExit }
@@ -527,16 +512,11 @@ if ($Uninstall) {
 
 # OMC·fluent-korean 은 서드파티 플러그인이라, mod 는 최신 Claude Code 에서만 동작해서 기본 전체
 # 설치에 끼우지 않는다 — 명시적으로 고른 경우에만.
-if (-not ($runHooks -or $runAgentsMd -or $runKeybinds -or $runSkills -or $runOmc -or $runOutputStyle -or $runMods)) {
-    $runHooks = $true
+# 훅은 jarvis 가 맡으므로 전체 설치에 들지 않는다.
+if (-not ($runAgentsMd -or $runKeybinds -or $runSkills -or $runOmc -or $runOutputStyle -or $runMods)) {
     $runAgentsMd = $true
     $runKeybinds = $true
     $runSkills = $true
-}
-
-if ($runHooks) {
-    & (Join-Path $PSScriptRoot "setup_hooks.ps1") -DryRun:$dryRun -DefaultMode $defaultMode 6>&1 | Format-SetupOutput
-    if ($LASTEXITCODE -ne 0) { Exit-Setup $LASTEXITCODE }
 }
 
 if ($runAgentsMd) {

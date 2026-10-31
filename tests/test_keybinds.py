@@ -932,22 +932,14 @@ def agentsmd_installed(sb) -> bool:
 
 @posix_only
 def test_onboarding_hooks_scope_does_not_install_keybinds(kb_sandbox):
-    """covers: Test-2
-    SCOPE=hooks 로 온보딩을 마치면 키바인드 대상 파일에 관리 바인딩이 생기지 않는다.
+    """covers: Test-2, AI-69
+    훅 범위는 jarvis 로 옮겨 갔다. --hooks 는 안내만 내고 exit 1 로 끝나며 키바인드 대상을 포함해 아무것도 쓰지 않는다.
     """
-    before = snapshot_targets(kb_sandbox)
+    before = snapshot_tree(kb_sandbox.root)
     proc = run_setup(["--hooks"], kb_sandbox)
-    assert_ok(proc)
-    text = combined_output(proc)
-    assert managed_sendsequences(load_keybindings(kb_sandbox.vscode)) == []
-    assert managed_sendsequences(load_keybindings(kb_sandbox.cursor)) == []
-    claude_kb = kb_sandbox.home / ".claude" / "keybindings.json"
-    if claude_kb.exists():
-        claude = json.loads(claude_kb.read_text(encoding="utf-8"))
-        assert claude_chat_map(claude).get("shift+enter") != "chat:newline"
-        assert claude_chat_map(claude).get("ctrl+enter") != "chat:newline"
-    assert snapshot_targets(kb_sandbox)["vscode"] == before["vscode"]
-    assert snapshot_targets(kb_sandbox)["cursor"] == before["cursor"]
+    assert proc.returncode == 1, combined_output(proc)
+    assert "jarvis module hooks plan --json" in combined_output(proc)
+    assert snapshot_tree(kb_sandbox.root) == before
 
 
 @posix_only
@@ -1045,7 +1037,7 @@ def test_newline_flag_installs_result_per_chord_C(kb_sandbox, worker, args, chor
         assert not hooks_installed(kb_sandbox)
         assert not agentsmd_installed(kb_sandbox)
     if args[:1] == ["--no-onboard"]:
-        assert hooks_installed(kb_sandbox)
+        assert not hooks_installed(kb_sandbox)    # 훅은 jarvis 가 맡는다(AI-69)
         assert agentsmd_installed(kb_sandbox)
 
 
@@ -1067,23 +1059,17 @@ def test_invalid_newline_exits_1_and_leaves_files_unchanged(kb_sandbox, worker, 
 
 
 def test_hooks_and_agentsmd_do_not_write_keybind_files(kb_sandbox):
-    """covers: Test-9
+    """covers: Test-9, AI-69
     --hooks, --agentsmd, --hooks --newline ctrl-enter 는 키바인드 대상 파일을 쓰지 않는다.
+    --hooks 는 jarvis 로 옮겨 가 안내만 내고 exit 1 로 끝난다.
     """
     before = snapshot_targets(kb_sandbox)
 
+    before_tree = snapshot_tree(kb_sandbox.root)
     proc = run_setup(["--hooks"], kb_sandbox)
-    assert_ok(proc)
-    assert hooks_installed(kb_sandbox)
-    assert snapshot_targets(kb_sandbox)["vscode"] == before["vscode"]
-    assert snapshot_targets(kb_sandbox)["cursor"] == before["cursor"]
-    assert snapshot_targets(kb_sandbox)["wt"] == before["wt"]
-    assert snapshot_targets(kb_sandbox)["codex"] == before["codex"]
-    claude = json.loads(
-        (kb_sandbox.home / ".claude" / "keybindings.json").read_text(encoding="utf-8")
-    )
-    assert claude_chat_map(claude).get("shift+enter") != "chat:newline"
-    assert claude_chat_map(claude).get("ctrl+enter") != "chat:newline"
+    assert proc.returncode == 1, combined_output(proc)
+    assert not hooks_installed(kb_sandbox)
+    assert snapshot_tree(kb_sandbox.root) == before_tree
 
     proc = run_setup(["--agentsmd"], kb_sandbox)
     assert_ok(proc)
@@ -1097,7 +1083,7 @@ def test_hooks_and_agentsmd_do_not_write_keybind_files(kb_sandbox):
     _write(kb_sandbox.cursor, DEFAULT_CURSOR_JSONC)
     before_combo = snapshot_targets(kb_sandbox)
     proc = run_setup(["--hooks", "--newline", "ctrl-enter"], kb_sandbox)
-    assert_ok(proc)
+    assert proc.returncode == 1, combined_output(proc)
     after_combo = snapshot_targets(kb_sandbox)
     for name in ("vscode", "cursor", "wt", "claude_kb", "codex", "tmux", "grok"):
         assert after_combo[name] == before_combo[name], (
@@ -1122,26 +1108,33 @@ def test_keybinds_dry_run_writes_nothing_and_shows_paths_in_plan(kb_sandbox, wor
     assert ("config.toml" in text) or ("codex" in text.lower()), text
 
 
-def test_skipped_onboarding_full_install_does_hooks_agents_shift_enter(kb_sandbox):
-    """covers: Test-11
-    온보딩 스킵 전체 설치 = 훅 + AGENTS.md + 줄바꿈 설치 결과(shift-enter).
+def test_skipped_onboarding_full_install_does_agents_shift_enter_without_hooks(kb_sandbox):
+    """covers: Test-11, AI-69
+    온보딩 스킵 전체 설치 = AGENTS.md + 줄바꿈 설치 결과(shift-enter). 훅은 jarvis 가 맡는다.
     """
     proc = run_setup(["--no-onboard"], kb_sandbox)
     assert_ok(proc)
-    assert hooks_installed(kb_sandbox)
+    assert not hooks_installed(kb_sandbox)
     assert agentsmd_installed(kb_sandbox)
     assert_newline_install_result(kb_sandbox, "shift-enter")
 
 
-def test_uninstall_removes_hooks_and_managed_keybinds_and_keeps_user_entries(kb_sandbox):
-    """covers: Test-12
-    setup --uninstall 은 훅과 관리 키바인드를 제거한다.
+def test_uninstall_removes_managed_keybinds_and_keeps_hooks_and_user_entries(kb_sandbox):
+    """covers: Test-12, AI-69
+    setup --uninstall 은 관리 키바인드를 제거하고, jarvis 가 맡는 훅과 그 영수증 기록은 남긴다.
     --keybinds --uninstall 은 키바인드만. 사용자 원래 항목은 남긴다.
     """
     proc = run_setup(["--no-onboard"], kb_sandbox)
     assert_ok(proc)
-    assert hooks_installed(kb_sandbox)
     assert_newline_install_result(kb_sandbox, "shift-enter")
+    # 예전 ai-setup(지금은 jarvis)이 깐 훅과 그 영수증 기록을 심어 둔다.
+    guard = kb_sandbox.home / ".claude" / "hooks" / "danger_guard.py"
+    guard.parent.mkdir(parents=True)
+    guard.write_text("# installed hook\n", encoding="utf-8")
+    man_path = kb_sandbox.home / ".claude" / ".claude-code-setup.json"
+    seeded = read_manifest(kb_sandbox.home)
+    seeded.update({"hook_files": ["danger_guard.py"], "added_allow": ["Bash"]})
+    man_path.write_text(json.dumps(seeded), encoding="utf-8")
 
     proc = run_setup(["--keybinds", "--uninstall"], kb_sandbox)
     assert_ok(proc)
@@ -1173,7 +1166,9 @@ def test_uninstall_removes_hooks_and_managed_keybinds_and_keeps_user_entries(kb_
     assert_ok(proc)
     proc = run_setup(["--uninstall"], kb_sandbox)
     assert_ok(proc)
-    assert not hooks_installed(kb_sandbox)
+    assert hooks_installed(kb_sandbox)
+    left = read_manifest(kb_sandbox.home)
+    assert left.get("hook_files") == ["danger_guard.py"] and left.get("added_allow") == ["Bash"]
     assert managed_sendsequences(load_keybindings(kb_sandbox.vscode)) == []
     assert_foreign_preserved(kb_sandbox.vscode)
     assert_foreign_preserved(kb_sandbox.cursor)
@@ -1184,12 +1179,13 @@ def test_installing_twice_does_not_grow_managed_bindings_or_empty_manifest(kb_sa
     두 번 설치해도 관리 바인딩이 늘지 않는다. 설치 전에 동일 바인딩이 있어도
     재추가하지 않는다. 영수증이 빈 값으로 덮이지 않는다.
     """
-    proc = run_setup(["--hooks"], kb_sandbox)
-    assert_ok(proc)
+    # 훅 영수증 기록(jarvis 훅 모듈이 이어 읽는다)을 심어 두고, 키바인드 워커가 그 섹션을 남기는지 본다.
+    man_path = kb_sandbox.home / ".claude" / ".claude-code-setup.json"
+    man_path.write_text(json.dumps({"hook_files": ["danger_guard.py"], "added_allow": ["Bash"]}), encoding="utf-8")
     proc = run_setup(["--keybinds", "--newline", "shift-enter"], kb_sandbox)
     assert_ok(proc)
     first = read_manifest(kb_sandbox.home)
-    assert first.get("added_allow"), "hooks manifest added_allow is missing"
+    assert first.get("added_allow") == ["Bash"], "hooks manifest added_allow is missing"
     assert manifest_chord(first) == "shift-enter"
     n1 = len(managed_sendsequences(load_keybindings(kb_sandbox.vscode)))
     c1 = len(managed_sendsequences(load_keybindings(kb_sandbox.cursor)))
@@ -1604,14 +1600,16 @@ def test_our_extended_keys_are_removed_by_full_uninstall(kb_sandbox):
 
 
 def test_hooks_install_does_not_overwrite_keybinds_manifest(kb_sandbox):
-    """covers: Test-13/14 (영수증이 빈 값으로 덮이지 않는다)
+    """covers: Test-13/14 (영수증이 빈 값으로 덮이지 않는다), AI-69
 
-    두 워커가 같은 매니페스트 파일을 쓴다. 훅 병합이 keybinds 섹션을 날리면 재실행에서
-    이전 선택이 사라져 조용히 shift-enter 로 되돌아간다.
+    훅이 keybinds 섹션을 날리면 재실행에서 이전 선택이 사라져 조용히 shift-enter 로 되돌아간다.
+    훅은 jarvis 로 옮겨 가 --hooks 는 영수증을 건드리지 않고 exit 1 로 끝난다.
     """
     manifest = kb_sandbox.home / ".claude" / ".claude-code-setup.json"
     assert_ok(run_setup(["--keybinds", "--newline", "ctrl-enter"], kb_sandbox))
-    assert_ok(run_setup(["--hooks"], kb_sandbox))
+    before = manifest.read_bytes()
+    assert run_setup(["--hooks"], kb_sandbox).returncode == 1
+    assert manifest.read_bytes() == before
 
     kb = json.loads(manifest.read_text(encoding="utf-8")).get("keybinds") or {}
     assert kb.get("newline_chord") == "ctrl-enter", f"manifest disappeared: {kb!r}"
@@ -1940,15 +1938,18 @@ def test_keeps_symlink_intact_and_preserves_permissions(kb_sandbox):
 
 
 def test_hooks_uninstall_leaves_keybindings_untouched(kb_sandbox):
-    """covers: Test-9 / 핵심 결정 4
+    """covers: Test-9 / 핵심 결정 4, AI-69
 
     --hooks 는 키바인딩을 설치하지 않는다. 제거 쪽에서만 그 경계를 무시하면 안 된다.
+    훅 제거는 jarvis 로 옮겨 가 --hooks --uninstall 은 아무것도 지우지 않고 exit 1 로 끝난다.
     """
     assert_ok(run_setup(["--keybinds"], kb_sandbox))
     before = len(managed_sendsequences(load_keybindings(kb_sandbox.vscode)))
     assert before == 1
 
-    assert_ok(run_setup(["--hooks", "--uninstall"], kb_sandbox))
+    tree = snapshot_tree(kb_sandbox.root)
+    assert run_setup(["--hooks", "--uninstall"], kb_sandbox).returncode == 1
+    assert snapshot_tree(kb_sandbox.root) == tree
 
     after = len(managed_sendsequences(load_keybindings(kb_sandbox.vscode)))
     assert after == before, "--hooks --uninstall removed the managed keybindings"
@@ -2195,7 +2196,7 @@ def test_claude_uninstall_keeps_users_own_empty_bindings_array(tmp_path):
 @tmux_only
 @pytest.mark.parametrize("receipt", ['["not", "an", "object"]', 'null'])
 def test_shared_receipt_that_is_not_an_object_is_treated_as_missing(monkeypatch, tmp_path, receipt):
-    """merge_and_diff.py 와 같다: 객체가 아닌 JSON 은 기록을 담을 수 없으므로 빈 영수증으로 보고 계속한다."""
+    """jarvis 훅 모듈의 merge_and_diff.py 와 같다: 객체가 아닌 JSON 은 기록을 담을 수 없으므로 빈 영수증으로 보고 계속한다."""
     home, run = _isolated_apply(monkeypatch, tmp_path)
     manifest = home / ".claude" / ".claude-code-setup.json"
     manifest.write_text(receipt, encoding="utf-8")

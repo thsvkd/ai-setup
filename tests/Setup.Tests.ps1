@@ -1,4 +1,4 @@
-﻿# setup.ps1 / setup_hooks.ps1 오케스트레이션 계층 테스트 (Pester v5).
+﻿# setup.ps1 오케스트레이션 계층 테스트 (Pester v5).
 #   실행: Invoke-Pester tests/Setup.Tests.ps1 -Output Detailed
 #
 # 스크립트가 `exit` 를 호출하므로 Pester 세션을 죽이지 않도록 자식 pwsh 프로세스로 실행한다.
@@ -6,7 +6,8 @@
 BeforeAll {
     $script:RepoRoot = Split-Path -Parent $PSScriptRoot
     $script:Setup = Join-Path $script:RepoRoot "scripts\setup.ps1"
-    $script:SetupHooks = Join-Path $script:RepoRoot "scripts\setup_hooks.ps1"
+    # 훅은 jarvis 로 옮겨 갔다. setup.ps1·install.ps1 의 -Hooks 는 이 안내만 내고 exit 1 로 끝난다(res/stages.py 의 hooks_moved).
+    $script:HooksPointer = [regex]::Escape("Hooks are now managed by jarvis; ai-setup no longer installs or removes them. From a jarvis checkout run: py -3 -m jarvis module hooks plan --json (uninstall: module hooks uninstall --json --dry-run).")
 
     function Invoke-Script {
         param([string]$Path, [string[]]$ScriptArgs)
@@ -52,30 +53,42 @@ Describe "setup.ps1 dispatcher" {
         $r.Output | Should -Match "Usage"
     }
 
-    It "-Hooks -DryRun does not create settings.json" {
-        Invoke-Script $script:Setup @("-Hooks", "-DryRun") | Out-Null
-        Test-Path (Join-Path $env:USERPROFILE ".claude\settings.json") | Should -Be $false
-    }
-
-    # 병합은 영수증을 보고 예전 설치가 넣은 항목을 걷어낸다. dry-run 이 영수증을 임시 홈에 복사하지
-    # 않으면 계획에서 빠져, 미리 본 것과 실제 설치가 달라진다.
-    It "-Hooks -DryRun plans the receipt-based retirement and writes nothing" {
+    # 훅은 jarvis 가 맡는다. -Hooks·--hooks 는 안내만 내고 프로필(설치된 훅·영수증의 훅 기록 포함)을 그대로 둔 채 exit 1 로 끝난다.
+    It "-Hooks and --hooks point to jarvis and write nothing (covers: AI-69)" {
         $claude = Join-Path $env:USERPROFILE ".claude"
-        New-Item -ItemType Directory -Force -Path $claude | Out-Null
-        $settings = Join-Path $claude "settings.json"
-        $receipt = Join-Path $claude ".claude-code-setup.json"
-        Set-Content -Path $settings -Encoding ascii -Value '{"autoMode": {"allow": ["$defaults", "old exception"]}}'
-        Set-Content -Path $receipt -Encoding ascii -Value '{"version": 1, "added_auto_allow": ["$defaults", "old exception"]}'
-        $before = (Get-Content $settings -Raw) + (Get-Content $receipt -Raw)
-        $r = Invoke-Script $script:Setup @("-Hooks", "-DryRun")
-        $r.ExitCode | Should -Be 0 -Because $r.Output
-        $r.Output | Should -Match "no longer shipped"
-        ((Get-Content $settings -Raw) + (Get-Content $receipt -Raw)) | Should -Be $before
+        New-Item -ItemType Directory -Force -Path (Join-Path $claude "hooks") | Out-Null
+        Set-Content -Path (Join-Path $claude "hooks\danger_guard.py") -Encoding ascii -Value "# installed hook"
+        Set-Content -Path (Join-Path $claude ".claude-code-setup.json") -Encoding ascii -Value '{"hook_files": ["danger_guard.py"], "added_allow": ["Bash"]}'
+        # 자식 pwsh 자신이 프로필 아래에 시작 캐시(AppData\Local\Microsoft\PowerShell)를 쓴다.
+        # setup.ps1 이 아니라 테스트가 띄운 인터프리터의 흔적이므로 그 경로만 비교에서 뺀다.
+        $listHome = {
+            ((Get-ChildItem -Recurse -Force $env:USERPROFILE | ForEach-Object FullName |
+                Where-Object { $_ -notmatch '[\\/]AppData([\\/]Local([\\/]Microsoft([\\/]PowerShell([\\/].*)?)?)?)?$' } |
+                Sort-Object) -join "`n") + (Get-Content (Join-Path $claude ".claude-code-setup.json") -Raw)
+        }
+        $before = & $listHome
+        foreach ($a in @(@("-Hooks"), @("-Hooks", "-Uninstall"), @("-Hooks", "-DryRun"), @("-Keybinds", "-Hooks"))) {
+            $r = Invoke-Script $script:Setup $a
+            $r.ExitCode | Should -Be 1 -Because ($a -join " ")
+            $r.Output | Should -Match $script:HooksPointer -Because ($a -join " ")
+        }
+        foreach ($a in @("--hooks", "--hooks --uninstall", "--help --hooks", "--stages hooks", "--stages newline,hooks")) {
+            $r = Invoke-ScriptInline $script:Setup $a
+            $r.ExitCode | Should -Be 1 -Because $a
+            # --stages 는 stages.py 가 같은 안내를 낸다(Linux pwsh 에서는 python3 표기).
+            $r.Output | Should -Match "Hooks are now managed by jarvis; ai-setup no longer installs or removes them\." -Because $a
+        }
+        (& $listHome) | Should -Be $before
     }
 
     It "-Uninstall -DryRun on clean profile exits 0" {
-        $r = Invoke-Script $script:SetupHooks @("-Uninstall", "-DryRun")
-        $r.ExitCode | Should -Be 0
+        # 전체 제거는 키바인드 워커도 부른다. POSIX pwsh 의 워커가 실제 홈을 읽지 않도록 HOME 도 격리한다.
+        $oldHome = $env:HOME
+        $env:HOME = $script:sandbox
+        try {
+            $r = Invoke-Script $script:Setup @("-Uninstall", "-DryRun")
+        } finally { $env:HOME = $oldHome }
+        $r.ExitCode | Should -Be 0 -Because $r.Output
         Test-Path (Join-Path $env:USERPROFILE ".claude\settings.json") | Should -Be $false
     }
 
@@ -88,10 +101,10 @@ Describe "setup.ps1 dispatcher" {
         $r.Output | Should -Match "--no-onboard"
     }
 
-    It "also accepts setup.sh-style --hooks --dry-run and runs only the hooks scope" {
-        $r = Invoke-ScriptInline $script:Setup "--hooks --dry-run"
-        $r.ExitCode | Should -Be 0
-        $r.Output | Should -Not -Match "AGENTS.md"      # --hooks 범위가 지켜졌다
+    It "also accepts setup.sh-style --agentsmd --dry-run and runs only that scope" {
+        $r = Invoke-ScriptInline $script:Setup "--agentsmd --dry-run"
+        $r.ExitCode | Should -Be 0 -Because $r.Output
+        $r.Output | Should -Not -Match "keybindings\.json"      # --agentsmd 범위가 지켜졌다
         Test-Path (Join-Path $env:USERPROFILE ".claude\settings.json") | Should -Be $false
     }
 
@@ -240,6 +253,25 @@ Describe "install.ps1 bootstrap" {
         }
     }
 
+    # 훅도 jarvis 로 옮겨 갔다. 레포를 받기 전에 멈추므로 네트워크를 타지 않는다.
+    It "-Hooks and --hooks point to jarvis before downloading (covers: AI-69)" {
+        $oldRepo = $env:CLAUDE_SETUP_REPO
+        $env:CLAUDE_SETUP_REPO = "thsvkd/does-not-exist"
+        try {
+            foreach ($a in @("-Hooks", "--hooks", "-Hooks -Uninstall", "--help --hooks")) {
+                $r = Invoke-ScriptInline (Join-Path $script:RepoRoot "install.ps1") $a
+                $r.ExitCode | Should -Be 1 -Because $a
+                $r.Output | Should -Match $script:HooksPointer -Because $a
+                $r.Output | Should -Not -Match "downloading" -Because $a
+            }
+            $r = Invoke-Script (Join-Path $script:RepoRoot "install.ps1") @("-Hooks")
+            $r.ExitCode | Should -Be 1 -Because $r.Output
+            $r.Output | Should -Match $script:HooksPointer
+        } finally {
+            $env:CLAUDE_SETUP_REPO = $oldRepo
+        }
+    }
+
     # README 의 `irm | iex` 는 인자를 하나도 넘기지 않는다. 그 경로가 빈 인자를 '알 수 없는 옵션'
     # 으로 거절하던 회귀. 존재하지 않는 레포를 가리켜 다운로드 단계에서 멈추게 하므로 설치는
     # 일어나지 않고, 오프라인이어도 결론은 같다.
@@ -325,118 +357,56 @@ Describe "real install path (S2)" {
         Remove-Item -Recurse -Force $script:sandbox -ErrorAction SilentlyContinue
     }
 
-    It "a real -Hooks install creates the hook files, the shim and settings.json" {
-        $r = Invoke-Script $script:Setup @("-Hooks")
-        $r.ExitCode | Should -Be 0
-        $hooksDir = Join-Path $env:USERPROFILE ".claude\hooks"
-        Test-Path (Join-Path $hooksDir "danger_guard.py") | Should -Be $true
-        Test-Path (Join-Path $hooksDir "send_to_trash.py") | Should -Be $true
-        Test-Path (Join-Path $hooksDir "shims/rm") | Should -Be $true
-        Test-Path (Join-Path $hooksDir "shims/RmShim.psm1") | Should -Be $true
-        Test-Path (Join-Path $hooksDir "secrets_guard.py") | Should -Be $false
-        Test-Path (Join-Path $hooksDir "graft_sync_hidden.cjs") | Should -Be $true
-        $settings = Get-Content (Join-Path $env:USERPROFILE ".claude\settings.json") -Raw | ConvertFrom-Json
-        $settings.hooks.PreToolUse.Count | Should -Be 1
-        $settings.hooks.SessionStart.Count | Should -Be 1
-        $settings.env.GRAFT_TEST_SYNC_RUN | Should -Match '/hooks/graft_sync_hidden\.cjs$'
-    }
-
-    It "the manifest (added_allow) survives an idempotent rerun without duplicates" {
-        Invoke-Script $script:Setup @("-Hooks") | Out-Null
-        $r2 = Invoke-Script $script:Setup @("-Hooks")
-        $r2.ExitCode | Should -Be 0
-        $settings = Get-Content (Join-Path $env:USERPROFILE ".claude\settings.json") -Raw | ConvertFrom-Json
-        $settings.hooks.PreToolUse.Count | Should -Be 1
-        $settings.hooks.SessionStart.Count | Should -Be 1
-        $manifest = Get-Content (Join-Path $env:USERPROFILE ".claude\.claude-code-setup.json") -Raw | ConvertFrom-Json
-        $manifest.added_allow.Count | Should -BeGreaterThan 0
-        $manifest.default_mode_changed | Should -Be $true
-    }
-
-    It "-Uninstall restores the pre-install state (no settings file)" {
-        Invoke-Script $script:Setup @("-Hooks") | Out-Null
-        $r = Invoke-Script $script:Setup @("-Uninstall")
-        $r.ExitCode | Should -Be 0
-        Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $false
-        Test-Path (Join-Path $env:USERPROFILE ".claude\settings.json") | Should -Be $false
-    }
-
-    # 영수증은 하네스·도구 설치 기록도 함께 담는다. 읽지 못한다고 지우면 그 기록이 사라진다.
-    It "-Uninstall leaves an unparseable receipt untouched and fails" {
-        Invoke-Script $script:Setup @("-Hooks") | Out-Null
-        $manifestPath = Join-Path $env:USERPROFILE ".claude\.claude-code-setup.json"
-        $broken = '{"harness_installs": {"codex": true}, broken'
-        [IO.File]::WriteAllText($manifestPath, $broken)
-        $r = Invoke-Script $script:SetupHooks @("-Uninstall")
-        $r.ExitCode | Should -Not -Be 0 -Because $r.Output
-        $r.Output | Should -Match "receipt"
-        [IO.File]::ReadAllText($manifestPath) | Should -Be $broken
-        Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $true
-    }
-
-    # jarvis 의 Orca 모듈이 같은 영수증 키를 읽고 제거한다. 영수증을 다시 쓰는 워커가 그 키를 지우면 안 된다.
-    It "-Hooks -Uninstall keeps the Orca receipt records for jarvis (covers: AI-67)" {
-        Invoke-Script $script:Setup @("-Hooks") | Out-Null
-        $manifestPath = Join-Path $env:USERPROFILE ".claude\.claude-code-setup.json"
+    # 전체 -Uninstall 은 훅을 지우지 않는다. jarvis 훅 모듈이 훅 파일과 영수증의 훅 기록을, jarvis 의 Orca 모듈이
+    # Orca 기록을 이어 읽는다. 영수증을 다시 쓰는 워커(여기서는 키바인드)가 그 키를 지우면 안 된다.
+    It "-Uninstall keeps the hooks, their receipt records and the Orca records for jarvis (covers: AI-67, AI-69)" {
+        (Invoke-Script $script:Setup @("-Keybinds")).ExitCode | Should -Be 0
+        $claudeDir = Join-Path $env:USERPROFILE ".claude"
+        $hooksDir = Join-Path $claudeDir "hooks"
+        New-Item -ItemType Directory -Force -Path (Join-Path $hooksDir "shims") | Out-Null
+        Set-Content -Path (Join-Path $hooksDir "danger_guard.py") -Encoding ascii -Value "# installed hook"
+        Set-Content -Path (Join-Path $hooksDir "shims\RmShim.psm1") -Encoding ascii -Value "# shim"
+        $settingsPath = Join-Path $claudeDir "settings.json"
+        $settingsText = '{"permissions": {"allow": ["PowerShell"], "defaultMode": "auto"}, "hooks": {"PreToolUse": [{"matcher": "PowerShell", "hooks": [{"type": "command", "command": "py -3 danger_guard.py"}]}]}}'
+        [IO.File]::WriteAllText($settingsPath, $settingsText)
+        $manifestPath = Join-Path $claudeDir ".claude-code-setup.json"
         $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
-        $manifest.PSObject.Properties.Name | Should -Contain "hook_files"
-        $orca = '{"tool_installs": {"orca": {"method": "deb", "version": "1.4.242", "skills_added": ["orca-cli"]}, "orca_server": {"service_manager": "systemd-user", "state": "configured"}}, "tool_attempts": {"orca": {"state": "done"}}}' | ConvertFrom-Json
-        foreach ($key in $orca.PSObject.Properties.Name) {
-            $manifest | Add-Member -NotePropertyName $key -NotePropertyValue $orca.$key -Force
+        $manifest.PSObject.Properties.Name | Should -Contain "keybinds"
+        $kept = '{"hook_files": ["danger_guard.py", "shims/RmShim.psm1"], "added_allow": ["PowerShell"], "default_mode_changed": true, "hooks": true, "tool_installs": {"orca": {"method": "deb", "version": "1.4.242", "skills_added": ["orca-cli"]}, "orca_server": {"service_manager": "systemd-user", "state": "configured"}}, "tool_attempts": {"orca": {"state": "done"}}}' | ConvertFrom-Json
+        foreach ($key in $kept.PSObject.Properties.Name) {
+            $manifest | Add-Member -NotePropertyName $key -NotePropertyValue $kept.$key -Force
         }
         [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 20))
-        $r = Invoke-Script $script:Setup @("-Hooks", "-Uninstall")
+        $r = Invoke-Script $script:Setup @("-Uninstall")
         $r.ExitCode | Should -Be 0 -Because $r.Output
-        Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $false
+        (Get-Content (Join-Path $hooksDir "danger_guard.py") -Raw).Trim() | Should -Be "# installed hook"
+        Test-Path (Join-Path $hooksDir "shims\RmShim.psm1") | Should -Be $true
+        [IO.File]::ReadAllText($settingsPath) | Should -Be $settingsText
         $after = Get-Content $manifestPath -Raw | ConvertFrom-Json
-        $after.PSObject.Properties.Name | Should -Not -Contain "hook_files"  # 워커가 영수증을 실제로 다시 썼다
-        foreach ($key in $orca.PSObject.Properties.Name) {
-            ($after.$key | ConvertTo-Json -Depth 20 -Compress) | Should -Be ($orca.$key | ConvertTo-Json -Depth 20 -Compress) -Because $key
+        $after.PSObject.Properties.Name | Should -Not -Contain "keybinds"  # 워커가 영수증을 실제로 다시 썼다
+        foreach ($key in $kept.PSObject.Properties.Name) {
+            ($after.$key | ConvertTo-Json -Depth 20 -Compress) | Should -Be ($kept.$key | ConvertTo-Json -Depth 20 -Compress) -Because $key
         }
-    }
-
-    # 키바인드 제거가 남기는 {} 처럼, 기록이 없는 영수증은 빈 영수증이다. StrictMode 에서 죽으면 훅을 못 뺀다.
-    It "-Uninstall treats a receipt without records (<receipt>) as empty" -ForEach @(
-        @{ receipt = '{}' }, @{ receipt = '[]' }, @{ receipt = 'null' }
-    ) {
-        Invoke-Script $script:Setup @("-Hooks") | Out-Null
-        $manifestPath = Join-Path $env:USERPROFILE ".claude\.claude-code-setup.json"
-        [IO.File]::WriteAllText($manifestPath, $receipt)
-        $r = Invoke-Script $script:SetupHooks @("-Uninstall")
-        $r.ExitCode | Should -Be 0 -Because $r.Output
-        Test-Path (Join-Path $env:USERPROFILE ".claude\hooks\danger_guard.py") | Should -Be $false
-        Test-Path $manifestPath | Should -Be $false
-    }
-
-    It "keeps the existing settings.json model/env and only switches defaultMode to auto" {
-        New-Item -ItemType Directory -Force -Path (Join-Path $env:USERPROFILE ".claude") | Out-Null
-        $seed = @{ env = @{ MY_VAR = "keep-me" }; model = "sonnet"; permissions = @{ defaultMode = "acceptEdits" } } | ConvertTo-Json -Depth 5
-        Set-Content -Path (Join-Path $env:USERPROFILE ".claude\settings.json") -Value $seed -Encoding utf8
-        $r = Invoke-Script $script:Setup @("-Hooks")
-        $r.ExitCode | Should -Be 0
-        $after = Get-Content (Join-Path $env:USERPROFILE ".claude\settings.json") -Raw | ConvertFrom-Json
-        $after.env.MY_VAR | Should -Be "keep-me"
-        $after.model | Should -Be "sonnet"
-        $after.permissions.defaultMode | Should -Be "auto"
     }
 
     # OMC 설치는 실제 claude CLI 를 부르므로, 설치 결과(settings + 영수증)를 심어 두고 제거 경로만 검증한다.
-    It "-Uninstall -Hooks leaves the omc_hud manifest, then -Uninstall -Omc reverts the cache TTL setting" {
-        Invoke-Script $script:Setup @("-Hooks") | Out-Null
+    It "-Uninstall -Hooks points to jarvis and keeps the omc_hud manifest, then -Uninstall -Omc reverts the cache TTL setting (covers: AI-69)" {
         $claudeDir = Join-Path $env:USERPROFILE ".claude"
+        New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
         $settingsPath = Join-Path $claudeDir "settings.json"
         $manifestPath = Join-Path $claudeDir ".claude-code-setup.json"
         $omcCmd = 'sh "$HOME/.claude/hud/omc-hud-cache.sh" "$HOME/.claude/hud/omc-hud.mjs"'
-        $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
-        $settings | Add-Member -NotePropertyName statusLine -NotePropertyValue ([pscustomobject]@{
-            type = "command"; command = 'node "$HOME/.claude/hud/omc-hud-ttl.mjs" ' + $omcCmd; refreshInterval = 10 })
+        $settings = [pscustomobject]@{ statusLine = [pscustomobject]@{
+            type = "command"; command = 'node "$HOME/.claude/hud/omc-hud-ttl.mjs" ' + $omcCmd; refreshInterval = 10 } }
         Set-Content -Path $settingsPath -Value ($settings | ConvertTo-Json -Depth 20) -Encoding utf8
-        $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
-        $manifest | Add-Member -NotePropertyName omc_hud -NotePropertyValue ([pscustomobject]@{ refresh_interval_added = $true })
+        $manifest = [pscustomobject]@{ omc_hud = [pscustomobject]@{ refresh_interval_added = $true } }
         Set-Content -Path $manifestPath -Value ($manifest | ConvertTo-Json -Depth 20) -Encoding utf8
+        $before = (Get-Content $settingsPath -Raw) + (Get-Content $manifestPath -Raw)
 
-        (Invoke-Script $script:Setup @("-Uninstall", "-Hooks")).ExitCode | Should -Be 0
-        (Get-Content $manifestPath -Raw | ConvertFrom-Json).omc_hud.refresh_interval_added | Should -Be $true
+        $r = Invoke-Script $script:Setup @("-Uninstall", "-Hooks")
+        $r.ExitCode | Should -Be 1 -Because $r.Output
+        $r.Output | Should -Match $script:HooksPointer
+        ((Get-Content $settingsPath -Raw) + (Get-Content $manifestPath -Raw)) | Should -Be $before
 
         $r = Invoke-Script $script:Setup @("-Uninstall", "-Omc")
         $r.ExitCode | Should -Be 0
@@ -457,20 +427,21 @@ Describe "real install path (S2)" {
         (Get-Content $settingsPath -Raw).Trim() | Should -Be $seed
     }
 
-    It "-Uninstall -Hooks leaves the output_style manifest, then -Uninstall -OutputStyle reverts outputStyle" {
-        Invoke-Script $script:Setup @("-Hooks") | Out-Null
+    It "-Uninstall -Hooks points to jarvis and keeps the output_style manifest, then -Uninstall -OutputStyle reverts outputStyle (covers: AI-69)" {
         $claudeDir = Join-Path $env:USERPROFILE ".claude"
+        New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
         $settingsPath = Join-Path $claudeDir "settings.json"
         $manifestPath = Join-Path $claudeDir ".claude-code-setup.json"
-        $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
-        $settings | Add-Member -NotePropertyName outputStyle -NotePropertyValue "fluent-korean:fluent-korean"
+        $settings = [pscustomobject]@{ model = "sonnet"; outputStyle = "fluent-korean:fluent-korean" }
         Set-Content -Path $settingsPath -Value ($settings | ConvertTo-Json -Depth 20) -Encoding utf8
-        $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
-        $manifest | Add-Member -NotePropertyName output_style -NotePropertyValue ([pscustomobject]@{ previous = "Concise"; settings_created = $false })
+        $manifest = [pscustomobject]@{ output_style = [pscustomobject]@{ previous = "Concise"; settings_created = $false } }
         Set-Content -Path $manifestPath -Value ($manifest | ConvertTo-Json -Depth 20) -Encoding utf8
+        $before = (Get-Content $settingsPath -Raw) + (Get-Content $manifestPath -Raw)
 
-        (Invoke-Script $script:Setup @("-Uninstall", "-Hooks")).ExitCode | Should -Be 0
-        (Get-Content $manifestPath -Raw | ConvertFrom-Json).output_style.previous | Should -Be "Concise"
+        $r = Invoke-Script $script:Setup @("-Uninstall", "-Hooks")
+        $r.ExitCode | Should -Be 1 -Because $r.Output
+        $r.Output | Should -Match $script:HooksPointer
+        ((Get-Content $settingsPath -Raw) + (Get-Content $manifestPath -Raw)) | Should -Be $before
 
         $r = Invoke-Script $script:Setup @("-Uninstall", "-OutputStyle")
         $r.ExitCode | Should -Be 0
@@ -537,7 +508,7 @@ Describe "real install path (S2)" {
             $calls | Should -Match "plugin install fluent-korean@fluent-korean"
             $after = Get-Content (Join-Path $env:USERPROFILE ".claude\settings.json") -Raw | ConvertFrom-Json
             $after.outputStyle | Should -Be "fluent-korean:fluent-korean"
-            # -OutputStyle 만 줬으므로 훅은 설치되지 않는다
+            # -OutputStyle 만 줬으므로 다른 설정(훅 등록 포함)은 쓰지 않는다
             $after.PSObject.Properties.Name | Should -Not -Contain "hooks"
         }
 
@@ -581,7 +552,7 @@ Describe "real install path (S2)" {
 Describe "Windows .ps1 encoding regression (BOM)" {
     It "every shipped .ps1 file must start with a UTF-8 BOM" {
         $files = @(
-            "scripts\setup.ps1", "scripts\setup_hooks.ps1", "scripts\setup_agentsmd.ps1",
+            "scripts\setup.ps1", "scripts\setup_agentsmd.ps1",
             "scripts\lib\SetupCommon.ps1", "scripts\setup_output_style.ps1", "scripts\setup_mods.ps1", "tests\Setup.Tests.ps1"
         )
         foreach ($f in $files) {
@@ -620,7 +591,7 @@ Describe "Windows .ps1 encoding regression (BOM)" {
 Describe "native command error escalation guard regression (S1)" {
     It "scripts that judge native commands by LASTEXITCODE explicitly turn off PSNativeCommandUseErrorActionPreference" {
         $files = @(
-            "scripts\setup.ps1", "scripts\setup_hooks.ps1", "install.ps1", "scripts\lib\SetupCommon.ps1"
+            "scripts\setup.ps1", "install.ps1", "scripts\lib\SetupCommon.ps1"
         )
         foreach ($f in $files) {
             $path = Join-Path $script:RepoRoot $f
@@ -759,12 +730,12 @@ Describe "onboarding wiring" {
         $r = Invoke-Script $script:Setup @("-Help")
         $r.ExitCode | Should -Be 0
         $r.Output | Should -Match "onboarding"
-        $r.Output | Should -Match "bypassPermissions"
+        $r.Output | Should -Match "Shift\+Enter"
     }
 
     It "passing a flag does not launch onboarding" {
         # 자동화/CI 가 쓰던 기존 호출이 프롬프트를 기다리며 멈추면 안 된다.
-        $r = Invoke-Script $script:Setup @("-Hooks", "-DryRun")
+        $r = Invoke-Script $script:Setup @("-AgentsMd", "-DryRun")
         $r.ExitCode | Should -Be 0
         $r.Output | Should -Not -Match "What would you like to install"
     }
@@ -804,36 +775,6 @@ Describe "onboarding wiring" {
         $r.Output | Should -Match "Aborting installation"
         Join-Path $script:sandbox ".claude" | Should -Not -Exist
         Join-Path $script:sandbox "AGENTS.md" | Should -Not -Exist
-    }
-}
-
-Describe "the values picked in onboarding are reflected in the install" {
-    BeforeEach {
-        $script:sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-mode-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
-        New-Item -ItemType Directory -Force -Path $script:sandbox | Out-Null
-        $script:oldUP = $env:USERPROFILE
-        $env:USERPROFILE = $script:sandbox
-    }
-    AfterEach {
-        $env:USERPROFILE = $script:oldUP
-        Remove-Item -Recurse -Force $script:sandbox -ErrorAction SilentlyContinue
-    }
-
-    It "-DefaultMode bypassPermissions is reflected in the settings.json plan" {
-        $r = Invoke-Script $script:SetupHooks @("-DryRun", "-DefaultMode", "bypassPermissions")
-        $r.ExitCode | Should -Be 0
-        $r.Output | Should -Match "permissions\.defaultMode: None -> 'bypassPermissions'"
-    }
-
-    It "without -DefaultMode, the fragment default (auto) is used as is" {
-        $r = Invoke-Script $script:SetupHooks @("-DryRun")
-        $r.ExitCode | Should -Be 0
-        $r.Output | Should -Match "permissions\.defaultMode: None -> 'auto'"
-    }
-
-    It "an unknown -DefaultMode is rejected by ValidateSet" {
-        $r = Invoke-Script $script:SetupHooks @("-DryRun", "-DefaultMode", "bypass")
-        $r.ExitCode | Should -Not -Be 0
     }
 }
 
@@ -1057,7 +998,7 @@ Describe "keybinding dispatcher" {
 }
 
 Describe "Python-not-installed guidance" {
-    It "without Python, setup_hooks.ps1 fails and shows the winget install command" -Skip:(-not $IsWindows) {
+    It "without Python, setup_skills.ps1 fails and shows the winget install command" -Skip:(-not $IsWindows) {
         $oldPath = $env:PATH; $oldUP = $env:USERPROFILE
         $sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("cc-pester-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $sandbox | Out-Null
@@ -1066,9 +1007,9 @@ Describe "Python-not-installed guidance" {
             # python/python3/py 가 하나도 보이지 않는 PATH (Store 별칭이 있는 WindowsApps 도 뺀다).
             $env:PATH = "$PSHOME;$env:SystemRoot\System32"
             $pwshExe = (Get-Process -Id $PID).Path
-            $out = & $pwshExe -NoProfile -File $script:SetupHooks -DryRun 2>&1 | Out-String
+            $out = & $pwshExe -NoProfile -File (Join-Path $script:RepoRoot "scripts\setup_skills.ps1") -DryRun 2>&1 | Out-String
             $LASTEXITCODE | Should -Be 1
-            $out | Should -Match "Python not found"
+            $out | Should -Match "Python 3 is required"
             $out | Should -Match "winget install -e --id Python\.Python\.3"
         } finally {
             $env:PATH = $oldPath; $env:USERPROFILE = $oldUP

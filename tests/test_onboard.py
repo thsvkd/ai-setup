@@ -197,15 +197,15 @@ def test_ci_env_var_blocks_prompt_even_with_tty(tmp_path):
 
 # 산책 키 위치: 0 시작 · 1 base · 2 하네스 선택 · 3 하네스 설치 · 4 plugins · 5 skills ·
 # 6 codegraph · 7 mcp · 8 줄바꿈 · 9 줄바꿈 키 · 10 Claude 전용 · 11-13 출력 스타일·mod·HUD ·
-# 14 tools · 15 Jarvis · 16 herdr · 17 hooks · 18 권한 · 19 AGENTS.md · 20 허브(커서는 Apply).
-ACCEPT_APPLY = [ENTER] * 21
-ACCEPT_DRY = [ENTER] * 20 + [DOWN, ENTER]
+# 14 tools · 15 Jarvis · 16 herdr · 17 AGENTS.md · 18 허브(커서는 Apply). 훅은 jarvis 로 옮겨 가 묻지 않는다.
+ACCEPT_APPLY = [ENTER] * 19
+ACCEPT_DRY = [ENTER] * 18 + [DOWN, ENTER]
 # Skip 은 허브로 간다. 허브 커서는 첫 카테고리이므로 ↑ 한 번이면 맨 끝의 Quit 이다.
 SKIP_THEN_QUIT = [DOWN, ENTER, UP, ENTER]
 
 
 @posix_only
-def test_default_choices_give_full_install_with_auto(tmp_path):
+def test_default_choices_give_full_install(tmp_path):
     """Enter 만으로 기본 산책: Claude Code·Codex, Shift+Enter, Claude 전용 설정은 예, Jarvis 는 설치하지 않음."""
     out = tmp_path / "answers"
     code, screen = run_in_pty(
@@ -220,9 +220,8 @@ def test_default_choices_give_full_install_with_auto(tmp_path):
     assert "Claude Code" in text and "Codex" in text, text
     assert read_answers(out) == {
         "SKIP": "0",
-        "STAGES": "base,harness,plugins,skills,codegraph,mcp,newline,claude_special,tools,hooks,agentsmd",
+        "STAGES": "base,harness,plugins,skills,codegraph,mcp,newline,claude_special,tools,agentsmd",
         "HARNESSES": "claude,codex",
-        "DEFAULT_MODE": "auto",
         "JARVIS_ROLE": "none",
         "HERDR": "0",
         "DRY_RUN": "0",
@@ -250,19 +249,6 @@ def test_prompt_works_under_curl_pipe_install(tmp_path):
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     assert read_answers(out) == {"SKIP": "1"}
-
-
-@posix_only
-def test_bypass_choice_shows_warning(tmp_path):
-    out = tmp_path / "answers"
-    _, screen = run_in_pty(
-        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
-         "--project-dir", str(tmp_path)],
-        keys=[ENTER] * 18 + [DOWN, ENTER, ENTER, ENTER],
-        timeout=90,
-    )
-    text = screen.decode(errors="replace")
-    assert "bypassPermissions skips all of Claude Code's permission prompts" in text, text
 
 
 @posix_only
@@ -345,7 +331,7 @@ def test_overwrite_asked_only_when_agentsmd_exists(tmp_path):
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER] * 22,
+        keys=[ENTER] * 20,
         timeout=90,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
@@ -364,7 +350,7 @@ def test_ctrl_enter_choice_makes_newline_chord_ctrl_enter(tmp_path):
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER] * 9 + [DOWN, ENTER] + [ENTER] * 11,
+        keys=[ENTER] * 9 + [DOWN, ENTER] + [ENTER] * 9,
         timeout=90,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
@@ -374,13 +360,13 @@ def test_ctrl_enter_choice_makes_newline_chord_ctrl_enter(tmp_path):
 
 
 @posix_only
-def test_scope_hooks_does_not_ask_newline_chord(tmp_path):
+def test_newline_off_does_not_ask_newline_chord(tmp_path):
     """줄바꿈 단계를 끄면 줄바꿈 키를 묻지 않고 NEWLINE_CHORD 를 기록하지 않는다."""
     out = tmp_path / "answers"
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER] * 8 + [b"n"] + [ENTER] * 11,
+        keys=[ENTER] * 8 + [b"n"] + [ENTER] * 9,
         timeout=90,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
@@ -412,7 +398,7 @@ def test_scope_agentsmd_does_not_ask_newline_chord(tmp_path):
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER, b"n", ENTER] + [b"n"] * 9 + [ENTER, ENTER],
+        keys=[ENTER, b"n", ENTER] + [b"n"] * 8 + [ENTER, ENTER],
         timeout=60,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
@@ -432,7 +418,7 @@ def test_deselecting_harnesses_records_only_the_chosen(tmp_path):
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER] * 2 + [SPACE, ENTER] + [ENTER] * 15,
+        keys=[ENTER] * 2 + [SPACE, ENTER] + [ENTER] * 13,
         timeout=90,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
@@ -464,7 +450,7 @@ def test_choosing_omc_records_omc_as_1(tmp_path):
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER] * 11 + [b"n", b"n", b"y"] + [ENTER] * 7,
+        keys=[ENTER] * 11 + [b"n", b"n", b"y"] + [ENTER] * 5,
         timeout=90,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
@@ -481,7 +467,7 @@ def test_choosing_output_style_records_output_style_as_1(tmp_path):
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER] * 11 + [b"y", b"n", b"n"] + [ENTER] * 7,
+        keys=[ENTER] * 11 + [b"y", b"n", b"n"] + [ENTER] * 5,
         timeout=90,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
@@ -498,7 +484,7 @@ def test_choosing_mod_records_mods_as_1(tmp_path):
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER] * 11 + [b"n", b"y", b"n"] + [ENTER] * 7,
+        keys=[ENTER] * 11 + [b"n", b"y", b"n"] + [ENTER] * 5,
         timeout=90,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
@@ -515,7 +501,7 @@ def test_scope_agentsmd_does_not_ask_omc(tmp_path):
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        keys=[ENTER, b"n", ENTER] + [b"n"] * 9 + [ENTER, ENTER],
+        keys=[ENTER, b"n", ENTER] + [b"n"] * 8 + [ENTER, ENTER],
         timeout=60,
     )
     text = screen.decode(errors="replace")
@@ -538,8 +524,8 @@ def test_skip_opens_hub_and_apply_records_the_edited_selection(tmp_path):
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        # Skip → 허브(Base) → Base 끔 → 허브 커서는 Base → ↓10 번이면 Apply.
-        keys=[DOWN, ENTER, ENTER, b"n"] + [DOWN] * 10 + [ENTER],
+        # Skip → 허브(Base) → Base 끔 → 허브 커서는 Base → ↓9 번이면 Apply.
+        keys=[DOWN, ENTER, ENTER, b"n"] + [DOWN] * 9 + [ENTER],
     )
     text = screen.decode(errors="replace")
     assert code == EXIT_OK, text
@@ -547,7 +533,7 @@ def test_skip_opens_hub_and_apply_records_the_edited_selection(tmp_path):
     answers = read_answers(out)
     assert answers["SKIP"] == "0"
     assert answers["DRY_RUN"] == "0"
-    assert answers["STAGES"] == "harness,plugins,skills,codegraph,mcp,newline,claude_special,tools,hooks,agentsmd"
+    assert answers["STAGES"] == "harness,plugins,skills,codegraph,mcp,newline,claude_special,tools,agentsmd"
     assert answers["HARNESSES"] == "claude,codex"
 
 
@@ -560,8 +546,8 @@ def test_apply_with_every_stage_off_selects_nothing(tmp_path):
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
          "--project-dir", str(tmp_path)],
-        # 시작 · base n · 하네스 선택 · 하네스 설치 n · 나머지 9 단계 n · 허브 Apply.
-        keys=[ENTER, b"n", ENTER] + [b"n"] * 10 + [ENTER],
+        # 시작 · base n · 하네스 선택 · 하네스 설치 n · 나머지 8 단계 n · 허브 Apply.
+        keys=[ENTER, b"n", ENTER] + [b"n"] * 9 + [ENTER],
         timeout=60,
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
@@ -590,17 +576,13 @@ def test_receipt_opens_hub_without_the_walk(tmp_path):
 
 
 @posix_only
-@pytest.mark.parametrize("mode", ["bypassPermissions", "acceptEdits"])
-def test_untouched_hub_apply_does_not_change_the_recorded_mode_or_newline_key(tmp_path, monkeypatch, mode):
-    """기록된 값을 메뉴가 보여 줄 수 없어도(acceptEdits), 손대지 않은 Apply 는 그 값을 바꾸지 않는다.
-    답이 다른 값을 담으면 setup 이 명시한 값으로 넘기고, stages 가 훅을 다시 깔아 사용자의 값을 되돌린다.
-    답을 실제 stages 계획에 넣어 본다."""
+def test_untouched_hub_apply_does_not_change_the_recorded_newline_key(tmp_path, monkeypatch):
+    """손대지 않은 Apply 는 기록된 줄바꿈 키를 바꾸지 않는다. 답이 다른 값을 담으면 setup 이 명시한 값으로
+    넘기고, stages 가 키바인드를 다시 깔아 사용자의 값을 되돌린다. 답을 실제 stages 계획에 넣어 본다."""
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     (home / ".claude" / ".claude-code-setup.json").write_text(
-        json.dumps({"hooks": True, "keybinds": {"newline_chord": "ctrl-enter"}}), encoding="utf-8")
-    (home / ".claude" / "settings.json").write_text(
-        json.dumps({"permissions": {"defaultMode": mode}}), encoding="utf-8")
+        json.dumps({"keybinds": {"newline_chord": "ctrl-enter"}}), encoding="utf-8")
     out = tmp_path / "answers"
     code, screen = run_in_pty(
         [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
@@ -610,58 +592,38 @@ def test_untouched_hub_apply_does_not_change_the_recorded_mode_or_newline_key(tm
     )
     assert code == EXIT_OK, screen.decode(errors="replace")
     answers = read_answers(out)
-    assert answers["SKIP"] == "0" and "hooks" in answers["STAGES"] and "newline" in answers["STAGES"]
+    assert answers["SKIP"] == "0" and "newline" in answers["STAGES"]
     spec = importlib.util.spec_from_file_location("stages_under_test", ROOT / "res" / "stages.py")
     stages = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, stages)    # dataclass 가 자기 모듈을 찾는다
     spec.loader.exec_module(stages)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
-    selection = {"stages": ["hooks", "newline"]}
-    if "DEFAULT_MODE" in answers:
-        selection["permission_mode"] = answers["DEFAULT_MODE"]
+    selection = {"stages": ["newline"]}
     if "NEWLINE_CHORD" in answers:
         selection["newline"] = answers["NEWLINE_CHORD"]
     actions = stages.plan_actions(selection, stages.probe_world(str(tmp_path)))
     assert not any(action.writes for action in actions), [action.detail for action in actions]
 
 
-@posix_only
-def test_untouched_hub_apply_forwards_a_recorded_mode_when_hooks_are_not_installed_yet(tmp_path):
-    """영수증은 있지만 훅은 아직 깔지 않은 머신. 메뉴가 보여 준 bypassPermissions 를 넘기지 않으면
-    stages 가 기본값 auto 로 훅을 깔아 사용자의 값을 바꾼다."""
-    home = tmp_path / "home"
-    (home / ".claude").mkdir(parents=True)
-    (home / ".claude" / ".claude-code-setup.json").write_text(json.dumps({"keybinds": {}}), encoding="utf-8")
-    (home / ".claude" / "settings.json").write_text(
-        json.dumps({"permissions": {"defaultMode": "bypassPermissions"}}), encoding="utf-8")
-    out = tmp_path / "answers"
-    code, screen = run_in_pty(
-        [sys.executable, "-X", "utf8", str(ONBOARD), "--out", str(out),
-         "--project-dir", str(tmp_path)],
-        keys=[UP, UP, UP, ENTER],
-        env=clean_env(HOME=str(home)),
-    )
-    assert code == EXIT_OK, screen.decode(errors="replace")
-    assert read_answers(out)["DEFAULT_MODE"] == "bypassPermissions"
-
-
-def test_recorded_choices_read_a_settings_file_with_a_bom(tmp_path, monkeypatch):
+def test_recorded_choices_read_a_receipt_with_a_bom(tmp_path, monkeypatch):
     """Windows 의 메모장·PS 5.1 Set-Content 는 BOM 을 붙인다. stages 는 utf-8-sig 로 읽으므로 같아야 한다."""
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
-    (home / ".claude" / "settings.json").write_text(
-        json.dumps({"permissions": {"defaultMode": "bypassPermissions"}}), encoding="utf-8-sig")
+    (home / ".claude" / ".claude-code-setup.json").write_text(
+        json.dumps({"keybinds": {"newline_chord": "ctrl-enter"}}), encoding="utf-8-sig")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     spec = importlib.util.spec_from_file_location("onboard_under_test", ONBOARD)
     onboard = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(onboard)
-    assert onboard.recorded_choices() == {"mode": "bypassPermissions"}
+    assert onboard.recorded_choices() == {"chord": "ctrl-enter"}
 
 
 def test_hub_rows_show_each_category_selection():
-    """허브 줄은 카테고리마다 현재 선택을 보여 주고, 끝은 Apply·Preview·Quit 이다."""
+    """허브 줄은 카테고리마다 현재 선택을 보여 주고, 끝은 Apply·Preview·Quit 이다.
+
+    covers: AI-69 — 훅은 jarvis 가 맡으므로 hooks 카테고리(권한 모드)가 없다."""
     sys.path.insert(0, str(ROOT / "res"))
     import onboard
     import stages
@@ -670,13 +632,12 @@ def test_hub_rows_show_each_category_selection():
     state = onboard.default_state()
     state["stages"] -= {"mcp", "plugins"}
     state["harnesses"] = ["codex"]
-    state["mode"] = "bypassPermissions"
     rows = {value: label for value, label, _ in onboard.hub_options(state)}
     assert rows["harness"] == "Harnesses · Codex"
     assert rows["plugins"] == "Plugins · off"
     assert rows["codegraph"] == "CodeGraph · package"
     assert rows["claude_special"] == "Claude extras · on · needs Claude Code"
-    assert rows["hooks"] == "Guard hooks · bypassPermissions"
+    assert "hooks" not in rows    # 훅은 jarvis 가 맡는다
     assert [value for value, _, _ in onboard.hub_options(state)][-3:] == ["apply", "dry", "quit"]
 
 
@@ -839,7 +800,7 @@ def test_onboarding_works_in_piped_setup_sh(tmp_path):
     assert code == 0, text
     assert "Set up this machine?" in text, text
     assert "DRY RUN" in text, text
-    # dry-run 이므로 훅도 파일도 설치되지 않는다.
+    # dry-run 이므로 설정도 파일도 쓰이지 않는다.
     assert not (home / ".claude" / "settings.json").exists(), text
     assert not (project / "AGENTS.md").exists(), text
 
@@ -858,74 +819,6 @@ def test_flags_skip_onboarding(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert "DRY RUN" in proc.stdout
     assert "What would you like to install?" not in proc.stdout
-
-
-# ── 온보딩이 고른 값이 settings.json 까지 도달하는가 ──────────────────────
-
-
-@posix_only
-def test_default_mode_option_is_reflected_in_settings(tmp_path):
-    home = tmp_path / "home"
-    (home / ".claude").mkdir(parents=True)
-    env = clean_env(HOME=str(home))
-    proc = subprocess.run(
-        ["bash", str(ROOT / "scripts" / "setup_hooks.sh"), "--dry-run",
-         "--default-mode", "bypassPermissions"],
-        cwd=str(ROOT), env=env, capture_output=True, text=True,
-        encoding="utf-8", timeout=120,
-    )
-    assert proc.returncode == 0, proc.stderr
-    # dry-run 은 병합 결과 전체를 찍지 않고 변경 계획만 보인다. 빈 홈이라 계획에 항상 나온다.
-    assert "permissions.defaultMode: None -> 'bypassPermissions'" in proc.stdout, proc.stdout
-
-
-@posix_only
-def test_unknown_default_mode_is_rejected(tmp_path):
-    """오타가 그대로 settings.json 에 박히면 사용자는 모드가 왜 안 켜지는지 알 길이 없다."""
-    home = tmp_path / "home"
-    (home / ".claude").mkdir(parents=True)
-    env = clean_env(HOME=str(home))
-    proc = subprocess.run(
-        ["bash", str(ROOT / "scripts" / "setup_hooks.sh"), "--dry-run",
-         "--default-mode", "bypass"],   # 그럴듯한 오타
-        cwd=str(ROOT), env=env, capture_output=True, text=True,
-        encoding="utf-8", timeout=120,
-    )
-    assert proc.returncode != 0
-    assert "Unknown defaultMode" in proc.stderr
-
-
-def test_merge_prefers_default_mode_over_fragment(tmp_path):
-    """조각(res/settings.json) 파일 자체는 건드리지 않고 값만 갈아끼워야 한다."""
-    settings = tmp_path / "settings.json"
-    manifest = tmp_path / "manifest.json"
-    proc = subprocess.run(
-        [sys.executable, "-X", "utf8", str(ROOT / "res" / "hooks" / "merge_and_diff.py"),
-         "--default-mode", "bypassPermissions",
-         str(ROOT / "res" / "settings.json"), str(settings), "0", "python3",
-         str(tmp_path / "hooks"), str(manifest), "danger_guard.py"],
-        capture_output=True, text=True, encoding="utf-8", timeout=60,
-    )
-    assert proc.returncode == 0, proc.stderr
-    written = json.loads(settings.read_text(encoding="utf-8"))
-    assert written["permissions"]["defaultMode"] == "bypassPermissions"
-
-    # 조각 원본은 그대로 auto 여야 한다 (SSoT 훼손 방지).
-    fragment = json.loads((ROOT / "res" / "settings.json").read_text(encoding="utf-8"))
-    assert fragment["permissions"]["defaultMode"] == "auto"
-
-
-def test_merge_blocks_on_invalid_default_mode(tmp_path):
-    settings = tmp_path / "settings.json"
-    proc = subprocess.run(
-        [sys.executable, "-X", "utf8", str(ROOT / "res" / "hooks" / "merge_and_diff.py"),
-         "--default-mode", "nonsense",
-         str(ROOT / "res" / "settings.json"), str(settings), "0", "python3",
-         str(tmp_path / "hooks")],
-        capture_output=True, text=True, encoding="utf-8", timeout=60,
-    )
-    assert proc.returncode != 0
-    assert not settings.exists()
 
 
 # ── AGENTS.md 덮어쓰기 ──────────────────────────────────────────────
@@ -965,7 +858,7 @@ def test_without_force_existing_agentsmd_is_untouched(tmp_path):
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX pty")
 def test_piped_install_runs_stages_with_the_terminal_as_stdin(tmp_path):
     """curl | sh 에서는 stdin 이 스크립트 본문 파이프다. 단계 실행이 그 파이프를 물려받으면 sudo 가 필요한
-    단계(Linux base 패키지)가 대화형 터미널이 없다며 실패하고, 뒤의 hooks·agentsmd 단계가 실행되지 않는다."""
+    단계(Linux base 패키지)가 대화형 터미널이 없다며 실패하고, 뒤의 agentsmd 단계가 실행되지 않는다."""
     fake = tmp_path / "bin"
     fake.mkdir()
     real = shutil.which("python3")
@@ -974,7 +867,7 @@ def test_piped_install_runs_stages_with_the_terminal_as_stdin(tmp_path):
         'exec "%s" "$@"\n' % real, encoding="utf-8")
     (fake / "python3").chmod(0o755)
     env = clean_env(PATH=str(fake) + os.pathsep + os.environ["PATH"])
-    rc, out = run_in_pty(["bash", str(ROOT / "scripts" / "setup.sh"), "--stages", "hooks"], [],
+    rc, out = run_in_pty(["bash", str(ROOT / "scripts" / "setup.sh"), "--stages", "agentsmd"], [],
                          cwd=tmp_path, env=env, stdin_pipe=True)
     assert rc == 0, out.decode(errors="replace")
     assert b"STDIN_TTY=1" in out, out.decode(errors="replace")

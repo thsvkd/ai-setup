@@ -2,7 +2,7 @@
 .SYNOPSIS
     전체 테스트 스위트 실행 (Windows)
 .DESCRIPTION
-    이 저장소는 서로 다른 러너 세 개로 테스트한다 — pytest(훅 정책·git 실측·병합 엔진·셋업
+    이 저장소는 서로 다른 러너 세 개로 테스트한다 — pytest(단계식 설치기·워커·셋업
     스크립트), Pester(PowerShell 셋업 스크립트), bats(bash 셋업 스크립트, Git Bash 에 있으면).
     러너마다 설치 여부가 달라서, 하나가 없다고 전체가 멈추거나 반대로 "없어서 안 돌았는데
     통과처럼 보이는" 일이 없도록 통과/실패/건너뜀을 구분해 마지막에 한 번에 보고한다.
@@ -142,7 +142,7 @@ if ($PythonOnly) {
     Write-Host ""
     Write-Host "(-PythonOnly: Pester/bats not requested, not run)"
 } else {
-    # --- Pester: PowerShell 셋업 스크립트. Windows 훅의 PS 경로를 실제로 실행하는 유일한 스위트 ---
+    # --- Pester: PowerShell 셋업 스크립트. Windows PS 경로를 실제로 실행하는 유일한 스위트 ---
     Write-Section "Pester"
     # 스위트는 Pester 5 문법이다. Windows PowerShell 에 기본으로 깔린 Pester 3.4 는 -Output 을 몰라 실패한다.
     $pester = Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version.Major -ge 5 } |

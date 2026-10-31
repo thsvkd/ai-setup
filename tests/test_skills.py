@@ -186,7 +186,7 @@ def test_dispatcher_skills_scope_and_long_option(tmp_path):
     assert not installed(home).exists()
 
 
-@pytest.mark.parametrize("scope", ["--hooks", "--agentsmd", "--keybinds"])
+@pytest.mark.parametrize("scope", ["--agentsmd", "--keybinds"])
 def test_other_scopes_do_not_install_skills(tmp_path, scope):
     home = tmp_path / "home"
     result = run_setup(home, scope, "--dry-run")

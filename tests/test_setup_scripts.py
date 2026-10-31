@@ -8,7 +8,7 @@
     실제 설치일 때만 죽는다.
   * install.sh 의 EXIT 트랩은 성공해도 exit 1 을 반환했다.
   * 설치를 두 번 하면 매니페스트(설치 영수증)가 빈 값으로 덮어써져 --uninstall 이
-    defaultMode 와 권한을 되돌리지 못했다.
+    defaultMode 와 권한을 되돌리지 못했다(훅과 함께 jarvis 로 옮긴 회귀 테스트).
 
 그래서 여기서는 항상 non-dry-run 경로를 격리된 HOME 에 대고 실행한다.
 """
@@ -78,78 +78,48 @@ def test_setup_help_lists_keybinds_and_newline(sandbox_home, stub_bin):
     assert "--newline" in proc.stdout, proc.stdout
 
 
-def test_setup_hooks_installs_for_real(sandbox_home, stub_bin):
-    proc = run_script(["bash", str(ROOT / "scripts" / "setup.sh"), "--hooks"], sandbox_home, stub_bin)
-    assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-    hooks = sandbox_home / ".claude" / "hooks"
-    assert (hooks / "danger_guard.py").exists()
-    assert (hooks / "shims" / "rm").exists()
-    assert settings(sandbox_home)["hooks"]["PreToolUse"]
-    # 셰임 PATH 는 SessionStart 가 CLAUDE_ENV_FILE 로 한 번 설정한다.
-    assert settings(sandbox_home)["hooks"]["SessionStart"]
-
-
-def test_setup_no_onboard_installs_hooks_and_agentsmd(sandbox_home, stub_bin, tmp_path):
+def test_setup_no_onboard_installs_agentsmd_without_hooks(sandbox_home, stub_bin, tmp_path):
     # 인자 없음은 이제 아무것도 설치하지 않는다(D4, AI-42). 예전 전체 설치는 --no-onboard 다.
+    # 훅은 jarvis 가 맡으므로 전체 설치에 들지 않는다(AI-69).
     project = tmp_path / "project"
     project.mkdir()
     proc = run_script(["bash", str(ROOT / "scripts" / "setup.sh"), "--no-onboard"], sandbox_home, stub_bin, cwd=project)
     assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-    assert (sandbox_home / ".claude" / "hooks" / "danger_guard.py").exists()
     assert (project / "AGENTS.md").exists()
+    assert not (sandbox_home / ".claude" / "hooks").exists()
 
 
-def test_setup_uninstall_runs_for_real(sandbox_home, stub_bin):
-    run_script(["bash", str(ROOT / "scripts" / "setup.sh"), "--hooks"], sandbox_home, stub_bin)
+def test_setup_uninstall_leaves_the_hooks_and_their_receipt_records_to_jarvis(sandbox_home, stub_bin):
+    """covers: AI-69 — 전체 --uninstall 은 훅 파일·settings 의 훅 등록·영수증의 훅 기록을 jarvis 를 위해 그대로 둔다."""
+    claude = sandbox_home / ".claude"
+    (claude / "hooks" / "shims").mkdir(parents=True)
+    (claude / "hooks" / "danger_guard.py").write_text("# installed hook\n", encoding="utf-8")
+    (claude / "hooks" / "shims" / "rm").write_text("#!/bin/sh\n", encoding="utf-8")
+    hook_settings = {
+        "permissions": {"allow": ["Bash"], "defaultMode": "auto"},
+        "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+            {"type": "command", "command": "python3 -X utf8 \"$HOME/.claude/hooks/danger_guard.py\""}]}]},
+    }
+    (claude / "settings.json").write_text(json.dumps(hook_settings), encoding="utf-8")
+    hook_records = {
+        "version": 1, "hooks_dir": "~/.claude/hooks", "hook_files": ["danger_guard.py", "shims/rm"],
+        "added_allow": ["Bash"], "default_mode_before": None, "default_mode_after": "auto",
+        "default_mode_changed": True,
+    }
+    (claude / ".claude-code-setup.json").write_text(json.dumps(hook_records), encoding="utf-8")
     proc = run_script(["bash", str(ROOT / "scripts" / "setup.sh"), "--uninstall"], sandbox_home, stub_bin)
     assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-    assert not (sandbox_home / ".claude" / "hooks" / "danger_guard.py").exists()
+    assert (claude / "hooks" / "danger_guard.py").read_text(encoding="utf-8") == "# installed hook\n"
+    assert (claude / "hooks" / "shims" / "rm").exists()
+    assert settings(sandbox_home) == hook_settings
+    assert manifest(sandbox_home) == hook_records
 
 
 def test_setup_dry_run_writes_nothing(sandbox_home, stub_bin):
-    proc = run_script(["bash", str(ROOT / "scripts" / "setup.sh"), "--hooks", "--dry-run"], sandbox_home, stub_bin)
-    assert proc.returncode == 0
+    proc = run_script(["bash", str(ROOT / "scripts" / "setup.sh"), "--skills", "--dry-run"], sandbox_home, stub_bin)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
     assert not (sandbox_home / ".claude" / "settings.json").exists()
-
-
-# --- 멱등 재실행이 설치 영수증을 파괴하지 않는다 ---
-
-def test_rerun_preserves_uninstall_receipt(sandbox_home, stub_bin):
-    (sandbox_home / ".claude" / "settings.json").write_text(
-        json.dumps({"permissions": {"allow": ["Bash(ls *)"], "defaultMode": "acceptEdits"}}),
-        encoding="utf-8",
-    )
-    for _ in range(3):
-        proc = run_script(["bash", str(ROOT / "scripts" / "setup.sh"), "--hooks"], sandbox_home, stub_bin)
-        assert proc.returncode == 0, proc.stderr
-
-    receipt = manifest(sandbox_home)
-    assert "Bash" in receipt["added_allow"], "the rerun wiped the added_allow manifest"
-    assert receipt["default_mode_before"] == "acceptEdits", "the rerun wiped the original defaultMode"
-    assert receipt["default_mode_changed"] is True
-
-
-def test_uninstall_after_rerun_restores_prior_state(sandbox_home, stub_bin):
-    (sandbox_home / ".claude" / "settings.json").write_text(
-        json.dumps({
-            "env": {"MY_VAR": "keep-me"},
-            "model": "sonnet",
-            "permissions": {"allow": ["Bash(ls *)"], "defaultMode": "acceptEdits"},
-        }),
-        encoding="utf-8",
-    )
-    for _ in range(2):
-        run_script(["bash", str(ROOT / "scripts" / "setup.sh"), "--hooks"], sandbox_home, stub_bin)
-    run_script(["bash", str(ROOT / "scripts" / "setup.sh"), "--uninstall"], sandbox_home, stub_bin)
-
-    result = settings(sandbox_home)
-    assert result["env"] == {"MY_VAR": "keep-me"}
-    assert result["model"] == "sonnet"
-    assert result["permissions"]["allow"] == ["Bash(ls *)"]
-    assert result["permissions"]["defaultMode"] == "acceptEdits"
-    assert "effortLevel" not in result
-    assert not result.get("hooks", {}).get("PreToolUse")
-    assert not result.get("hooks", {}).get("SessionStart")
+    assert not (sandbox_home / ".claude" / "skills").exists()
 
 
 # --- install.sh 부트스트랩 (네트워크는 curl 스텁으로 대체) ---
@@ -186,11 +156,19 @@ def test_install_sh_dry_run_exits_zero(sandbox_home, curl_stub):
     assert not (sandbox_home / ".claude" / "settings.json").exists()
 
 
-def test_install_sh_hooks_installs_end_to_end(sandbox_home, curl_stub):
-    proc = run_script(["sh", str(ROOT / "install.sh"), "--hooks"], sandbox_home, curl_stub)
+def test_install_sh_skills_installs_end_to_end(sandbox_home, curl_stub):
+    proc = run_script(["sh", str(ROOT / "install.sh"), "--skills"], sandbox_home, curl_stub)
     assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-    assert (sandbox_home / ".claude" / "hooks" / "danger_guard.py").exists()
-    assert settings(sandbox_home)["hooks"]["PreToolUse"]
+    assert (sandbox_home / ".claude" / "skills" / "design-lab" / "SKILL.md").exists()
+
+
+def test_install_sh_stages_hooks_points_to_jarvis_after_download(sandbox_home, curl_stub):
+    """covers: AI-69 — --stages hooks 는 내려받은 setup.sh 를 지나 stages.py 가 안내만 내고 exit 1 로 끝난다."""
+    proc = run_script(["sh", str(ROOT / "install.sh"), "--stages", "hooks"], sandbox_home, curl_stub)
+    assert proc.returncode == 1, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    assert "python3 -m jarvis module hooks plan --json" in proc.stderr
+    assert [path.name for path in sandbox_home.iterdir()] == [".claude"]
+    assert list((sandbox_home / ".claude").iterdir()) == []
 
 
 def test_install_sh_propagates_failure(sandbox_home, curl_stub):

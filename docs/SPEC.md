@@ -19,6 +19,7 @@
 | 이름 | 입력 | 출력·부작용 | 오류 |
 | ---- | ---- | ----------- | ---- |
 | `setup --doctor` / `-Doctor` | 무엇이든 | doctor 는 jarvis 가 맡는다. 아무것도 쓰지 않고 jarvis 안내만 출력한다(아래 doctor) | exit 1 |
+| `setup --hooks` / `-Hooks`, `--stages` 에 든 `hooks` | 무엇이든(`--uninstall` 포함) | 훅은 jarvis 가 맡는다. 아무것도 쓰지 않고 jarvis 안내만 출력한다(아래 훅) | exit 1 |
 | `setup --install-harness L` / `-InstallHarness L` | `claude,codex,grok,opencode,gemini,agy,copilot,all` | 없는 하네스만 카탈로그의 공식 설치 명령으로 설치하고 영수증 `harness_installs` 에 기록 | 알 수 없는 이름은 exit 1, 설치 실패는 그 항목만 실패로 표시하고 exit 1 |
 | `setup --tools L` / `-Tools L`, `--orca-desktop`, `update-ai orca` | 무엇이든 | Orca 는 jarvis 가 관리한다. 아무것도 쓰지 않고 jarvis 안내만 출력한다(아래 Orca) | exit 1 |
 | `setup --stages L` | `all` 또는 쉼표 목록 | 아래 단계 순서로 액션 목록을 만든다. `--dry-run` 은 목록만 출력한다. 컨텍스트 맵은 CodeGraph npm 패키지 다음 MCP 다 | 같음 |
@@ -29,7 +30,7 @@
 | `--uninstall` (확장) | 위 범위 플래그(`--tools` 는 제거 범위가 아니라 거부다) | 영수증에 기록된 플러그인·마켓플레이스·외부 스킬·MCP 등록·하네스·도구만 제거(D1). 마켓플레이스는 플러그인을 지운 뒤 지우고, 다른 플러그인이나 다른 범위의 설치가 아직 쓰면 남긴다. 하네스·도구는 카탈로그의 `uninstall` 명령으로 패키지·바이너리만 지우고 설정·인증 디렉터리는 남긴다(D5) | 영수증에 없는 것은 건드리지 않음 |
 | `update-ai` (`scripts/update-ai.sh`, `Update-Ai.ps1`) | `--check`, `--only a,b`, `--allow-interrupt`, `--help` | 설치된 하네스·도구·플러그인 업데이트, 결과 표 출력. 실행 중 세션이 있어도 올린다(아래 실시간 업데이트) | 하나라도 실패하면 exit 1. `--check` 는 아무것도 바꾸지 않는다 |
 
-단계 순서: base, harness, plugins, skills, codegraph, mcp, newline, claude_special, tools, hooks, agentsmd.
+단계 순서: base, harness, plugins, skills, codegraph, mcp, newline, claude_special, tools, agentsmd. hooks 단계는 jarvis 로 옮겨 갔다(아래 훅).
 
 선택한 전체 실행의 기본 하네스는 Claude Code 와 Codex 다. 플러그인은 선택된 Claude Code 에만 `claude plugin install <id> --scope user` 로 낸다. Codex·Grok 벤더 플러그인 명령은 내지 않는다. 번들 스킬(design-lab, tailnet-report)은 Claude Code 가 선택된 일반 스킬 단계에만 있다. CodeGraph 패키지는 `npm install -g @colbymchenry/codegraph` 다. OMC HUD 가 이미 statusLine 이면 그 명령 문자열을 유지한 채 캐시 래퍼만 계획한다. Tailscale uninstall 은 `tailscale logout` 을 호출하지 않는다. Jarvis uninstall 은 이 셋업이 추가한 사용자 유닛만 끄고 `~/Workspace/jarvis` 와 `~/.local/state/jarvis` 는 지우지 않는다.
 
@@ -59,6 +60,13 @@
 - 하네스·도구 점검(doctor)은 jarvis 가 맡는다(jarvis 결정 D11, DOCTOR-1~7). 코드는 jarvis `jarvis/modules/doctor/doctor.py` 에 있고, 실행은 jarvis 체크아웃에서 `python3 -m jarvis module doctor status --json`(Windows 는 `py -3`) 이다.
 - 예전 진입점 `setup.sh`·`install.sh` 의 `--doctor`, `setup.ps1`·`install.ps1` 의 `-Doctor`·`--doctor` 는 다른 옵션과 함께여도 아무것도 쓰지 않고 `Doctor is now run by jarvis; ai-setup no longer runs it. From a jarvis checkout run: python3 -m jarvis module doctor status --json.` 을 출력한 뒤(Windows 진입점은 `python3` 대신 `py -3`) exit 1 로 끝난다. 문구의 원본은 `res/stages.py` 의 `doctor_moved` 다. `install.*` 은 레포를 받기 전에 멈춘다.
 - doctor 가 쓰던 보조 함수(`platform_key`·`on_wsl`·`locations`·`kill_tree`)는 `res/tools/host.py` 로 옮겼고 update-ai 와 npm-release 가 쓴다.
+
+### 훅 (jarvis 이관)
+
+- 가드 훅(`danger_guard.py`, rm 셰임, Windows 휴지통 헬퍼, graft 동기화 래퍼)과 settings.json 조각 병합·권한 모드(`permissions.defaultMode`)·셀프테스트·제거는 jarvis 훅 모듈이 맡는다(jarvis HOOKS-1~4). 코드는 jarvis `jarvis/modules/hooks/`·`jarvis/hooks_module.py` 에 있고, 실행은 jarvis 체크아웃에서 `python3 -m jarvis module hooks plan --json` 뒤 그 plan_id 로 `apply --json --plan-id <id>`, 제거는 `module hooks uninstall --json --dry-run` 뒤 그 plan_id 로 `uninstall --json --plan-id <id>` 다(Windows 는 `py -3`).
+- 예전 진입점 `setup.sh`·`install.sh` 의 `--hooks`, `setup.ps1`·`install.ps1` 의 `-Hooks`·`--hooks` 는 다른 옵션(`--uninstall` 포함)과 함께여도 아무것도 쓰지 않고 `Hooks are now managed by jarvis; ai-setup no longer installs or removes them. From a jarvis checkout run: python3 -m jarvis module hooks plan --json (uninstall: module hooks uninstall --json --dry-run).` 을 출력한 뒤(Windows 진입점은 `python3` 대신 `py -3`) exit 1 로 끝난다. `--stages` 에 `hooks` 가 들면 `stages.py` 가 계획 전에 같은 안내로 exit 1 한다. 문구의 원본은 `res/stages.py` 의 `hooks_moved` 다. `install.*` 은 `--hooks`·`-Hooks` 에서 레포를 받기 전에 멈춘다. 온보딩은 hooks 단계와 권한 모드를 묻지 않는다.
+- 전체 실행(`--stages all`, `--no-onboard`)과 전체 제거(`--uninstall`, `--stages all --uninstall`)는 훅을 설치·제거하지 않는다. 훅 파일, settings.json 의 훅 등록·권한 항목, 영수증의 훅 기록(`version`·`hooks_dir`·`hook_files`·`added_*`·`default_mode_*`·`hooks`)은 jarvis 훅 모듈이 같은 키를 읽고 이어 관리하므로 그대로 둔다.
+- 훅 병합 엔진이 내보내던 보조 함수(`backup_file`·`write_json`)는 `res/tools/json_files.py` 로 옮겼고 mods·omc·output_style 워커가 쓴다.
 
 - `res/catalog.json` 항목: `id`, `kind`(`harness`/`tool`), `detect`(실행 파일 이름과 버전 인자), `install`·`uninstall`(플랫폼별 명령 목록, 설치 방식별로 짝을 이룬다), `update`, `plugin_update`(선택), `requires`(예: `node>=20`), `sudo`(bool).
   - `packages`: 설치 방식별 패키지 이름(`npm`, `winget`, `brew`, `brew_cask`). update-ai 는 찾은 실행 파일이 실제로 그 방식으로 깔린 것일 때만 그 방식으로 올린다(npm 은 `node_modules/<pkg>` 안에 있을 때, winget 은 `WinGet` 경로, brew 는 brew prefix 아래). 패키지 목록 조회는 기본 `update` 명령이 없는 도구의 마지막 확인에만 쓴다.
