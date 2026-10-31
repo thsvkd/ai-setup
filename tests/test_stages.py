@@ -1670,6 +1670,15 @@ def test_orca_desktop_points_to_jarvis_and_changes_nothing(monkeypatch, tmp_path
     assert list(home.iterdir()) == []
 
 
+def test_doctor_pointer_names_the_jarvis_doctor_module():
+    """covers: AI-68 — doctor 는 jarvis 로 옮겨 갔다. setup·install 스크립트의 --doctor·-Doctor 안내가 이 문구를 쓴다."""
+    assert stages.doctor_moved(windows=False) == (
+        "Doctor is now run by jarvis; ai-setup no longer runs it. "
+        "From a jarvis checkout run: python3 -m jarvis module doctor status --json."
+    )
+    assert "run: py -3 -m jarvis module doctor status --json." in stages.doctor_moved(windows=True)
+
+
 @pytest.mark.parametrize("args, recorded_before", [
     (["--stages", "tools"], False),
     (["--stages", "tools"], True),

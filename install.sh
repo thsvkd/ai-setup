@@ -42,7 +42,6 @@ Usage:
   curl -fsSL .../install.sh | sh -s -- --mods     # Claude Code mod (Bash diff filter, cache TTL status line)
   curl -fsSL .../install.sh | sh -s -- --newline ctrl-enter
   curl -fsSL .../install.sh | sh -s -- --stages all --dry-run # preview the staged installer
-  curl -fsSL .../install.sh | sh -s -- --doctor   # read-only health report
   curl -fsSL .../install.sh | sh -s -- --help     # this help
 
 Run without arguments to get an onboarding that picks the install scope and permission mode (auto/bypassPermissions).
@@ -86,11 +85,14 @@ explain_download_failure() {
 }
 
 main() {
-    # Orca 관리는 jarvis 로 옮겨 갔다. 레포를 받기 전에, PowerShell 처럼 --help 보다 먼저 안내만 내고 끝낸다.
+    # Orca·doctor 는 jarvis 로 옮겨 갔다. 레포를 받기 전에, PowerShell 처럼 --help 보다 먼저 안내만 내고 끝낸다.
     for a in "$@"; do
         case "$a" in
             --tools|--tools=*|--orca-desktop)
                 echo "Orca is now managed by jarvis; ai-setup no longer installs, updates or removes it. From a jarvis checkout run: python3 -m jarvis module orca plan --json (uninstall: module orca uninstall --json --dry-run)." >&2
+                exit 1 ;;
+            --doctor)
+                echo "Doctor is now run by jarvis; ai-setup no longer runs it. From a jarvis checkout run: python3 -m jarvis module doctor status --json." >&2
                 exit 1 ;;
         esac
     done

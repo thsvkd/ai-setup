@@ -109,7 +109,7 @@ irm https://raw.githubusercontent.com/thsvkd/ai-setup/main/install.ps1 | iex
 2. **허브**는 단계별 선택을 한 화면에 모아 보여 주는 메뉴다. 여기서 선택을 고친 뒤 **Apply**로 설치하거나, **Preview**로 계획만 보거나, **Quit**으로 아무것도 하지 않고 끝낸다.
 3. 이미 설치한 적이 있는 장비에서는 첫 화면 없이 허브부터 열린다.
 
-**3. 마무리**: 설치가 끝나면 출력에 휴지통 관련 `⚠️`(또는 `▲`) 경고가 없고 `Self-test 5/5 passed`가 있는지 확인한 뒤, Claude Code를 다시 시작한다. 훅과 권한은 새 세션부터 적용된다. `--doctor`로 설치 상태를 다시 점검할 수 있다.
+**3. 마무리**: 설치가 끝나면 출력에 휴지통 관련 `⚠️`(또는 `▲`) 경고가 없고 `Self-test 5/5 passed`가 있는지 확인한 뒤, Claude Code를 다시 시작한다. 훅과 권한은 새 세션부터 적용된다. 설치 상태 점검은 jarvis가 맡는다([doctor](#doctor는-jarvis가-맡는다)).
 
 > 터미널이 없는 환경(CI, 다른 에이전트 안에서 실행하는 경우 등)에서 인자 없이 실행하면 묻지 않고 **아무것도 설치하지 않는다**. `--stages`나 개별 옵션을 주면 터미널이 없어도 그대로 설치한다.
 
@@ -180,6 +180,10 @@ PowerShell에서는 같은 인자를 scriptblock 형태로 넘긴다. 예: `& ([
 
 `--tools orca`(`-Tools orca`), `--orca-desktop`, `update-ai orca`는 아무것도 바꾸지 않고 안내만 출력한 뒤 종료 코드 1로 끝난다. 설치·업데이트는 jarvis 체크아웃이나 게이트웨이의 현재 버전 폴더에서 실행한다(PATH 래퍼는 없다). `python3 -m jarvis module orca plan --json`으로 계획을 보고, 그 출력의 plan_id로 `python3 -m jarvis module orca apply --json --plan-id <id>`를 실행한다. 예전에 ai-setup이 설치한 Orca는 `python3 -m jarvis module orca uninstall --json --dry-run`으로 먼저 확인하고, 그 dry-run의 plan_id로 `python3 -m jarvis module orca uninstall --json --plan-id <id>`를 실행해 지운다. jarvis는 ai-setup의 Windows S4U 기록을 자기 것으로 보고 예약 작업·러너·서비스 폴더를 예전 ai-setup 제거와 똑같이 지우며, Linux·macOS에서 채택한(`adopted: true`) 유닛만 남긴다.
 
+### doctor는 jarvis가 맡는다
+
+`--doctor`(`-Doctor`)는 아무것도 바꾸지 않고 안내만 출력한 뒤 종료 코드 1로 끝난다. 설치된 하네스·도구와 버전, 중복 설치, 남아 있는 옛 훅, 설정 파일의 평문 시크릿 위치(키 이름만), 스킬 잠금 파일 밖의 스킬을 읽기 전용으로 점검하려면 jarvis 체크아웃이나 게이트웨이의 현재 버전 폴더에서 `python3 -m jarvis module doctor status --json`(Windows는 `py -3 -m jarvis ...`)을 실행한다.
+
 ---
 
 ## 옵션
@@ -209,7 +213,7 @@ PowerShell에서는 같은 인자를 scriptblock 형태로 넘긴다. 예: `& ([
 | `--mods` | `-Mods` | Claude Code mod 3개 설치(Claude Code v2.1.290 이상) |
 | `--output-style` | `-OutputStyle` | [fluent-korean](https://github.com/snflkd/fluent-korean) 플러그인 설치와 출력 스타일 지정 |
 | `--uninstall` | `-Uninstall` | 설치한 것만 골라 되돌리기. 단계형 설치는 `--stages <목록>`과 함께 쓴다 |
-| `--doctor` | `-Doctor` | 읽기 전용 점검: 설치된 하네스·도구와 버전, 중복 설치, 남아 있는 옛 훅, 설정 파일의 평문 시크릿 위치(키 이름만), 스킬 잠금 파일 밖의 스킬. 다른 옵션과 함께 쓸 수 없다 |
+| `--doctor` | `-Doctor` | jarvis로 옮겨 갔다. 아무것도 바꾸지 않고 안내만 출력한 뒤 종료 코드 1로 끝난다([doctor](#doctor는-jarvis가-맡는다)) |
 | `--help` | `-Help` | 도움말 |
 
 옵션을 넘기는 방법은 다음과 같다. POSIX에서는 `sh -s --` 뒤에 붙인다.
@@ -595,8 +599,8 @@ res/
   output_style/apply.py     # outputStyle 지정 / 제거
   mods/                     # 번들 Claude Code mod 와 설치기
   tools/npm_release.py      # npm-release 배치 (버전별 디렉터리)
+  tools/host.py             # 실행 환경 보조 함수 (PATH 위치, 프로세스 트리 종료)
   update/update_ai.py       # update-ai 구현
-  doctor/doctor.py          # --doctor 읽기 전용 점검
 scripts/
   setup.{ps1,sh}            # 진입점 (옵션 해석, 온보딩, 단계형 설치 호출)
   setup_*.{ps1,sh}          # 개별 옵션 설치 / 제거 워커 (hooks, agentsmd, skills, keybinds, omc, output_style, mods)

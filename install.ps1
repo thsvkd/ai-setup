@@ -152,6 +152,13 @@ function Invoke-Install {
         $global:LASTEXITCODE = 1
         return
     }
+    # doctor 도 jarvis 로 옮겨 갔다. 같은 방식으로 안내만 내고 끝낸다.
+    if ($Doctor) {
+        Write-Host "Doctor is now run by jarvis; ai-setup no longer runs it. From a jarvis checkout run: py -3 -m jarvis module doctor status --json." -ForegroundColor Red
+        if ($PSCommandPath) { exit 1 }
+        $global:LASTEXITCODE = 1
+        return
+    }
     if ($stageRun -and -not $stagesValue) { throw "--stages requires all or a comma-separated list." }
     if ($jarvisRole -and $jarvisRole -notin @("gateway", "core")) { throw "--jarvis-role must be gateway or core." }
     if (($jarvisRole -or $herdrFlag -or $ssCaps) -and -not $stageRun) { throw "--jarvis-role, --herdr, and --ss-caps require --stages." }
@@ -167,13 +174,12 @@ Usage:
   & ([scriptblock]::Create((irm .../install.ps1))) -AgentsMd -Harness codex  # choose the harness
   & ([scriptblock]::Create((irm .../install.ps1))) -Skills               # bundled skills only
   & ([scriptblock]::Create((irm .../install.ps1))) -DryRun               # preview
-  & ([scriptblock]::Create((irm .../install.ps1))) -Doctor               # read-only health report
   & ([scriptblock]::Create((irm .../install.ps1))) -NoOnboard            # old default install without onboarding
   & ([scriptblock]::Create((irm .../install.ps1))) --stages all --dry-run
 
 The same long options as install.sh (--hooks / --agentsmd / --harness L / --skills / --keybinds / --omc / --output-style / --mods / --newline VAL /
 --stages L / --jarvis-role gateway|core / --herdr / --ss-caps /
---uninstall / --dry-run / --no-onboard / --doctor / --help) are accepted too.
+--uninstall / --dry-run / --no-onboard / --help) are accepted too.
 
 Run without flags on a TTY to walk the stages. Skip, or no console, installs nothing.
 Without a console (CI, etc.) nothing is installed. -NoOnboard keeps the old default install.

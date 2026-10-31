@@ -8,14 +8,11 @@
 
 ### doctor
 
+AI-1~AI-6 은 jarvis DOCTOR-1~6 으로 옮김.
+
 | ID | 케이스 | 테스트 | 상태 |
 | -- | ------ | ------ | ---- |
-| AI-1 | WHEN `--doctor` 를 실행하면 THE SYSTEM SHALL 홈 아래 어떤 파일도 만들거나 바꾸지 않는다 | `test_doctor_writes_nothing_under_home`, bats·Pester `--doctor` | GREEN |
-| AI-2 | WHEN 카탈로그의 하네스가 PATH 에 있으면 THE SYSTEM SHALL 그 이름과 버전을 보고하고, 없으면 그 플랫폼의 설치 명령을 안내한다 | `test_reports_installed_harness_version_and_install_hint_for_missing` | GREEN |
-| AI-3 | WHEN 같은 하네스 실행 파일이 PATH 에 두 개 이상 있으면 THE SYSTEM SHALL 중복 설치로 보고하고 어느 쪽이 우선인지 표시한다 | `test_duplicate_harness_on_path_is_reported_with_the_winner`, `test_same_directory_twice_on_path_is_not_a_duplicate` | GREEN |
-| AI-4 | WHEN 영수증이 은퇴로 표시한 훅이 어느 하네스 설정에 아직 연결되어 있으면 THE SYSTEM SHALL 드리프트로 보고한다 | `test_retired_hook_still_wired_in_another_harness_is_drift`, `test_current_hook_is_not_drift`, `test_hook_the_receipt_lists_as_retired_is_drift` | GREEN |
-| AI-5 | WHEN 하네스 설정 파일에 토큰·키처럼 보이는 평문 값이 있으면 THE SYSTEM SHALL 파일 위치와 키 이름만 보고하고 값은 출력하지 않는다 | `test_plaintext_secret_reports_location_and_key_but_never_the_value`, `test_keys_that_only_mention_a_secret_word_are_not_reported`, `test_bearer_values_are_reported_whatever_the_key_is_called`, `test_common_secret_shapes_are_reported_without_values`, `test_header_mapped_to_an_environment_variable_name_is_not_reported` | GREEN |
-| AI-6 | WHEN `~/.agents/skills` 에 lock 파일에 없는 스킬 디렉터리가 있으면 THE SYSTEM SHALL 그 이름을 보고하고 지우지 않는다 | `test_skill_outside_lock_is_reported_and_kept`, bats·Pester `--doctor` | GREEN |
+| AI-68 | WHEN `--doctor`(`-Doctor`)를 실행하면 THE SYSTEM SHALL 점검을 실행하지 않고 홈에 아무것도 쓰지 않으며, doctor 는 jarvis 가 맡는다고 안내한 뒤 종료 코드 1 로 끝난다 | `tests/test_stages.py::test_doctor_pointer_names_the_jarvis_doctor_module`, bats `setup.sh and install.sh --doctor point to jarvis and write nothing`, Pester `-Doctor and --doctor point to jarvis and write nothing`, Pester `-Doctor and --doctor point to jarvis before downloading` | GREEN (Pester 는 Linux pwsh; Windows PowerShell 5.1 미검증) |
 
 ### update-ai
 
@@ -101,7 +98,7 @@
 ## 범위 밖
 
 - 실제 네트워크 설치·업데이트의 성공 여부: 자동 테스트는 스텁으로 호출 명령만 검증한다. 실제 동작은 장비 3대에서 수동 실측으로 확인한다.
-- 영수증 드리프트 수정: doctor 의 보고(AI-4)까지만 범위다.
+- 영수증 드리프트 수정: doctor 의 보고(jarvis DOCTOR-4)까지만 범위다.
 
 ## 미검증
 

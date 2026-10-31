@@ -101,13 +101,14 @@ Describe "setup.ps1 dispatcher" {
         $r.Output | Should -Match "shift-enter"
     }
 
-    # doctor 는 읽기 전용 단독 실행이다. lock 밖 스킬로 경고(exit 1)를 확정한다.
-    It "-Doctor and --doctor report a stray skill with exit 1 and write nothing (covers: AI-1, AI-6)" {
+    # doctor 는 jarvis 로 옮겨 갔다. -Doctor·--doctor 는 안내만 내고 프로필을 그대로 둔 채 exit 1 로 끝난다.
+    It "-Doctor and --doctor point to jarvis and write nothing (covers: AI-68)" {
+        $pointer = [regex]::Escape("Doctor is now run by jarvis; ai-setup no longer runs it. From a jarvis checkout run: py -3 -m jarvis module doctor status --json.")
         $skills = Join-Path $env:USERPROFILE ".agents\skills\stray"
         New-Item -ItemType Directory -Force -Path $skills | Out-Null
         Set-Content -Path (Join-Path $env:USERPROFILE ".agents\.skill-lock.json") -Encoding ascii -Value '{"version": 3, "skills": {}}'
         # 자식 pwsh 자신이 프로필 아래에 시작 캐시(AppData\Local\Microsoft\PowerShell)를 쓴다.
-        # doctor 가 아니라 테스트가 띄운 인터프리터의 흔적이므로 그 경로만 비교에서 뺀다.
+        # setup.ps1 이 아니라 테스트가 띄운 인터프리터의 흔적이므로 그 경로만 비교에서 뺀다.
         $listHome = {
             (Get-ChildItem -Recurse -Force $env:USERPROFILE | ForEach-Object FullName |
                 Where-Object { $_ -notmatch '[\\/]AppData([\\/]Local([\\/]Microsoft([\\/]PowerShell([\\/].*)?)?)?)?$' } |
@@ -116,18 +117,18 @@ Describe "setup.ps1 dispatcher" {
         $before = & $listHome
         $r = Invoke-Script $script:Setup @("-Doctor")
         $r.ExitCode | Should -Be 1 -Because $r.Output
-        $r.Output | Should -Match "stray"
-        $r = Invoke-ScriptInline $script:Setup "--doctor"
-        $r.ExitCode | Should -Be 1 -Because $r.Output
-        (& $listHome) | Should -Be $before
-    }
-
-    It "-Doctor refuses other options instead of silently dropping them" {
+        $r.Output | Should -Match $pointer
+        $r.Output | Should -Not -Match "stray"
         $r = Invoke-Script $script:Setup @("-Doctor", "-Uninstall")
-        $r.ExitCode | Should -Be 1
-        $r.Output | Should -Match "--doctor runs alone"
-        $r = Invoke-ScriptInline $script:Setup "--doctor --hooks"
-        $r.ExitCode | Should -Be 1
+        $r.ExitCode | Should -Be 1 -Because $r.Output
+        $r.Output | Should -Match $pointer
+        foreach ($a in @("--doctor", "--doctor --hooks", "--help --doctor")) {
+            $r = Invoke-ScriptInline $script:Setup $a
+            $r.ExitCode | Should -Be 1 -Because $a
+            $r.Output | Should -Match $pointer -Because $a
+            $r.Output | Should -Not -Match "stray" -Because $a
+        }
+        (& $listHome) | Should -Be $before
     }
 
     It "Update-Ai.ps1 passes -Help, -Only and the long notation through to Python" {
@@ -212,6 +213,26 @@ Describe "install.ps1 bootstrap" {
                 $r.Output | Should -Not -Match "downloading" -Because $a
             }
             $r = Invoke-Script (Join-Path $script:RepoRoot "install.ps1") @("-Tools", "orca")
+            $r.ExitCode | Should -Be 1 -Because $r.Output
+            $r.Output | Should -Match $pointer
+        } finally {
+            $env:CLAUDE_SETUP_REPO = $oldRepo
+        }
+    }
+
+    # doctor 도 jarvis 로 옮겨 갔다. 레포를 받기 전에 멈추므로 네트워크를 타지 않는다.
+    It "-Doctor and --doctor point to jarvis before downloading (covers: AI-68)" {
+        $pointer = [regex]::Escape("Doctor is now run by jarvis; ai-setup no longer runs it. From a jarvis checkout run: py -3 -m jarvis module doctor status --json.")
+        $oldRepo = $env:CLAUDE_SETUP_REPO
+        $env:CLAUDE_SETUP_REPO = "thsvkd/does-not-exist"
+        try {
+            foreach ($a in @("-Doctor", "--doctor", "--help --doctor")) {
+                $r = Invoke-ScriptInline (Join-Path $script:RepoRoot "install.ps1") $a
+                $r.ExitCode | Should -Be 1 -Because $a
+                $r.Output | Should -Match $pointer -Because $a
+                $r.Output | Should -Not -Match "downloading" -Because $a
+            }
+            $r = Invoke-Script (Join-Path $script:RepoRoot "install.ps1") @("-Doctor")
             $r.ExitCode | Should -Be 1 -Because $r.Output
             $r.Output | Should -Match $pointer
         } finally {

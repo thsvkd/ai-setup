@@ -25,22 +25,23 @@ AI 하네스와 그 주변 도구의 설정이 장비마다 손으로 관리되�
 - 다른 앱이 생성·관리하는 파일(Orca, herdr, Paseo, Aside, ahakey 의 훅·스킬·플러그인)은 관리하지 않는다. 그 앱이 재설치할 때 덮어쓰기 때문이다. 컨텍스트 맵은 CodeGraph 만 설치·갱신한다. 이 셋업이 기록하지 않은 예전 컨텍스트 맵 훅은 지우지 않는다.
 - 장비·계정 전용 구성(개인 MCP 서버, Codex·Grok 프로젝트 신뢰 목록, 로컬 모델 게이트웨이, 개인 스킬·에이전트)은 넣지 않는다. Jarvis 는 예외다. gateway 또는 core 를 명시했을 때만 사용자 유닛을 등록하고, 호스트 이름으로 역할을 고르지 않는다.
 - Codex·Grok 플러그인은 벤더가 관리하므로 넣지 않는다.
-- 영수증 드리프트 버그 수정은 이번 범위가 아니다. doctor 가 보고만 한다.
+- 영수증 드리프트 버그 수정은 이번 범위가 아니다. jarvis 의 doctor 가 보고만 한다.
 - 시크릿 값을 저장·이동·출력하지 않는다.
 - Orca 패키지·서버·스킬의 설치·업데이트·제거는 jarvis 가 맡는다(jarvis 결정 D11·D16, ORCA-12). R9 참고.
+- 하네스·도구 점검(doctor)은 jarvis 가 맡는다(jarvis 결정 D11, DOCTOR-1~7). R1 참고.
 
 ## 사용자와 시나리오
 
 - 새 장비: 사용자가 `install.sh`/`install.ps1` 원라이너를 실행하고 온보딩에서 하네스·도구·플러그인·스킬·MCP 를 고르면, 선택한 구성이 설치된다.
 - 정기 업데이트: 사용자가 `update-ai` 를 실행하면 설치된 하네스·도구·플러그인이 최신으로 올라가고, 실행 중인 세션을 끊지 않는다.
-- 점검: 사용자가 `setup --doctor` 를 실행하면 설치 상태, 버전, 중복 설치, 드리프트, 평문 시크릿 위치(키 이름만)를 본다.
+- 점검: 사용자가 jarvis 체크아웃에서 `python3 -m jarvis module doctor status --json` 을 실행하면 설치 상태, 버전, 중복 설치, 드리프트, 평문 시크릿 위치(키 이름만)를 본다. `setup --doctor` 는 이 명령을 안내한다.
 - 되돌리기: 사용자가 `--uninstall` 을 실행하면 이 레포가 추가한 플러그인·스킬·MCP 등록만 제거된다.
 
 ## 요구사항
 
 | ID  | 요구사항 | 필수/선택 |
 | --- | -------- | --------- |
-| R1  | doctor: 선언된 구성 대비 하네스·도구 설치 여부와 버전, 중복 설치, PATH 가림, 영수증 드리프트, 하네스 설정의 평문 시크릿 위치(키 이름만)를 읽기 전용으로 보고한다. | 필수 |
+| R1  | doctor 는 jarvis 가 맡는다(jarvis `module doctor`, DOCTOR-1~7). `--doctor`(`-Doctor`) 는 아무것도 바꾸지 않고 jarvis 를 안내한 뒤 exit 1 로 끝난다. | 필수 |
 | R2  | update-ai: 설치된 하네스(claude, codex, grok, agy, gemini, opencode, copilot)와 플러그인, 도구(CodeGraph, herdr)를 업데이트한다. CodeGraph 는 npm-release 배치로 올리고 `codegraph upgrade` 는 호출하지 않는다. `--check`, `--only`, `--allow-interrupt`, lock, 전후 버전 비교를 유지한다. 실행 중 세션이 있어도 업데이트하며, 그 세션이 쓰는 파일을 지우거나 바꾸지 않는다(버전별 배치). 세션을 실제로 끊는 단계만 `--allow-interrupt` 를 요구한다. 없는 것은 설치하지 않는다. | 필수 |
 | R3  | 하네스 설치: 선택한 하네스 가운데 없는 것을 공식 설치 방법으로 설치한다. 있는 것은 건드리지 않는다. | 필수 |
 | R4  | 도구 설치: Tailscale(패키지만), herdr, CodeGraph, Jarvis 가운데 선택한 것을 설치한다. CodeGraph 는 `npm install -g @colbymchenry/codegraph` 만 쓰고 OMC HUD statusLine 을 바꾸지 않는다. herdr 는 목록에 있으나 기본은 꺼져 있다. Jarvis 는 gateway 또는 core 를 고른 뒤에만 클론·사용자 유닛을 등록하고, `ss` 능력 부여는 추가 확인이 있을 때만 한다. Tailscale 은 인증 키나 `tailscale up` 을 실행하지 않는다. | 필수 |
@@ -55,7 +56,7 @@ AI 하네스와 그 주변 도구의 설정이 장비마다 손으로 관리되�
 
 - 세 장비에서 `update-ai --check` 의 대상 목록과 동작이 같다.
 - 새 장비 하나를 원라이너와 온보딩만으로 기존 장비와 같은 플러그인·스킬·MCP 구성으로 맞출 수 있다.
-- doctor 가 이번 조사에서 손으로 찾은 드리프트(중복 Claude 설치, 은퇴 훅 잔존, lock 밖 스킬, 평문 시크릿 위치)를 모두 보고한다.
+- jarvis 의 doctor 가 이번 조사에서 손으로 찾은 드리프트(중복 Claude 설치, 은퇴 훅 잔존, lock 밖 스킬, 평문 시크릿 위치)를 모두 보고한다.
 
 ## 결정됨 (2026-10-13)
 
@@ -65,7 +66,7 @@ AI 하네스와 그 주변 도구의 설정이 장비마다 손으로 관리되�
 - D4 (Q8, 2026-10-23 개정). 인자 없이 TTY 에서 실행하면 단계를 순서대로 걷고, 각 단계는 기본 예다. 하네스 기본은 Claude Code 와 Codex 이고 grok·agy·opencode·gemini·copilot 은 목록에만 있다. Skip 하거나 산책을 마치면 카테고리 허브가 열리고, 영수증이 있는 머신은 허브부터 연다(2026-10-23 추가). 허브의 Apply 만 설치하고, Quit 이거나 TTY 가 없으면 아무것도 설치하지 않는다. 마우스 조작은 이번 범위 밖이다. `--no-onboard` 는 예전 기본 설치(훅, AGENTS.md, 키바인드, 번들 스킬)를 유지한다.
 - D5 (Q9). 하네스·도구를 제거할 때 설정·인증 디렉터리(`~/.claude`, `~/.codex` 등)는 남긴다. 패키지·바이너리만 제거한다.
 - D8 (Q3). 플러그인 단계를 켰을 때 기본으로 선택되는 목록은 oh-my-claudecode, fluent-korean, ponytail, codex, commit-commands, context7, typescript-lsp, pyright-lsp 이다.
-- D7 (Q7). lock 밖에 남은 스킬은 doctor 가 보고만 한다. 정리는 사용자가 명시적으로 고르는 별도 옵션(`--prune-skills`)으로만 제공한다.
+- D7 (Q7). lock 밖에 남은 스킬은 doctor(지금은 jarvis)가 보고만 한다. 정리는 사용자가 명시적으로 고르는 별도 옵션(`--prune-skills`)으로만 제공한다.
 - D9 (Q5). grok 1.0.50 은 Pi 5 에서 qemu 없이 동작한다(아래 메모). update-ai 에 qemu 분기를 넣지 않고, 장비 전용 래퍼도 이 레포로 가져오지 않는다.
 
 ## 미결정

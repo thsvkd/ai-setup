@@ -273,8 +273,8 @@ def runs(entry_bin):
     출력을 파이프로 받지 않는다. Windows 는 cmd 가 node 를 손자로 띄워, 시간 초과에 cmd 만 끝내면
     파이프를 쥔 node 때문에 기다림이 끝나지 않는다. 시간이 지나면 프로세스 트리째 끝낸다.
     """
-    sys.path.insert(0, str(ROOT / "res" / "doctor"))
-    from doctor import kill_tree  # noqa: E402
+    sys.path.insert(0, str(ROOT / "res" / "tools"))
+    from host import kill_tree  # noqa: E402
 
     # /s 와 바깥 따옴표: 경로에 ( ) & 가 있어도 cmd 가 따옴표를 지운다. /d: AutoRun 을 건너뛴다.
     argv = 'cmd /d /s /c ""{}" --version"'.format(entry_bin) if WINDOWS else [str(entry_bin), "--version"]

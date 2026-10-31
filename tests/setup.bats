@@ -37,22 +37,26 @@ teardown() {
     [[ "$output" == *"Unknown option"* ]]
 }
 
-# doctor 는 읽기 전용 단독 실행이다. lock 밖 스킬로 경고(exit 1)를 확정해, 종료 코드가
-# ui_format 파이프를 지나도 살아남는지와 홈이 그대로인지를 함께 본다.
-@test "setup.sh --doctor reports a stray skill with exit 1 and writes nothing (covers: AI-1, AI-6)" {
+# doctor 는 jarvis 로 옮겨 갔다. --doctor 는 안내만 내고 홈을 그대로 둔 채 exit 1 로 끝난다.
+# install.sh 는 레포를 받기 전에 멈추므로 네트워크를 타지 않는다(없는 레포를 가리켜 둔다).
+@test "setup.sh and install.sh --doctor point to jarvis and write nothing (covers: AI-68)" {
+    pointer="Doctor is now run by jarvis; ai-setup no longer runs it. From a jarvis checkout run: python3 -m jarvis module doctor status --json."
     mkdir -p "$HOME/.agents/skills/stray"
     printf '{"version": 3, "skills": {}}\n' > "$HOME/.agents/.skill-lock.json"
     before="$(find "$HOME" | sort)"
-    run bash "$REPO_ROOT/scripts/setup.sh" --doctor
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"stray"* ]]
+    for args in "--doctor" "--doctor --uninstall" "--help --doctor"; do
+        # shellcheck disable=SC2086
+        run bash "$REPO_ROOT/scripts/setup.sh" $args
+        [ "$status" -eq 1 ] || { echo "setup.sh $args -> $status"; return 1; }
+        [[ "$output" == *"$pointer"* ]] || { echo "setup.sh $args: $output"; return 1; }
+        [[ "$output" != *"stray"* ]] || { echo "setup.sh $args ran a report: $output"; return 1; }
+        # shellcheck disable=SC2086
+        CLAUDE_SETUP_REPO="thsvkd/does-not-exist" run sh "$REPO_ROOT/install.sh" $args
+        [ "$status" -eq 1 ] || { echo "install.sh $args -> $status"; return 1; }
+        [[ "$output" == *"$pointer"* ]] || { echo "install.sh $args: $output"; return 1; }
+        [[ "$output" != *"downloading"* ]]
+    done
     [ "$(find "$HOME" | sort)" = "$before" ]
-}
-
-@test "setup.sh --doctor refuses other options instead of silently dropping them" {
-    run bash "$REPO_ROOT/scripts/setup.sh" --doctor --uninstall
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"--doctor runs alone"* ]]
 }
 
 @test "update-ai.sh passes options through to the Python implementation" {

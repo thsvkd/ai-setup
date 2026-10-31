@@ -18,7 +18,6 @@
 #   bash setup.sh --newline ctrl-enter   # 줄바꿈 키를 Ctrl+Enter 로
 #   bash setup.sh --dry-run              # 미리보기 (전체, 온보딩 없음)
 #   bash setup.sh --no-onboard           # 온보딩을 끄고 예전 기본 동작
-#   bash setup.sh --doctor               # 읽기 전용 점검 (아무것도 바꾸지 않음)
 #
 set -euo pipefail
 
@@ -60,9 +59,6 @@ Usage: bash setup.sh [options]
                 --stages all --uninstall also removes the programs this setup installed.
   --dry-run     print the change plan only, without changing anything
   --no-onboard  run with defaults without interactive onboarding
-  --doctor      read-only health report: installed harnesses/tools and versions, duplicate installs,
-                retired hooks still wired, plaintext secrets (key names only), skills outside the lock.
-                Runs alone and changes nothing. Exit 1 when it finds a problem
   --help, -h    this help
 
 What onboarding lets you choose:
@@ -89,7 +85,6 @@ RUN_MODS=0
 DRY_RUN=0
 UNINSTALL=0
 NO_ONBOARD=0
-RUN_DOCTOR=0
 # 온보딩이 채우는 값들. 비어 있으면 워커가 각자의 기본값을 쓴다.
 DEFAULT_MODE=""
 FORCE_AGENTSMD=0
@@ -110,15 +105,17 @@ INCLUDE_OMC=
 # Orca 관리는 jarvis 로 옮겨 갔다. 예전 진입점은 아무것도 바꾸지 않고 이 안내만 낸다.
 # PowerShell 처럼 --help 보다 먼저 본다.
 ORCA_MOVED="Orca is now managed by jarvis; ai-setup no longer installs, updates or removes it. From a jarvis checkout run: python3 -m jarvis module orca plan --json (uninstall: module orca uninstall --json --dry-run)."
+# doctor 도 jarvis 로 옮겨 갔다(res/stages.py 의 doctor_moved 와 같은 문구).
+DOCTOR_MOVED="Doctor is now run by jarvis; ai-setup no longer runs it. From a jarvis checkout run: python3 -m jarvis module doctor status --json."
 
 for arg in "$@"; do
     case "$arg" in
         --tools|--tools=*|--orca-desktop) echo "$ORCA_MOVED" >&2; exit 1 ;;
+        --doctor) echo "$DOCTOR_MOVED" >&2; exit 1 ;;
     esac
 done
 
 HAD_ARGS=0
-ARG_COUNT=$#
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --hooks) RUN_HOOKS=1; HAD_ARGS=1; shift ;;
@@ -145,7 +142,6 @@ while [[ $# -gt 0 ]]; do
         --uninstall) UNINSTALL=1; HAD_ARGS=1; shift ;;
         --dry-run) DRY_RUN=1; HAD_ARGS=1; shift ;;
         --no-onboard) NO_ONBOARD=1; HAD_ARGS=1; shift ;;
-        --doctor) RUN_DOCTOR=1; HAD_ARGS=1; shift ;;
         --stages)
             if [[ -z "${2:-}" ]]; then echo "--stages requires all or a comma-separated list." >&2; exit 1; fi
             STAGES="$2"; STAGE_RUN=1; HAD_ARGS=1; shift 2 ;;
@@ -268,24 +264,6 @@ ui_format() {
 
 # 워커가 찍는 python 출력이 파이프 너머에서 블록 버퍼링되면 stderr 경고와 순서가 뒤바뀐다.
 export PYTHONUNBUFFERED=1
-
-# doctor 는 읽기 전용이라 설치 흐름(온보딩·영수증·배너)과 섞지 않고 단독으로 끝낸다.
-if [[ "$RUN_DOCTOR" -eq 1 ]]; then
-    if [[ "$ARG_COUNT" -gt 1 ]]; then
-        echo "--doctor runs alone; drop the other options." >&2
-        exit 1
-    fi
-    if ! PY="$(resolve_python_command)"; then
-        echo "Python 3 is required." >&2
-        exit 2
-    fi
-    set +e
-    # -B: macOS 의 Xcode python 은 표준 라이브러리 바이트코드를 ~/Library/Caches 에 쓴다. 읽기 전용 약속을 지킨다.
-    "$PY" -B -X utf8 "$REPO_ROOT/res/doctor/doctor.py" --home "$HOME" | ui_format
-    status="${PIPESTATUS[0]}"
-    set -e
-    exit "$status"
-fi
 
 # 인자가 하나도 없을 때만 온보딩을 띄운다.
 #

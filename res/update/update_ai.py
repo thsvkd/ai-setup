@@ -27,10 +27,9 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "res" / "doctor"))
 sys.path.insert(0, str(ROOT / "res" / "tools"))
 sys.path.insert(0, str(ROOT / "res"))
-from doctor import kill_tree, locations, platform_key  # noqa: E402
+from host import kill_tree, locations, platform_key  # noqa: E402
 import npm_release  # noqa: E402
 from stages import ORCA_MOVED  # noqa: E402
 

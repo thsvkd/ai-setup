@@ -7,19 +7,18 @@
 
 - 언어·런타임: 기존과 같다. 진입점은 bash(3.2 호환)와 PowerShell(5.1/7) 쌍이고, 설정을 고치는 로직은 Python 3.8+ 워커(`res/<x>/apply.py`)가 맡는다.
 - 새 디렉터리:
-  - `res/catalog.json` — 하네스·도구 카탈로그. doctor, 하네스·도구 설치, update-ai 가 같은 파일을 읽는다.
+  - `res/catalog.json` — 하네스·도구 카탈로그. 하네스·도구 설치와 update-ai 가 같은 파일을 읽는다.
   - `res/plugins/plugins.json`, `res/plugins/apply.py`
   - `res/skills/sources.json` (기존 `res/skills/apply.py` 는 번들 스킬을 그대로 맡는다)
   - `res/mcp/servers.json`, `res/mcp/apply.py`
-  - `res/doctor/doctor.py`
   - `res/update/update_ai.py` — update-ai 의 유일한 구현(D2). `scripts/update-ai.sh`·`scripts/Update-Ai.ps1` 은 Python 을 찾아 이 파일을 실행하는 래퍼다.
-  - `scripts/setup_{install,plugins,mcp}.{sh,ps1}`. doctor 는 설치를 하지 않고 Python 하나만 실행하므로 워커 없이 `setup.sh`/`setup.ps1` 이 `res/doctor/doctor.py` 를 직접 부른다.
+  - `scripts/setup_{install,plugins,mcp}.{sh,ps1}`
 
 ## 공개 인터페이스
 
 | 이름 | 입력 | 출력·부작용 | 오류 |
 | ---- | ---- | ----------- | ---- |
-| `setup --doctor` / `-Doctor` | 없음 | 표준 출력에 점검 결과. 파일·설정·네트워크에 쓰지 않는다. | 점검 실패 항목이 있으면 exit 1, 점검 자체를 못 하면 exit 2 |
+| `setup --doctor` / `-Doctor` | 무엇이든 | doctor 는 jarvis 가 맡는다. 아무것도 쓰지 않고 jarvis 안내만 출력한다(아래 doctor) | exit 1 |
 | `setup --install-harness L` / `-InstallHarness L` | `claude,codex,grok,opencode,gemini,agy,copilot,all` | 없는 하네스만 카탈로그의 공식 설치 명령으로 설치하고 영수증 `harness_installs` 에 기록 | 알 수 없는 이름은 exit 1, 설치 실패는 그 항목만 실패로 표시하고 exit 1 |
 | `setup --tools L` / `-Tools L`, `--orca-desktop`, `update-ai orca` | 무엇이든 | Orca 는 jarvis 가 관리한다. 아무것도 쓰지 않고 jarvis 안내만 출력한다(아래 Orca) | exit 1 |
 | `setup --stages L` | `all` 또는 쉼표 목록 | 아래 단계 순서로 액션 목록을 만든다. `--dry-run` 은 목록만 출력한다. 컨텍스트 맵은 CodeGraph npm 패키지 다음 MCP 다 | 같음 |
@@ -52,8 +51,14 @@
 
 - Orca 패키지·서버·스킬의 설치·업데이트·제거는 jarvis 가 맡는다(jarvis 결정 D11·D16, ORCA-12). ai-setup 은 Orca 를 설치·갱신·제거하지 않는다.
 - 예전 진입점 `setup.sh`·`install.sh` 의 `--tools`·`--tools=`·`--orca-desktop`, `setup.ps1`·`install.ps1` 의 `-Tools`·`--tools`·`--orca-desktop`, `stages.py --orca-desktop`, `update-ai orca`(`--only` 에 orca 가 들어간 경우 포함)는 아무것도 쓰지 않고 `Orca is now managed by jarvis; ai-setup no longer installs, updates or removes it. From a jarvis checkout run: python3 -m jarvis module orca plan --json (uninstall: module orca uninstall --json --dry-run).` 을 출력한 뒤(Windows 진입점은 `python3` 대신 `py -3`) exit 1 로 끝난다. `install.*` 은 레포를 내려받기 전에 멈춘다.
-- 카탈로그에 orca 항목이 없으므로 대상을 주지 않은 update-ai 와 doctor 는 Orca 를 보지 않는다.
+- 카탈로그에 orca 항목이 없으므로 대상을 주지 않은 update-ai 는 Orca 를 보지 않는다.
 - tools 단계와 `--stages all --uninstall` 은 Orca 액션을 내지 않는다. 영수증의 `tool_installs.orca`·`tool_installs.orca_server` 는 jarvis 의 Orca 모듈이 같은 키를 읽고 제거하므로 그대로 둔다.
+
+### doctor (jarvis 이관)
+
+- 하네스·도구 점검(doctor)은 jarvis 가 맡는다(jarvis 결정 D11, DOCTOR-1~7). 코드는 jarvis `jarvis/modules/doctor/doctor.py` 에 있고, 실행은 jarvis 체크아웃에서 `python3 -m jarvis module doctor status --json`(Windows 는 `py -3`) 이다.
+- 예전 진입점 `setup.sh`·`install.sh` 의 `--doctor`, `setup.ps1`·`install.ps1` 의 `-Doctor`·`--doctor` 는 다른 옵션과 함께여도 아무것도 쓰지 않고 `Doctor is now run by jarvis; ai-setup no longer runs it. From a jarvis checkout run: python3 -m jarvis module doctor status --json.` 을 출력한 뒤(Windows 진입점은 `python3` 대신 `py -3`) exit 1 로 끝난다. 문구의 원본은 `res/stages.py` 의 `doctor_moved` 다. `install.*` 은 레포를 받기 전에 멈춘다.
+- doctor 가 쓰던 보조 함수(`platform_key`·`on_wsl`·`locations`·`kill_tree`)는 `res/tools/host.py` 로 옮겼고 update-ai 와 npm-release 가 쓴다.
 
 - `res/catalog.json` 항목: `id`, `kind`(`harness`/`tool`), `detect`(실행 파일 이름과 버전 인자), `install`·`uninstall`(플랫폼별 명령 목록, 설치 방식별로 짝을 이룬다), `update`, `plugin_update`(선택), `requires`(예: `node>=20`), `sudo`(bool).
   - `packages`: 설치 방식별 패키지 이름(`npm`, `winget`, `brew`, `brew_cask`). update-ai 는 찾은 실행 파일이 실제로 그 방식으로 깔린 것일 때만 그 방식으로 올린다(npm 은 `node_modules/<pkg>` 안에 있을 때, winget 은 `WinGet` 경로, brew 는 brew prefix 아래). 패키지 목록 조회는 기본 `update` 명령이 없는 도구의 마지막 확인에만 쓴다.
@@ -83,11 +88,11 @@
 ## 불변식
 
 - 이미 있던 하네스·도구·플러그인·스킬·MCP 등록은 영수증에 기록하지 않고, uninstall 이 제거하지 않는다.
-- dry-run 과 doctor 는 파일·설정·lock·패키지를 바꾸지 않는다. `skills check`/`update`(실제 업데이트를 적용함)와 설치 스크립트를 호출하지 않는다.
+- dry-run 은 파일·설정·lock·패키지를 바꾸지 않는다. `skills check`/`update`(실제 업데이트를 적용함)와 설치 스크립트를 호출하지 않는다.
 - 파싱할 수 없는 설정·lock 을 만나면 그 단계는 쓰기 전에 멈춘다.
 - 다른 도구가 넣은 훅·스킬·플러그인(Orca, herdr, Paseo, Aside, ahakey)은 읽기만 한다. Codex `hooks.json` 은 신뢰 해시가 깨지므로 쓰지 않는다. CodeGraph 설치는 OMC HUD statusLine 명령을 바꾸지 않는다.
 - `--prune-skills` 는 심볼릭 링크·junction 인 스킬(앱이 관리하는 ego-browser 등)과 lock 에 있는 스킬을 후보로 삼지 않으며, 삭제하지 않고 휴지통으로만 옮긴다.
-- 시크릿 값은 출력·로그·영수증에 남기지 않는다. doctor 는 키 이름과 파일 위치만 보고한다.
+- 시크릿 값은 출력·로그·영수증에 남기지 않는다.
 - 한 실행은 그 실행 환경(Windows 네이티브, WSL, Linux, macOS 중 하나)의 홈만 고친다.
 - update-ai 는 설치되지 않은 도구를 설치하지 않는다.
 - sudo 가 필요한 명령은 실행 전에 명령 전체를 출력하고, 표준 입력이 TTY 가 아니면 실행하지 않고 건너뛴다(D3).

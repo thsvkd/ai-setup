@@ -27,6 +27,14 @@ def orca_moved(windows: bool = os.name == "nt") -> str:
 
 ORCA_MOVED = orca_moved()
 
+
+# doctor 도 jarvis 로 옮겨 갔다(jarvis 결정 D11, DOCTOR-1~7). --doctor·-Doctor 는 이 안내만 내고 exit 1 로 끝난다.
+def doctor_moved(windows: bool = os.name == "nt") -> str:
+    return (
+        "Doctor is now run by jarvis; ai-setup no longer runs it. "
+        f"From a jarvis checkout run: {'py -3' if windows else 'python3'} -m jarvis module doctor status --json."
+    )
+
 STAGE_ORDER = (
     "base",
     "harness",
