@@ -13,9 +13,9 @@
 
 | 문서 | 답하는 질문 | 상태 |
 | --- | --- | --- |
-| `PRD.md` | 무엇을 왜 만드는가. 목표·비목표와 성공 지표 | `authoritative` (ai-setup 편입 범위만, 2026-10-13) |
-| `SPEC.md` | 어떻게 구현하는가. 자주 바뀌지 않는 계약만 | `authoritative` (ai-setup 편입 범위만, 2026-10-13) |
-| `TEST_SPEC.md` | 무엇이 완료인가. 수용 기준의 유일한 SSoT | `authoritative` (ai-setup 편입 범위만, 2026-10-13) |
+| `PRD.md` | 무엇을 왜 만드는가. 목표·비목표와 성공 지표 | `historical` (기능을 jarvis 로 옮김, 2026-11-01) |
+| `SPEC.md` | 어떻게 구현하는가. 자주 바뀌지 않는 계약만 | `historical` (기능을 jarvis 로 옮김, 2026-11-01) |
+| `TEST_SPEC.md` | 무엇이 완료인가. 수용 기준의 유일한 SSoT | `authoritative` (남은 진입점 안내 AI-70 과 jarvis 로 옮긴 케이스 대응표, 2026-11-01) |
 
 세 가지 경계를 지킨다.
 

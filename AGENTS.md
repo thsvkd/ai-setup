@@ -2,7 +2,7 @@
 
 ## 개요
 
-Claude Code·Codex·Grok·OpenCode 하네스와 Windows 네이티브·WSL·Linux·macOS 를 대상으로 개발 환경 설정(프로젝트 지침, 줄바꿈 키 등)을 설치·관리한다. 안전 훅·Orca·doctor 는 jarvis(`thsvkd/jarvis`)의 모듈로 옮겼다. 구현 중심은 아직 Claude Code이고 `claude-code-setup` -> `ai-setup` 전환이 진행 중이다. 이 파일은 `res/AGENTS.md` base 의 인스턴스이므로 base 를 고치면 함께 본다.
+이 저장소의 기능(하네스·플러그인·스킬·MCP 설치, update-ai, 줄바꿈 키, 출력 스타일·mod, AGENTS.md, 훅, Orca, doctor)은 모두 jarvis(`thsvkd/jarvis`)의 모듈로 옮겼다(2026-11-01). 남은 것은 예전 진입점(`install.sh`·`install.ps1`·`scripts/setup.*`·`scripts/update-ai.sh`·`scripts/Update-Ai.ps1`)이 jarvis 를 안내하고 종료 코드 1 로 끝나는 것과 문서 기록이다. 새 기능은 jarvis 에 만든다.
 
 ## 원칙
 
@@ -56,7 +56,6 @@ Claude Code·Codex·Grok·OpenCode 하네스와 Windows 네이티브·WSL·Linux
 | bash 셋업 스크립트       | `bats tests/setup.bats`                                     |
 | PowerShell 셋업 스크립트 | `Invoke-Pester tests/Setup.Tests.ps1 -Output Detailed`      |
 | 건너뜀도 실패 취급 (CI)  | `bash scripts/test.sh --strict`                             |
-| 설치 영향 미리 보기      | `bash scripts/setup.sh --dry-run`                           |
 
 pytest 인터프리터를 못 찾으면 `CLAUDE_TEST_PYTHON` 으로 지정한다 — Windows 의 Store alias `python.exe` 는 실행되지 않는다.
 

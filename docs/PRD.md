@@ -1,5 +1,7 @@
 # PRD
 
+> 2026-11-01: 이 문서가 다룬 기능은 모두 jarvis 로 옮겼다. 지금은 역사 기록이다(jarvis `docs/PRD.md` 가 목표를 소유한다).
+
 > 범위: 2026-10-13 에 승인한 ai-setup 편입 범위만 다룬다. 기존 기능(AGENTS.md, 키바인딩, 번들 스킬, OMC HUD, outputStyle, mods)은 아직 이 문서에 없다. 가드 훅은 jarvis 로 옮겨 갔다(R11).
 > 근거: `.omc/research/2026-10-13-ai-setup-survey/` (장비 3대 조사와 1차 자료 확인, 로컬 전용이라 커밋하지 않는다).
 

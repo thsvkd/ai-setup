@@ -1,5 +1,7 @@
 # SPEC
 
+> 2026-11-01: 이 문서가 다룬 기능은 모두 jarvis(`jarvis/modules/setup/`)로 옮겼다. 지금은 역사 기록이다(jarvis `docs/SPEC.md` 가 계약을 소유한다).
+
 > 범위: 2026-10-13 에 승인한 ai-setup 편입 범위만 다룬다. 기존 기능의 계약은 아직 이 문서에 없다.
 > 1차 자료 출처는 `.omc/research/2026-10-13-ai-setup-survey/research-{install,skills}.md` 에 URL 과 함께 있다(로컬 전용, 커밋하지 않는다).
 

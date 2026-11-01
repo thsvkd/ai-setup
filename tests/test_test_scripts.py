@@ -160,7 +160,7 @@ def test_nothing_runnable_is_not_success(tmp_path):
 def test_python_only_skips_are_not_counted_by_strict():
     """--python-only 로 '요청하지 않은' 스위트는 러너 미설치로 '못 돌린' 스위트와 다르다.
     사용자가 직접 고른 선택을 --strict 가 실패로 만들면 안 된다."""
-    proc = run_test_sh("--python-only", "--strict", "-k", "test_module_exports_stage_order")
+    proc = run_test_sh("--python-only", "--strict", "-k", "test_router_and_index_files_exist")
     assert proc.returncode == 0, proc.stdout[-2000:]
 
 
@@ -184,7 +184,7 @@ def test_auto_discovery_finds_pytest_when_not_pinned():
     통째로 `return 1` 로 망가뜨려도 이 모듈의 나머지 테스트는 전부 통과했다 — 정작 사람이
     `bash scripts/test.sh` 를 그냥 치면 pytest 가 멀쩡히 깔려 있는데도 'pytest 미설치' 로
     스위트 전체를 건너뛴다."""
-    proc = run_test_sh("--python-only", "-k", "test_module_exports_stage_order",
+    proc = run_test_sh("--python-only", "-k", "test_router_and_index_files_exist",
                        env_overrides={"CLAUDE_TEST_PYTHON": ""})
     assert proc.returncode == 0, proc.stdout[-2000:]
     assert "Interpreter:" in proc.stdout, proc.stdout[-2000:]

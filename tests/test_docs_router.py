@@ -19,17 +19,13 @@ Contracts pinned by this module:
 3. Every live document in the index (`planned` or `authoritative`) is reachable
    from the router. Registration without a route is the mirror image of a
    dangling link, and it fails just as quietly.
-4. The root AGENTS.md and the res/AGENTS.md template keep the same section
-   structure. The root file calls itself an instance of the base, so a rule
-   dropped from one side and not the other is a silent divergence.
+4. (Retired) The res/AGENTS.md template moved to jarvis with the agentsmd
+   worker, so the root file no longer has a base to mirror here.
 
 Only the index's *table rows* count as registration. A document named in passing
 in a sentence is not registered -- otherwise a line of prose could vouch for a
 document the status table never tracks.
 
-The base template's document links have no reason to resolve against this
-repository -- it is copied into unrelated ones -- so contracts 1 to 3 do not
-apply to it.
 """
 from __future__ import annotations
 
@@ -38,7 +34,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 AGENTS_MD = ROOT / "AGENTS.md"
-BASE_AGENTS_MD = ROOT / "res" / "AGENTS.md"
 DOCS = ROOT / "docs"
 DOCS_INDEX = DOCS / "README.md"
 
@@ -155,7 +150,6 @@ def _matches(ref: str, tokens: set[str]) -> bool:
 def test_router_and_index_files_exist() -> None:
     """Guard the guards: a missing file would make the assertions below vacuous."""
     assert AGENTS_MD.is_file(), "the root AGENTS.md is missing"
-    assert BASE_AGENTS_MD.is_file(), "res/AGENTS.md (the base template) is missing"
     assert DOCS_INDEX.is_file(), "docs/README.md (the documentation index) is missing"
 
 
@@ -229,7 +223,7 @@ def test_instruction_files_stay_under_the_line_budget() -> None:
     """Always-loaded instructions grow back unless something says no."""
     oversized = {
         path.name: len(_read(path).splitlines())
-        for path in (AGENTS_MD, BASE_AGENTS_MD)
+        for path in (AGENTS_MD,)
         if len(_read(path).splitlines()) >= MAX_INSTRUCTION_LINES
     }
     assert not oversized, (
@@ -249,25 +243,6 @@ def test_every_live_index_entry_is_reachable_from_the_router() -> None:
     assert not unreachable, (
         "docs/README.md tracks these as live, but AGENTS.md never routes to them: "
         + ", ".join(unreachable)
-    )
-
-
-def test_root_instance_and_base_template_share_a_structure() -> None:
-    """The root file claims to be an instance of the base, so the shape must match.
-
-    Only the headings are compared: the base carries placeholders where the root
-    carries this repository's real commands, and the root is free to add rules
-    inside a section. A whole section appearing on one side only is the drift
-    this catches -- when the two were byte-identical nothing could diverge, and
-    that safety net went away the moment they were split.
-    """
-    root_sections = [f"{hashes} {title}" for hashes, title in HEADING.findall(_read(AGENTS_MD))]
-    base_sections = [f"{hashes} {title}" for hashes, title in HEADING.findall(_read(BASE_AGENTS_MD))]
-
-    assert root_sections == base_sections, (
-        "AGENTS.md and res/AGENTS.md have drifted apart structurally:\n"
-        f"  only in AGENTS.md:     {[s for s in root_sections if s not in base_sections]}\n"
-        f"  only in res/AGENTS.md: {[s for s in base_sections if s not in root_sections]}"
     )
 
 
